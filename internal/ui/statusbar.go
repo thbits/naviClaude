@@ -1,0 +1,106 @@
+package ui
+
+import (
+	"strings"
+
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/tomhalo/naviclaude/internal/styles"
+)
+
+const appVersion = "v0.1.0"
+
+// StatusBarModel renders the bottom bar with contextual keybinding hints.
+type StatusBarModel struct {
+	width int
+	mode  string
+}
+
+type statusHint struct {
+	key  string
+	desc string
+}
+
+// NewStatusBar creates a StatusBarModel with the given width.
+func NewStatusBar(width int) StatusBarModel {
+	return StatusBarModel{
+		width: width,
+		mode:  "list",
+	}
+}
+
+// SetMode sets the current mode which determines which hints are displayed.
+func (m *StatusBarModel) SetMode(mode string) {
+	m.mode = mode
+}
+
+// SetSize updates the status bar width.
+func (m *StatusBarModel) SetSize(w int) {
+	m.width = w
+}
+
+// Init satisfies the tea.Model interface.
+func (m StatusBarModel) Init() tea.Cmd {
+	return nil
+}
+
+// Update is a no-op; the status bar does not handle input.
+func (m StatusBarModel) Update(msg tea.Msg) (StatusBarModel, tea.Cmd) {
+	return m, nil
+}
+
+// View renders the status bar.
+func (m StatusBarModel) View() string {
+	hints := m.hintsForMode()
+
+	var parts []string
+	sep := styles.StatusBarSep.Render(" | ")
+
+	for i, h := range hints {
+		part := styles.StatusBarKey.Render(h.key) + " " + styles.StatusBarDesc.Render(h.desc)
+		parts = append(parts, part)
+		if i < len(hints)-1 {
+			parts = append(parts, sep)
+		}
+	}
+
+	left := strings.Join(parts, "")
+	right := styles.StatusBarVersion.Render(appVersion)
+
+	// Compute gap between left hints and right-aligned version.
+	leftWidth := lipgloss.Width(left)
+	rightWidth := lipgloss.Width(right)
+	gap := m.width - leftWidth - rightWidth
+	if gap < 1 {
+		gap = 1
+	}
+
+	bar := left + strings.Repeat(" ", gap) + right
+
+	return styles.StatusBar.Width(m.width).Render(bar)
+}
+
+func (m StatusBarModel) hintsForMode() []statusHint {
+	switch m.mode {
+	case "passthrough":
+		return []statusHint{
+			{"Tab", "exit"},
+			{"Ctrl+]", "exit"},
+			{"Ctrl+f", "jump"},
+		}
+	case "search":
+		return []statusHint{
+			{"Esc", "cancel"},
+			{"Enter", "select"},
+		}
+	default: // "list"
+		return []statusHint{
+			{"Enter", "focus"},
+			{"f", "jump"},
+			{"/", "search"},
+			{"n", "new"},
+			{"K", "kill"},
+			{"?", "help"},
+		}
+	}
+}
