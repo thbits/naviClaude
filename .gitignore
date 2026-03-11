@@ -1,0 +1,17 @@
+# Binary
+/naviclaude
+dist/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Superpowers brainstorm artifacts
+.superpowers/brainstorm/
