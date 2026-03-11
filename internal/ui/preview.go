@@ -66,6 +66,25 @@ func (m *PreviewModel) SetSize(w, h int) {
 	m.viewport.Height = contentHeight
 }
 
+// ScrollUp scrolls the viewport up by n lines.
+func (m *PreviewModel) ScrollUp(n int) {
+	m.viewport.SetYOffset(m.viewport.YOffset - n)
+}
+
+// ScrollDown scrolls the viewport down by n lines.
+func (m *PreviewModel) ScrollDown(n int) {
+	m.viewport.SetYOffset(m.viewport.YOffset + n)
+}
+
+// HalfViewHeight returns half the viewport height for half-page scrolling.
+func (m *PreviewModel) HalfViewHeight() int {
+	h := m.viewport.Height / 2
+	if h < 1 {
+		h = 1
+	}
+	return h
+}
+
 // Init satisfies the tea.Model interface.
 func (m PreviewModel) Init() tea.Cmd {
 	return nil

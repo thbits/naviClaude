@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/tomhalo/naviclaude/internal/preview"
 	"github.com/tomhalo/naviclaude/internal/session"
+	"github.com/tomhalo/naviclaude/internal/styles"
 	"github.com/tomhalo/naviclaude/internal/tmux"
 	"github.com/tomhalo/naviclaude/internal/ui"
 )
@@ -62,11 +64,13 @@ type Model struct {
 	statusDetector *preview.StatusDetector
 
 	// Application state
-	mode          Mode
-	width, height int
-	sessions      []*session.Session // active + recently-closed (for sidebar)
-	allSessions   []*session.Session // all sessions (for search)
-	err           error              // last error, shown briefly
+	mode           Mode
+	width, height  int
+	sessions       []*session.Session // active + recently-closed (for sidebar)
+	allSessions    []*session.Session // all sessions (for search)
+	err            error              // last error, shown briefly
+	confirmKill    bool               // waiting for kill confirmation
+	confirmSession *session.Session   // session pending kill confirmation
 
 	// Configuration (hardcoded for Phase 1)
 	sidebarWidthPct    int
@@ -96,7 +100,7 @@ func New() Model {
 		manager:        session.NewManager(tc),
 		captureEngine:  preview.NewCaptureEngine(tc),
 		passthrough:    preview.NewPassthrough(tc),
-		statusDetector: preview.NewStatusDetector(tc),
+		statusDetector: preview.NewStatusDetector(),
 
 		// Defaults
 		mode:               ModeList,
@@ -111,11 +115,11 @@ func New() Model {
 // Init checks that tmux is available and starts the ticker commands.
 func (m Model) Init() tea.Cmd {
 	if !m.tmuxClient.IsRunning() {
-		m.err = fmt.Errorf("tmux is not running -- naviClaude requires an active tmux server")
+		fmt.Fprintln(os.Stderr, "Error: tmux is not running -- naviClaude requires an active tmux server")
 		return tea.Quit
 	}
 	if err := m.tmuxClient.CheckVersion(3, 2); err != nil {
-		m.err = err
+		fmt.Fprintf(os.Stderr, "Error: %s\n", err)
 		return tea.Quit
 	}
 	return tea.Batch(
@@ -232,7 +236,18 @@ func (m Model) View() string {
 
 	mainContent := lipgloss.JoinHorizontal(lipgloss.Top, sidebarView, previewView)
 
-	statusView := m.statusbar.View()
+	var statusView string
+	if m.confirmKill && m.confirmSession != nil {
+		prompt := fmt.Sprintf(" Kill %s? [y/N] ", m.confirmSession.ProjectName)
+		statusView = lipgloss.NewStyle().
+			Width(m.width).
+			Background(styles.ColorRed).
+			Foreground(styles.ColorFg).
+			Bold(true).
+			Render(prompt)
+	} else {
+		statusView = m.statusbar.View()
+	}
 	screen := lipgloss.JoinVertical(lipgloss.Left, mainContent, statusView)
 
 	// Render overlays on top.
@@ -268,6 +283,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Global quit.
 	if key == KeyCtrlC {
 		return m, tea.Quit
+	}
+
+	// Kill confirmation takes priority.
+	if m.confirmKill {
+		return m.handleKillConfirm(msg)
 	}
 
 	switch m.mode {
@@ -340,6 +360,14 @@ func (m Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case KeyStats:
 		m.err = fmt.Errorf("stats view: not yet implemented (Phase 2)")
+		return m, nil
+
+	case "ctrl+u":
+		m.preview.ScrollUp(m.preview.HalfViewHeight())
+		return m, nil
+
+	case "ctrl+d":
+		m.preview.ScrollDown(m.preview.HalfViewHeight())
 		return m, nil
 
 	default:
@@ -529,13 +557,33 @@ func (m Model) jumpToPane() (tea.Model, tea.Cmd) {
 
 func (m Model) killSelected() (tea.Model, tea.Cmd) {
 	sess := m.sidebar.SelectedSession()
-	if sess == nil {
+	if sess == nil || sess.Status == session.StatusClosed {
 		return m, nil
 	}
-	if err := m.manager.Kill(sess); err != nil {
-		m.err = fmt.Errorf("kill: %w", err)
-	}
+	// Enter kill confirmation state.
+	m.confirmKill = true
+	m.confirmSession = sess
 	return m, nil
+}
+
+func (m Model) handleKillConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	key := msg.String()
+	switch key {
+	case "y", "Y":
+		if m.confirmSession != nil {
+			if err := m.manager.Kill(m.confirmSession); err != nil {
+				m.err = fmt.Errorf("kill: %w", err)
+			}
+		}
+		m.confirmKill = false
+		m.confirmSession = nil
+		return m, m.refreshSessionsCmd()
+	default:
+		// Any other key cancels.
+		m.confirmKill = false
+		m.confirmSession = nil
+		return m, nil
+	}
 }
 
 func (m Model) resumeSession(sess *session.Session) (tea.Model, tea.Cmd) {
@@ -548,11 +596,9 @@ func (m Model) resumeSession(sess *session.Session) (tea.Model, tea.Cmd) {
 		m.err = fmt.Errorf("resume: %w", err)
 		return m, nil
 	}
-	// Enter passthrough mode; the session will appear on next refresh.
-	m.mode = ModePassthrough
-	m.preview.SetPassthrough(true)
-	m.statusbar.SetMode(ModePassthrough.String())
-	return m, nil
+	// Trigger an immediate session refresh so the new pane is detected.
+	// Don't enter passthrough yet -- the new pane needs to be discovered first.
+	return m, m.refreshSessionsCmd()
 }
 
 func (m Model) executeContextAction(action string, sess *session.Session) (tea.Model, tea.Cmd) {
@@ -713,10 +759,7 @@ func (m Model) capturePreviewCmd() tea.Cmd {
 			return previewCaptureMsg{err: err, target: target}
 		}
 
-		status, statusErr := statusDetector.Detect(target)
-		if statusErr != nil {
-			status = session.StatusActive // fallback
-		}
+		status := statusDetector.DetectFromContent(target, content)
 
 		return previewCaptureMsg{
 			content: content,
@@ -768,10 +811,8 @@ func (m *Model) selectSessionInSidebar(target *session.Session) {
 	if target == nil {
 		return
 	}
+	m.sidebar.SelectByID(target.ID)
 	m.preview.SetSession(target)
-	// The sidebar does not expose a SelectByID method, so we rebuild sessions
-	// and rely on the cursor staying on the closest match. For Phase 1 this is
-	// acceptable; Phase 2 can add explicit cursor control.
 }
 
 // updateSessionStatus updates the status of a session in the local list by

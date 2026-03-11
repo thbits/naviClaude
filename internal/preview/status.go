@@ -4,7 +4,6 @@ import (
 	"strings"
 
 	"github.com/tomhalo/naviclaude/internal/session"
-	"github.com/tomhalo/naviclaude/internal/tmux"
 )
 
 // activeCycleThreshold is the number of consecutive identical captures
@@ -14,50 +13,44 @@ const activeCycleThreshold = 2
 // StatusDetector detects the status of a Claude Code session by analyzing
 // consecutive captures of the pane content.
 type StatusDetector struct {
-	tmuxClient   *tmux.Client
 	prevCaptures map[string]string // previous capture per tmux target
 	stableCycles map[string]int    // consecutive identical capture count per target
 }
 
-// NewStatusDetector creates a StatusDetector backed by the given tmux client.
-func NewStatusDetector(client *tmux.Client) *StatusDetector {
+// NewStatusDetector creates a StatusDetector.
+func NewStatusDetector() *StatusDetector {
 	return &StatusDetector{
-		tmuxClient:   client,
 		prevCaptures: make(map[string]string),
 		stableCycles: make(map[string]int),
 	}
 }
 
-// Detect captures the current pane content for target, compares it with the
-// previous capture, updates the stable-cycle counter, and returns the inferred
-// SessionStatus.
-func (d *StatusDetector) Detect(target string) (session.SessionStatus, error) {
-	content, err := d.tmuxClient.CapturePaneOutput(target)
-	if err != nil {
-		return session.StatusClosed, err
-	}
-
+// DetectFromContent analyzes already-captured pane content, compares it with
+// the previous capture for this target, updates the stable-cycle counter, and
+// returns the inferred SessionStatus. This avoids a redundant tmux capture-pane
+// call since the caller already has the content.
+func (d *StatusDetector) DetectFromContent(target, content string) session.SessionStatus {
 	prev, seen := d.prevCaptures[target]
 	if !seen || content != prev {
 		// Content changed (or first observation): reset stable counter.
 		d.prevCaptures[target] = content
 		d.stableCycles[target] = 0
-		return session.StatusActive, nil
+		return session.StatusActive
 	}
 
 	// Content unchanged: increment stable counter.
 	d.stableCycles[target]++
 
 	if d.stableCycles[target] < activeCycleThreshold {
-		return session.StatusActive, nil
+		return session.StatusActive
 	}
 
 	// Pane is stable. Determine waiting vs idle by inspecting the last
 	// non-empty line of the captured content.
 	if matchesInputPrompt(content) {
-		return session.StatusWaiting, nil
+		return session.StatusWaiting
 	}
-	return session.StatusIdle, nil
+	return session.StatusIdle
 }
 
 // Reset clears the stored state for a target. Call this when a session is

@@ -133,6 +133,19 @@ func (m *SidebarModel) SelectedSession() *session.Session {
 	return item.session
 }
 
+// SelectByID moves the cursor to the session with the given ID.
+// Returns true if the session was found.
+func (m *SidebarModel) SelectByID(id string) bool {
+	for i, item := range m.flatItems {
+		if !item.isGroup && item.session != nil && item.session.ID == id {
+			m.cursor = i
+			m.ensureVisible()
+			return true
+		}
+	}
+	return false
+}
+
 // SetSize updates the sidebar dimensions.
 func (m *SidebarModel) SetSize(w, h int) {
 	m.width = w

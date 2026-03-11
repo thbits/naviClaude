@@ -2,8 +2,10 @@ package session
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -83,12 +85,100 @@ func (d *Detector) buildSession(pane tmux.PaneInfo, claudePID int) *Session {
 		PID:          claudePID,
 	}
 
+	// Try to extract session ID from the Claude process command line.
+	s.ID = extractSessionID(claudePID, pane.CurrentPath)
+
 	// Populate CPU and memory from ps.
 	cpu, mem := queryProcessStats(claudePID)
 	s.CPU = cpu
 	s.Memory = mem
 
 	return s
+}
+
+// extractSessionID attempts to determine the session ID for a running Claude
+// process. It first checks the command line for --resume <sessionId>, then
+// falls back to finding the most recently modified .jsonl file in the matching
+// project directory.
+func extractSessionID(pid int, cwd string) string {
+	// Try command line first: "claude --resume <uuid>"
+	cmdLine := fullCommandLine(pid)
+	if id := parseResumeFlag(cmdLine); id != "" {
+		return id
+	}
+
+	// Fall back to most recently modified .jsonl in the project dir.
+	return findLatestSessionFile(cwd)
+}
+
+// fullCommandLine returns the full command line of a process.
+func fullCommandLine(pid int) string {
+	out, err := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "command=").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// parseResumeFlag extracts the session ID from a --resume flag in a command line.
+func parseResumeFlag(cmdLine string) string {
+	parts := strings.Fields(cmdLine)
+	for i, p := range parts {
+		if p == "--resume" && i+1 < len(parts) {
+			return parts[i+1]
+		}
+	}
+	return ""
+}
+
+// findLatestSessionFile finds the most recently modified .jsonl file in the
+// Claude projects directory that matches the given CWD, and returns its
+// session UUID (filename stem).
+func findLatestSessionFile(cwd string) string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+
+	// The path slug is the CWD with "/" replaced by "-".
+	slug := strings.ReplaceAll(cwd, "/", "-")
+	projectDir := filepath.Join(home, ".claude", "projects", slug)
+
+	entries, err := os.ReadDir(projectDir)
+	if err != nil {
+		return ""
+	}
+
+	type fileEntry struct {
+		name    string
+		modTime time.Time
+	}
+
+	var jsonlFiles []fileEntry
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		jsonlFiles = append(jsonlFiles, fileEntry{
+			name:    e.Name(),
+			modTime: info.ModTime(),
+		})
+	}
+
+	if len(jsonlFiles) == 0 {
+		return ""
+	}
+
+	// Sort by modification time descending, pick the most recent.
+	sort.Slice(jsonlFiles, func(i, j int) bool {
+		return jsonlFiles[i].modTime.After(jsonlFiles[j].modTime)
+	})
+
+	return strings.TrimSuffix(jsonlFiles[0].name, ".jsonl")
 }
 
 // matchesProcessName reports whether name (typically from pane_current_command)
