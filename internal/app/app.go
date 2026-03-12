@@ -12,6 +12,7 @@ import (
 	"github.com/tomhalo/naviclaude/internal/config"
 	"github.com/tomhalo/naviclaude/internal/preview"
 	"github.com/tomhalo/naviclaude/internal/session"
+	"github.com/tomhalo/naviclaude/internal/stats"
 	"github.com/tomhalo/naviclaude/internal/styles"
 	"github.com/tomhalo/naviclaude/internal/tmux"
 	"github.com/tomhalo/naviclaude/internal/ui"
@@ -82,6 +83,7 @@ type Model struct {
 	help        ui.HelpModel
 	contextMenu ui.ContextMenuModel
 	detail      ui.DetailModel
+	statsModel  ui.StatsModel
 
 	// Backend services
 	tmuxClient     *tmux.Client
@@ -102,6 +104,9 @@ type Model struct {
 	confirmKill      bool               // waiting for kill confirmation
 	confirmSession   *session.Session   // session pending kill confirmation
 	pendingNewTarget string             // tmux target of a just-created session; kept until detected
+
+	// Stats cache
+	statsCache *stats.Cache
 
 	// Configuration
 	cfg                config.Config
@@ -130,6 +135,7 @@ func New() Model {
 		help:        ui.NewHelp(),
 		contextMenu: ui.NewContextMenu(),
 		detail:      ui.NewDetail(),
+		statsModel:  ui.NewStats(),
 
 		// Backend
 		tmuxClient:     tc,
@@ -139,6 +145,9 @@ func New() Model {
 		captureEngine:  preview.NewCaptureEngine(tc),
 		passthrough:    preview.NewPassthrough(tc),
 		statusDetector: preview.NewStatusDetector(),
+
+		// Stats cache
+		statsCache: stats.NewCache(),
 
 		// Configuration
 		cfg:                cfg,
@@ -224,6 +233,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case detailDataMsg:
 		m.detail.SetData(msg.messageCount, msg.startTime)
+		return m, nil
+
+	case statsComputeMsg:
+		if msg.err != nil {
+			m.err = fmt.Errorf("stats: %w", msg.err)
+			m.statsModel.Hide()
+			m.mode = ModeList
+			m.statusbar.SetMode(ModeList.String())
+		} else {
+			m.statsModel.SetStats(msg.stats)
+		}
 		return m, nil
 
 	// -- Async results (progressive: active first, then history) -------------
@@ -416,6 +436,10 @@ func (m Model) View() string {
 	screen := lipgloss.JoinVertical(lipgloss.Left, titleBar, mainContent, statusView)
 
 	// Render overlays on top.
+	if m.statsModel.IsVisible() {
+		screen = m.statsModel.View()
+	}
+
 	if m.detail.IsVisible() {
 		screen = m.detail.View()
 	}
@@ -472,6 +496,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleHelpKey(msg)
 	case ModeDetail:
 		return m.handleDetailKey(msg)
+	case ModeStats:
+		return m.handleStatsKey(msg)
 	}
 	return m, nil
 }
@@ -544,8 +570,10 @@ func (m Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, loadDetailDataCmd(sess)
 
 	case m.keys.Stats:
-		m.err = fmt.Errorf("stats view: not yet implemented (Phase 2)")
-		return m, nil
+		m.statsModel.Show()
+		m.mode = ModeStats
+		m.statusbar.SetMode(ModeStats.String())
+		return m, m.computeStatsCmd()
 
 	case "ctrl+u":
 		m.preview.ScrollUp(m.preview.HalfViewHeight())
@@ -1186,6 +1214,7 @@ func (m *Model) resizeComponents() {
 	m.search.SetSize(sidebarWidth-1, contentHeight)
 	m.help.SetSize(m.width, m.height)
 	m.detail.SetSize(m.width, m.height)
+	m.statsModel.SetSize(m.width, m.height)
 	// Truncate captured pane lines to the preview viewport width to prevent
 	// overflow when the source pane is wider than the popup.
 	m.captureEngine.SetMaxWidth(previewWidth - 2) // -2 for left padding

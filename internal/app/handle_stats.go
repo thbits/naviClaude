@@ -5,6 +5,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/tomhalo/naviclaude/internal/session"
+	"github.com/tomhalo/naviclaude/internal/stats"
 )
 
 // tickResourceMsg triggers a CPU/memory refresh.
@@ -73,4 +74,53 @@ func (m *Model) handleResourceRefresh(msg resourceRefreshMsg) {
 			}
 		}
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Stats popup
+// ---------------------------------------------------------------------------
+
+// statsComputeMsg carries the result of an async stats computation.
+type statsComputeMsg struct {
+	stats *stats.Stats
+	err   error
+}
+
+// computeStatsCmd runs stats.Compute in the background.
+func (m Model) computeStatsCmd() tea.Cmd {
+	activeCount := len(m.activeSessions)
+	filter := m.statsModel.FilterString()
+	cache := m.statsCache
+
+	return func() tea.Msg {
+		// Check cache first.
+		fileCount := stats.CountSessionFiles("")
+		if cached := cache.Load(fileCount); cached != nil && cached.Filter == filter {
+			return statsComputeMsg{stats: cached}
+		}
+
+		s, err := stats.Compute("", activeCount, filter)
+		if err != nil {
+			return statsComputeMsg{err: err}
+		}
+
+		// Save to cache.
+		_ = cache.Save(s, fileCount)
+
+		return statsComputeMsg{stats: s}
+	}
+}
+
+// handleStatsKey handles input in the stats overlay.
+func (m Model) handleStatsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	key := msg.String()
+	if key == KeyTab {
+		m.statsModel.CycleFilter()
+		return m, m.computeStatsCmd()
+	}
+	// Any other key closes.
+	m.statsModel.Hide()
+	m.mode = ModeList
+	m.statusbar.SetMode(ModeList.String())
+	return m, nil
 }
