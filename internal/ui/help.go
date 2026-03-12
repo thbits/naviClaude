@@ -10,9 +10,10 @@ import (
 
 // HelpModel renders a centered overlay popup with keybinding reference.
 type HelpModel struct {
-	visible bool
-	width   int
-	height  int
+	visible      bool
+	width        int
+	height       int
+	listBindings []helpBinding // configurable from KeyMap
 }
 
 type helpBinding struct {
@@ -23,6 +24,20 @@ type helpBinding struct {
 // NewHelp creates a HelpModel.
 func NewHelp() HelpModel {
 	return HelpModel{}
+}
+
+// HelpBindingInput is the public type for setting key bindings from outside the package.
+type HelpBindingInput struct {
+	Key  string
+	Desc string
+}
+
+// SetKeyBindings updates the list-mode bindings from the config-derived KeyMap.
+func (m *HelpModel) SetKeyBindings(bindings []HelpBindingInput) {
+	m.listBindings = make([]helpBinding, len(bindings))
+	for i, b := range bindings {
+		m.listBindings[i] = helpBinding{key: b.Key, desc: b.Desc}
+	}
 }
 
 // Show makes the help overlay visible.
@@ -76,17 +91,21 @@ func (m HelpModel) View() string {
 
 	title := styles.HelpTitle.Render("Help - Keybindings")
 
-	listBindings := []helpBinding{
-		{"j/k", "Navigate sessions"},
-		{"Enter/Tab", "Focus (passthrough)"},
-		{"f", "Jump to pane"},
-		{"/", "Search"},
-		{"n", "New session"},
-		{"K", "Kill session"},
-		{"d", "Detail"},
-		{"s", "Stats"},
-		{"?", "Help"},
-		{"q", "Quit"},
+	listBindings := m.listBindings
+	if len(listBindings) == 0 {
+		// Fallback defaults if SetKeyBindings was never called.
+		listBindings = []helpBinding{
+			{"j/k", "Navigate sessions"},
+			{"Enter/Tab", "Focus (passthrough)"},
+			{"f", "Jump to pane"},
+			{"/", "Search"},
+			{"n", "New session"},
+			{"K", "Kill session"},
+			{"d", "Detail"},
+			{"s", "Stats"},
+			{"?", "Help"},
+			{"q", "Quit"},
+		}
 	}
 
 	passthroughBindings := []helpBinding{

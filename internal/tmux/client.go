@@ -73,6 +73,14 @@ func (c *Client) CapturePaneOutput(target string) (string, error) {
 	return string(out), nil
 }
 
+// KillPane kills the specified tmux pane (and its process).
+func (c *Client) KillPane(target string) error {
+	if err := exec.Command("tmux", "kill-pane", "-t", target).Run(); err != nil {
+		return fmt.Errorf("tmux kill-pane -t %s: %w", target, err)
+	}
+	return nil
+}
+
 // SendKeys sends key strokes to a pane.  keys may be a literal string or a
 // named key such as "Enter".
 func (c *Client) SendKeys(target, keys string) error {
@@ -150,6 +158,7 @@ func (c *Client) SplitWindow(opts SplitWindowOptions) error {
 // NewWindowOptions holds parameters for tmux new-window.
 type NewWindowOptions struct {
 	Target  string // session target, e.g. "mysession:"
+	Name    string // optional window name (-n flag)
 	Command string // optional command to run in the new window
 }
 
@@ -160,6 +169,9 @@ func (c *Client) NewWindow(opts NewWindowOptions) error {
 	if opts.Target != "" {
 		args = append(args, "-t", opts.Target)
 	}
+	if opts.Name != "" {
+		args = append(args, "-n", opts.Name)
+	}
 	if opts.Command != "" {
 		args = append(args, opts.Command)
 	}
@@ -167,6 +179,27 @@ func (c *Client) NewWindow(opts NewWindowOptions) error {
 		return fmt.Errorf("tmux new-window: %w", err)
 	}
 	return nil
+}
+
+// NewWindowPrint creates a new window and returns its target identifier
+// (e.g. "session:3.0"). Uses -P -F to print the pane info.
+func (c *Client) NewWindowPrint(opts NewWindowOptions) (string, error) {
+	format := "#{session_name}:#{window_index}.#{pane_index}"
+	args := []string{"new-window", "-d", "-P", "-F", format}
+	if opts.Target != "" {
+		args = append(args, "-t", opts.Target)
+	}
+	if opts.Name != "" {
+		args = append(args, "-n", opts.Name)
+	}
+	if opts.Command != "" {
+		args = append(args, opts.Command)
+	}
+	out, err := exec.Command("tmux", args...).Output()
+	if err != nil {
+		return "", fmt.Errorf("tmux new-window: %w", err)
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 // parseVersionString parses a version string like "3.4" or "3.4a" into its

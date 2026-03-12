@@ -1,6 +1,8 @@
 package session
 
 import (
+	"bufio"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -17,11 +19,117 @@ import (
 // Claude session is running in a tmux pane.
 var DefaultProcessNames = []string{"claude"}
 
+// processTree holds the entire process tree from a single ps call, including
+// CPU and RSS stats to avoid per-session ps calls.
+type processTree struct {
+	children map[int][]int   // parent -> child PIDs
+	names    map[int]string  // PID -> process name (basename)
+	ppid     map[int]int     // PID -> parent PID
+	cpu      map[int]float64 // PID -> CPU %
+	rss      map[int]float64 // PID -> RSS in KB
+}
+
+// buildProcessTree runs a single `ps -eo pid=,ppid=,%cpu=,rss=,comm=` command
+// and builds an in-memory process tree with stats. This replaces hundreds of
+// per-PID pgrep/ps calls.
+func buildProcessTree() *processTree {
+	out, err := exec.Command("ps", "-eo", "pid=,ppid=,%cpu=,rss=,comm=").Output()
+	if err != nil {
+		return &processTree{
+			children: make(map[int][]int),
+			names:    make(map[int]string),
+			ppid:     make(map[int]int),
+			cpu:      make(map[int]float64),
+			rss:      make(map[int]float64),
+		}
+	}
+
+	tree := &processTree{
+		children: make(map[int][]int),
+		names:    make(map[int]string),
+		ppid:     make(map[int]int),
+		cpu:      make(map[int]float64),
+		rss:      make(map[int]float64),
+	}
+
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		// Fields: PID PPID %CPU RSS COMM (comm may contain spaces for full path)
+		fields := strings.Fields(line)
+		if len(fields) < 5 {
+			continue
+		}
+		pid, err1 := strconv.Atoi(fields[0])
+		ppid, err2 := strconv.Atoi(fields[1])
+		if err1 != nil || err2 != nil {
+			continue
+		}
+		cpuVal, _ := strconv.ParseFloat(fields[2], 64)
+		rssVal, _ := strconv.ParseFloat(fields[3], 64)
+		// comm is the rest of the fields joined (may be a path)
+		comm := strings.Join(fields[4:], " ")
+		name := filepath.Base(comm)
+
+		tree.names[pid] = name
+		tree.ppid[pid] = ppid
+		tree.children[ppid] = append(tree.children[ppid], pid)
+		tree.cpu[pid] = cpuVal
+		tree.rss[pid] = rssVal
+	}
+
+	return tree
+}
+
+// processStats returns CPU % and memory MB for a PID from the pre-built tree.
+func (t *processTree) processStats(pid int) (cpu float64, memMB float64) {
+	return t.cpu[pid], t.rss[pid] / 1024.0
+}
+
+// isAncestorInTree reports whether ancestorPID is an ancestor of descendantPID
+// using the pre-built process tree.
+func (t *processTree) isAncestorOf(ancestorPID, descendantPID int) bool {
+	pid := descendantPID
+	for i := 0; i < 10; i++ {
+		ppid, ok := t.ppid[pid]
+		if !ok || ppid <= 1 {
+			return false
+		}
+		if ppid == ancestorPID {
+			return true
+		}
+		pid = ppid
+	}
+	return false
+}
+
+// findMatchingDescendant performs a depth-first walk of the process tree from
+// rootPID and returns the PID of the first descendant whose process name
+// matches any of the given names. Returns 0 if no match is found.
+func (t *processTree) findMatchingDescendant(rootPID int, matchFunc func(string) bool, maxDepth int) int {
+	if maxDepth == 0 {
+		return 0
+	}
+	for _, child := range t.children[rootPID] {
+		name := t.names[child]
+		if matchFunc(name) {
+			return child
+		}
+		if found := t.findMatchingDescendant(child, matchFunc, maxDepth-1); found != 0 {
+			return found
+		}
+	}
+	return 0
+}
+
 // Detector discovers active Claude sessions from tmux panes by inspecting the
 // process tree of each pane.
 type Detector struct {
 	tmuxClient   *tmux.Client
 	processNames []string
+	modelCache   map[string]string // sessionID -> model (cached, never changes mid-session)
 }
 
 // NewDetector creates a Detector that uses the given tmux client and matches
@@ -34,20 +142,49 @@ func NewDetector(client *tmux.Client, processNames []string) *Detector {
 	return &Detector{
 		tmuxClient:   client,
 		processNames: processNames,
+		modelCache:   make(map[string]string),
 	}
 }
 
+// cachedModel returns the model for a session, reading from cache or extracting
+// from the .jsonl file on first access. A session's model never changes, so
+// caching avoids repeated file I/O on every detect cycle.
+func (d *Detector) cachedModel(sessionID, cwd string) string {
+	if model, ok := d.modelCache[sessionID]; ok {
+		return model
+	}
+	model := extractModelFromSessionFile(sessionID, cwd)
+	if model != "" {
+		d.modelCache[sessionID] = model
+	}
+	return model
+}
+
 // Detect returns all active sessions found by walking the process tree of
-// every tmux pane.
+// every tmux pane. It uses a single bulk ps call for the entire process tree.
 func (d *Detector) Detect() ([]*Session, error) {
 	panes, err := d.tmuxClient.ListPanes()
 	if err != nil {
 		return nil, fmt.Errorf("detector: list panes: %w", err)
 	}
 
+	// Build the process tree once for all panes.
+	tree := buildProcessTree()
+
+	// Get our own PID to filter out the pane naviClaude is running in.
+	selfPID := os.Getpid()
+
 	var sessions []*Session
 	for _, pane := range panes {
-		s := d.sessionFromPane(pane)
+		// Skip popup panes (tmux 3.3+ uses "[popup]" as session name).
+		if strings.HasPrefix(pane.SessionName, "[popup]") || pane.SessionName == "popup" {
+			continue
+		}
+		// Skip our own pane (don't detect naviClaude itself).
+		if pane.PID == selfPID || tree.isAncestorOf(pane.PID, selfPID) {
+			continue
+		}
+		s := d.sessionFromPane(pane, tree)
 		if s == nil {
 			continue
 		}
@@ -58,23 +195,23 @@ func (d *Detector) Detect() ([]*Session, error) {
 
 // sessionFromPane checks whether a pane is running a Claude process (directly
 // or as a descendant), and if so returns a Session for it.
-func (d *Detector) sessionFromPane(pane tmux.PaneInfo) *Session {
+func (d *Detector) sessionFromPane(pane tmux.PaneInfo, tree *processTree) *Session {
 	// First check the pane's direct current command.
 	if d.matchesProcessName(pane.CurrentCommand) {
-		return d.buildSession(pane, pane.PID)
+		return d.buildSession(pane, pane.PID, tree)
 	}
 
 	// Walk the process tree from the pane's PID to find a matching descendant.
-	claudePID := d.findClaudePID(pane.PID)
+	claudePID := tree.findMatchingDescendant(pane.PID, d.matchesProcessName, 6)
 	if claudePID == 0 {
 		return nil
 	}
-	return d.buildSession(pane, claudePID)
+	return d.buildSession(pane, claudePID, tree)
 }
 
 // buildSession constructs a Session from PaneInfo. The claudePID is the PID
 // of the actual Claude process (which may be a grandchild of the pane's shell).
-func (d *Detector) buildSession(pane tmux.PaneInfo, claudePID int) *Session {
+func (d *Detector) buildSession(pane tmux.PaneInfo, claudePID int, tree *processTree) *Session {
 	s := &Session{
 		TmuxSession:  pane.SessionName,
 		TmuxTarget:   pane.Target,
@@ -88,10 +225,13 @@ func (d *Detector) buildSession(pane tmux.PaneInfo, claudePID int) *Session {
 	// Try to extract session ID from the Claude process command line.
 	s.ID = extractSessionID(claudePID, pane.CurrentPath)
 
-	// Populate CPU and memory from ps.
-	cpu, mem := queryProcessStats(claudePID)
-	s.CPU = cpu
-	s.Memory = mem
+	// Populate CPU and memory from the bulk process tree (no per-session ps call).
+	s.CPU, s.Memory = tree.processStats(claudePID)
+
+	// Try to extract the model from the session .jsonl file (cached).
+	if s.ID != "" {
+		s.Model = d.cachedModel(s.ID, pane.CurrentPath)
+	}
 
 	return s
 }
@@ -194,75 +334,57 @@ func (d *Detector) matchesProcessName(name string) bool {
 	return false
 }
 
-// findClaudePID performs a depth-first walk of the process tree rooted at
-// rootPID using `pgrep -P` and returns the PID of the first descendant whose
-// process name matches. Returns 0 if no match is found.
-func (d *Detector) findClaudePID(rootPID int) int {
-	return d.walkTree(rootPID, 6) // max depth to avoid runaway recursion
-}
 
-func (d *Detector) walkTree(pid int, depth int) int {
-	if depth == 0 {
-		return 0
+// extractModelFromSessionFile reads the first few assistant messages from the
+// session's .jsonl file to extract the model field. This allows active sessions
+// to display their model (opus/sonnet/haiku) without waiting for the session
+// to close.
+func extractModelFromSessionFile(sessionID, cwd string) string {
+	filePath := SessionFilePath(sessionID, cwd)
+	if filePath == "" {
+		return ""
 	}
-	children := childPIDs(pid)
-	for _, child := range children {
-		name := processName(child)
-		if d.matchesProcessName(name) {
-			return child
-		}
-		if found := d.walkTree(child, depth-1); found != 0 {
-			return found
-		}
-	}
-	return 0
-}
 
-// childPIDs returns the direct child PIDs of the given parent using pgrep -P.
-func childPIDs(parentPID int) []int {
-	out, err := exec.Command("pgrep", "-P", strconv.Itoa(parentPID)).Output()
-	if err != nil {
-		// pgrep exits 1 when no children are found; not a real error.
-		return nil
-	}
-	var pids []int
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		p, err := strconv.Atoi(line)
-		if err == nil {
-			pids = append(pids, p)
-		}
-	}
-	return pids
-}
-
-// processName returns the executable name of the given PID using ps.
-// Returns an empty string on any error.
-func processName(pid int) string {
-	out, err := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "comm=").Output()
+	f, err := os.Open(filePath)
 	if err != nil {
 		return ""
 	}
-	return strings.TrimSpace(filepath.Base(string(out)))
-}
+	defer f.Close()
 
-// queryProcessStats returns the CPU % and resident memory in MB for a process.
-// On any error, both values are zero.
-func queryProcessStats(pid int) (cpu float64, memMB float64) {
-	// ps -p <pid> -o %cpu,rss  (rss is in KB on macOS/Linux)
-	out, err := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "%cpu=,rss=").Output()
-	if err != nil {
-		return 0, 0
+	scanner := bufio.NewScanner(f)
+	buf := make([]byte, 0, 64*1024)
+	scanner.Buffer(buf, 2*1024*1024)
+
+	// Only scan the first 50 lines to keep it fast.
+	lineCount := 0
+	for scanner.Scan() {
+		lineCount++
+		if lineCount > 50 {
+			break
+		}
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+
+		var rec struct {
+			Type    string          `json:"type"`
+			Message json.RawMessage `json:"message"`
+		}
+		if err := json.Unmarshal(line, &rec); err != nil {
+			continue
+		}
+		if rec.Type != "assistant" || len(rec.Message) == 0 {
+			continue
+		}
+
+		var msg struct {
+			Model string `json:"model"`
+		}
+		if err := json.Unmarshal(rec.Message, &msg); err != nil || msg.Model == "" {
+			continue
+		}
+		return classifyModel(msg.Model)
 	}
-	parts := strings.Fields(strings.TrimSpace(string(out)))
-	if len(parts) < 2 {
-		return 0, 0
-	}
-	cpu, _ = strconv.ParseFloat(parts[0], 64)
-	rssKB, _ := strconv.ParseFloat(parts[1], 64)
-	memMB = rssKB / 1024.0
-	return cpu, memMB
+	return ""
 }

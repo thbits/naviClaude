@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -24,7 +25,7 @@ type PreviewModel struct {
 
 // NewPreview creates a PreviewModel with the given dimensions.
 func NewPreview(width, height int) PreviewModel {
-	vp := viewport.New(width, height-2) // subtract 2 for border+header
+	vp := viewport.New(width, height-2) // subtract 2 for header + border-bottom line
 	return PreviewModel{
 		width:    width,
 		height:   height,
@@ -48,17 +49,19 @@ func (m *PreviewModel) SetPassthrough(on bool) {
 	m.passthrough = on
 }
 
-// SetSize updates the preview panel dimensions.
+// SetSize updates the preview panel dimensions. No border on the preview --
+// the separator is the sidebar's right border.
 func (m *PreviewModel) SetSize(w, h int) {
 	m.width = w
 	m.height = h
 
-	// Account for border (2 lines) and header (1 line).
-	contentHeight := h - 3
+	// No border on preview, just header (2 lines: text + border-bottom) and
+	// 1 char left padding for content.
+	contentHeight := h - 2
 	if contentHeight < 1 {
 		contentHeight = 1
 	}
-	contentWidth := w - 2
+	contentWidth := w - 2 // left/right padding
 	if contentWidth < 1 {
 		contentWidth = 1
 	}
@@ -97,89 +100,94 @@ func (m PreviewModel) Update(msg tea.Msg) (PreviewModel, tea.Cmd) {
 	return m, cmd
 }
 
-// View renders the preview panel with border, header, and content.
+// View renders the preview panel with header and content. No border is rendered
+// here -- the sidebar's right border serves as the separator.
 func (m PreviewModel) View() string {
 	header := m.renderHeader()
 	body := m.viewport.View()
 
 	inner := lipgloss.JoinVertical(lipgloss.Left, header, body)
 
-	borderStyle := styles.PreviewBorderUnfocused
-	if m.passthrough {
-		borderStyle = styles.PreviewBorderFocused
-	}
-
-	return borderStyle.
-		Width(m.width - 2).   // subtract border width
-		Height(m.height - 2). // subtract border height
+	// No border on the preview panel. Just render with padding.
+	return lipgloss.NewStyle().
+		Width(m.width).
+		Height(m.height).
+		PaddingLeft(1).
 		Render(inner)
 }
 
 func (m PreviewModel) renderHeader() string {
+	sep := styles.PreviewSep.Render(" | ")
+	maxWidth := m.width - 3 // account for left padding
+	if maxWidth < 10 {
+		maxWidth = 10
+	}
+
 	if m.session == nil {
-		return styles.PreviewHeader.Width(m.width - 2).Render("No session selected")
+		return styles.PreviewHeader.Width(maxWidth).Render("No session selected")
 	}
 
 	s := m.session
 
-	// Project name.
 	projectName := s.ProjectName
 	if projectName == "" {
 		projectName = "unknown"
 	}
 
-	parts := []string{
-		styles.PreviewHeader.Render(projectName),
-	}
+	var leftParts []string
 
-	// Git branch.
+	// Project name in blue bold.
+	leftParts = append(leftParts, lipgloss.NewStyle().Foreground(styles.ColorBlue).Bold(true).Render(projectName))
+
+	// Git branch in green.
 	if s.GitBranch != "" {
-		parts = append(parts, styles.PreviewHeaderBranch.Render(s.GitBranch))
+		leftParts = append(leftParts, styles.PreviewHeaderBranch.Render(s.GitBranch))
 	}
 
-	// Status badge.
-	parts = append(parts, m.statusBadge(s.Status))
+	// Status badge (colored).
+	leftParts = append(leftParts, m.statusBadge(s.Status))
 
-	// Model.
-	if s.Model != "" {
-		parts = append(parts, styles.PreviewHeaderValue.Render(s.Model))
-	}
-
-	// Tmux target.
+	// Tmux target in gray (e.g. "infra:1.2").
 	if s.TmuxTarget != "" {
-		parts = append(parts, styles.PreviewHeaderLabel.Render(s.TmuxTarget))
+		leftParts = append(leftParts, styles.PreviewHeaderLabel.Render(s.TmuxTarget))
 	}
 
-	// Passthrough badge.
+	leftLine := strings.Join(leftParts, sep)
+
+	// Right side: CPU, MEM, and relative time.
+	var rightParts []string
+	rightParts = append(rightParts, styles.PreviewHeaderValue.Render(fmt.Sprintf("CPU %.1f%%", s.CPU)))
+	rightParts = append(rightParts, styles.PreviewHeaderValue.Render(fmt.Sprintf("MEM %.0fMB", s.Memory)))
+
+	if !s.LastActivity.IsZero() {
+		relTime := relativeTime(time.Since(s.LastActivity))
+		rightParts = append(rightParts, styles.PreviewHeaderValue.Render(relTime))
+	}
+
+	rightLine := strings.Join(rightParts, sep)
+
+	leftWidth := lipgloss.Width(leftLine)
+	rightWidth := lipgloss.Width(rightLine)
+	gap := maxWidth - leftWidth - rightWidth
+	if gap < 1 {
+		gap = 1
+	}
+
+	headerLine := leftLine + strings.Repeat(" ", gap) + rightLine
+
+	// In passthrough mode, use a blue border on the header to visually
+	// indicate the pane is focused.
+	headerStyle := styles.PreviewHeader
 	if m.passthrough {
-		parts = append(parts, styles.PreviewPassthroughBadge.Render("PASSTHROUGH"))
+		headerStyle = styles.PreviewHeaderFocused
 	}
-
-	headerLine := strings.Join(parts, styles.PreviewHeaderLabel.Render(" | "))
-
-	// Truncate to width if needed.
-	maxWidth := m.width - 2
-	if maxWidth < 0 {
-		maxWidth = 0
-	}
-	return lipgloss.NewStyle().
-		MaxWidth(maxWidth).
-		Width(maxWidth).
-		Background(styles.ColorDim).
-		Render(headerLine)
+	return headerStyle.Width(maxWidth).Render(headerLine)
 }
 
 func (m PreviewModel) statusBadge(status session.SessionStatus) string {
-	switch status {
-	case session.StatusActive:
-		return styles.StatusIconActive.Render(fmt.Sprintf("\u25cf %s", status.String()))
-	case session.StatusWaiting:
-		return styles.StatusIconWaiting.Render(fmt.Sprintf("\u25ce %s", status.String()))
-	case session.StatusIdle:
-		return styles.StatusIconIdle.Render(fmt.Sprintf("\u25cb %s", status.String()))
-	case session.StatusClosed:
-		return styles.StatusIconClosed.Render(fmt.Sprintf("\u25cc %s", status.String()))
-	default:
+	fg, icon := statusIconProps(status)
+	if icon == " " {
 		return ""
 	}
+	return lipgloss.NewStyle().Foreground(fg).Render(fmt.Sprintf("%s %s", icon, status.String()))
 }

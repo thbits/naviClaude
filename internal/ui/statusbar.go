@@ -12,8 +12,9 @@ const appVersion = "v0.1.0"
 
 // StatusBarModel renders the bottom bar with contextual keybinding hints.
 type StatusBarModel struct {
-	width int
-	mode  string
+	width     int
+	mode      string
+	listHints []statusHint // configurable list-mode hints
 }
 
 type statusHint struct {
@@ -26,6 +27,20 @@ func NewStatusBar(width int) StatusBarModel {
 	return StatusBarModel{
 		width: width,
 		mode:  "list",
+	}
+}
+
+// StatusHintInput is the public type for setting status bar hints from outside the package.
+type StatusHintInput struct {
+	Key  string
+	Desc string
+}
+
+// SetKeyHints updates the list-mode hints from the config-derived KeyMap.
+func (m *StatusBarModel) SetKeyHints(hints []StatusHintInput) {
+	m.listHints = make([]statusHint, len(hints))
+	for i, h := range hints {
+		m.listHints[i] = statusHint{key: h.Key, desc: h.Desc}
 	}
 }
 
@@ -94,6 +109,9 @@ func (m StatusBarModel) hintsForMode() []statusHint {
 			{"Enter", "select"},
 		}
 	default: // "list"
+		if len(m.listHints) > 0 {
+			return m.listHints
+		}
 		return []statusHint{
 			{"Enter", "focus"},
 			{"f", "jump"},

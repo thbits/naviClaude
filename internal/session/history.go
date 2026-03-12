@@ -13,7 +13,9 @@ import (
 // HistoryScanner scans ~/.claude/projects/**/*.jsonl for closed sessions and
 // reads ~/.claude/history.jsonl for session summaries.
 type HistoryScanner struct {
-	claudeDir string // defaults to ~/.claude
+	claudeDir      string            // defaults to ~/.claude
+	cachedIndex    map[string]string // cached history index (sessionID -> display)
+	cachedIndexAge time.Time         // when the cache was populated
 }
 
 // NewHistoryScanner creates a HistoryScanner. If claudeDir is empty, it
@@ -38,9 +40,15 @@ type HistoryEntry struct {
 }
 
 // LoadHistoryIndex reads all lines from history.jsonl and returns a map from
-// sessionId to display text. If the file does not exist, an empty map is
-// returned without error.
+// sessionId to display text. Results are cached for 5 seconds to avoid
+// re-parsing on every call within the same refresh cycle. If the file does
+// not exist, an empty map is returned without error.
 func (s *HistoryScanner) LoadHistoryIndex() (map[string]string, error) {
+	// Return cached result if fresh enough (avoids triple-parse per refresh).
+	if s.cachedIndex != nil && time.Since(s.cachedIndexAge) < 5*time.Second {
+		return s.cachedIndex, nil
+	}
+
 	path := filepath.Join(s.claudeDir, "history.jsonl")
 	f, err := os.Open(path)
 	if err != nil {
@@ -71,7 +79,14 @@ func (s *HistoryScanner) LoadHistoryIndex() (map[string]string, error) {
 			index[entry.SessionID] = entry.Display
 		}
 	}
-	return index, scanner.Err()
+
+	if err := scanner.Err(); err != nil {
+		return index, err
+	}
+
+	s.cachedIndex = index
+	s.cachedIndexAge = time.Now()
+	return index, nil
 }
 
 // ScanClosed returns all closed sessions whose .jsonl file was modified within

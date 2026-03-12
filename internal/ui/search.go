@@ -108,32 +108,11 @@ func (m SearchModel) Init() tea.Cmd {
 	return textinput.Blink
 }
 
-// Update handles typing, navigation within results, and Esc to cancel.
+// Update handles text input only. Navigation (up/down) and actions (enter/esc)
+// are handled by the app, which uses the sidebar for cursor management.
 func (m SearchModel) Update(msg tea.Msg) (SearchModel, tea.Cmd) {
 	if !m.active {
 		return m, nil
-	}
-
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
-		switch msg.String() {
-		case "esc":
-			m.Deactivate()
-			return m, nil
-		case "down", "ctrl+n":
-			if m.cursor < len(m.results)-1 {
-				m.cursor++
-			}
-			return m, nil
-		case "up", "ctrl+p":
-			if m.cursor > 0 {
-				m.cursor--
-			}
-			return m, nil
-		case "enter":
-			// The main app handles selection via SelectedResult().
-			return m, nil
-		}
 	}
 
 	var cmd tea.Cmd

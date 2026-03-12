@@ -6,59 +6,34 @@ import (
 	"github.com/tomhalo/naviclaude/internal/session"
 )
 
-// activeCycleThreshold is the number of consecutive identical captures
-// required before a pane is considered stable (not active).
-const activeCycleThreshold = 2
-
 // StatusDetector detects the status of a Claude Code session by analyzing
-// consecutive captures of the pane content.
-type StatusDetector struct {
-	prevCaptures map[string]string // previous capture per tmux target
-	stableCycles map[string]int    // consecutive identical capture count per target
-}
+// the captured pane content. It only performs prompt detection -- it does NOT
+// try to detect "active" vs "idle" via content comparison, because spinners,
+// status bars, timestamps, and cursor blink cause constant false-positive
+// content changes that result in status flickering.
+//
+// Active status comes from the session Detector (process is running).
+// This detector only transitions to Waiting when a prompt is visible.
+type StatusDetector struct{}
 
 // NewStatusDetector creates a StatusDetector.
 func NewStatusDetector() *StatusDetector {
-	return &StatusDetector{
-		prevCaptures: make(map[string]string),
-		stableCycles: make(map[string]int),
-	}
+	return &StatusDetector{}
 }
 
-// DetectFromContent analyzes already-captured pane content, compares it with
-// the previous capture for this target, updates the stable-cycle counter, and
-// returns the inferred SessionStatus. This avoids a redundant tmux capture-pane
-// call since the caller already has the content.
+// DetectFromContent inspects captured pane content and returns Waiting if a
+// known prompt pattern is detected, or StatusActive otherwise. The caller
+// should only apply Waiting status updates to avoid overriding the detector's
+// authoritative Active status.
 func (d *StatusDetector) DetectFromContent(target, content string) session.SessionStatus {
-	prev, seen := d.prevCaptures[target]
-	if !seen || content != prev {
-		// Content changed (or first observation): reset stable counter.
-		d.prevCaptures[target] = content
-		d.stableCycles[target] = 0
-		return session.StatusActive
-	}
-
-	// Content unchanged: increment stable counter.
-	d.stableCycles[target]++
-
-	if d.stableCycles[target] < activeCycleThreshold {
-		return session.StatusActive
-	}
-
-	// Pane is stable. Determine waiting vs idle by inspecting the last
-	// non-empty line of the captured content.
 	if matchesInputPrompt(content) {
 		return session.StatusWaiting
 	}
-	return session.StatusIdle
+	return session.StatusActive
 }
 
-// Reset clears the stored state for a target. Call this when a session is
-// closed or its pane is recycled.
-func (d *StatusDetector) Reset(target string) {
-	delete(d.prevCaptures, target)
-	delete(d.stableCycles, target)
-}
+// Reset is a no-op (kept for interface compatibility).
+func (d *StatusDetector) Reset(target string) {}
 
 // matchesInputPrompt reports whether the captured pane content ends with a
 // line that matches a known Claude Code input prompt:

@@ -2,10 +2,12 @@ package ui
 
 import (
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/tomhalo/naviclaude/internal/session"
@@ -27,22 +29,28 @@ type flatItem struct {
 
 // SidebarModel is the left panel showing sessions grouped by tmux session name.
 type SidebarModel struct {
-	Sessions     []*session.Session
-	groups       []sessionGroup
-	flatItems    []flatItem
-	cursor       int
-	width        int
-	height       int
-	scrollOffset int
-	collapsed    map[string]bool
+	Sessions          []*session.Session
+	groups            []sessionGroup
+	flatItems         []flatItem
+	cursor            int
+	width             int
+	height            int
+	collapsed         map[string]bool
+	ConfirmKillTarget string // tmux target of session pending kill confirmation
+	vp                viewport.Model
+	cursorLineStart   int // actual line index where the cursor item starts
+	cursorLineCount   int // actual number of lines the cursor item occupies
+	activeCount       int // cached count of non-closed sessions
 }
 
 // NewSidebar creates a SidebarModel with the given dimensions.
 func NewSidebar(width, height int) SidebarModel {
+	vp := viewport.New(width, height-1) // -1 for header
 	return SidebarModel{
 		width:     width,
 		height:    height,
 		collapsed: make(map[string]bool),
+		vp:        vp,
 	}
 }
 
@@ -50,7 +58,19 @@ func NewSidebar(width, height int) SidebarModel {
 // grouped by TmuxSession. Closed sessions are placed in a "Closed" group.
 func (m *SidebarModel) SetSessions(sessions []*session.Session) {
 	m.Sessions = sessions
+	count := 0
+	for _, s := range sessions {
+		if s.Status != session.StatusClosed {
+			count++
+		}
+	}
+	m.activeCount = count
 	m.rebuildGroups()
+}
+
+// ActiveCount returns the cached count of non-closed sessions.
+func (m *SidebarModel) ActiveCount() int {
+	return m.activeCount
 }
 
 func (m *SidebarModel) rebuildGroups() {
@@ -118,6 +138,37 @@ func (m *SidebarModel) clampCursor() {
 	if m.cursor < 0 {
 		m.cursor = 0
 	}
+	m.syncViewport()
+}
+
+// syncViewport renders all items into the viewport content and scrolls to
+// keep the cursor visible. Must be called after any change to flatItems,
+// cursor, or dimensions so the viewport has up-to-date content before
+// YOffset is adjusted.
+func (m *SidebarModel) syncViewport() {
+	var lines []string
+	for i, item := range m.flatItems {
+		isCursor := i == m.cursor
+		if isCursor {
+			m.cursorLineStart = len(lines)
+		}
+		if item.isGroup {
+			rendered := m.renderGroupHeader(item.groupName, isCursor)
+			// Split on embedded newlines -- Width().Render() may wrap text.
+			lines = append(lines, strings.Split(rendered, "\n")...)
+		} else {
+			for _, rl := range m.renderSessionItem(item.session, isCursor) {
+				// Each rendered line may itself contain embedded newlines
+				// from Width().Render() wrapping.
+				lines = append(lines, strings.Split(rl, "\n")...)
+			}
+		}
+		if isCursor {
+			m.cursorLineCount = len(lines) - m.cursorLineStart
+		}
+	}
+	m.vp.SetContent(strings.Join(lines, "\n"))
+	m.scrollToCursor()
 }
 
 // SelectedSession returns the session at the current cursor, or nil if the
@@ -139,17 +190,49 @@ func (m *SidebarModel) SelectByID(id string) bool {
 	for i, item := range m.flatItems {
 		if !item.isGroup && item.session != nil && item.session.ID == id {
 			m.cursor = i
-			m.ensureVisible()
+			m.syncViewport()
 			return true
 		}
 	}
 	return false
 }
 
+// FlatItem is a public wrapper for flat list items to allow external iteration.
+type FlatItem struct {
+	IsGroup bool
+	Session *session.Session
+}
+
+// FlatItems returns the flattened visible list for external iteration.
+func (m *SidebarModel) FlatItems() []FlatItem {
+	items := make([]FlatItem, len(m.flatItems))
+	for i, fi := range m.flatItems {
+		items[i] = FlatItem{IsGroup: fi.isGroup, Session: fi.session}
+	}
+	return items
+}
+
+// Cursor returns the current cursor index.
+func (m *SidebarModel) Cursor() int {
+	return m.cursor
+}
+
+// SetCursor moves the cursor to the given index.
+func (m *SidebarModel) SetCursor(idx int) {
+	m.cursor = idx
+	m.syncViewport()
+}
+
 // SetSize updates the sidebar dimensions.
 func (m *SidebarModel) SetSize(w, h int) {
 	m.width = w
 	m.height = h
+	listHeight := h - 1 // header takes 1 line
+	if listHeight < 1 {
+		listHeight = 1
+	}
+	m.vp.Width = w
+	m.vp.Height = listHeight
 }
 
 // Init satisfies the tea.Model interface.
@@ -166,12 +249,12 @@ func (m SidebarModel) Update(msg tea.Msg) (SidebarModel, tea.Cmd) {
 			if m.cursor < len(m.flatItems)-1 {
 				m.cursor++
 			}
-			m.ensureVisible()
+			m.syncViewport()
 		case "k", "up":
 			if m.cursor > 0 {
 				m.cursor--
 			}
-			m.ensureVisible()
+			m.syncViewport()
 		case "enter":
 			if m.cursor >= 0 && m.cursor < len(m.flatItems) {
 				item := m.flatItems[m.cursor]
@@ -184,80 +267,70 @@ func (m SidebarModel) Update(msg tea.Msg) (SidebarModel, tea.Cmd) {
 		case "G":
 			if len(m.flatItems) > 0 {
 				m.cursor = len(m.flatItems) - 1
-				m.ensureVisible()
+				m.syncViewport()
 			}
 		case "g":
 			m.cursor = 0
-			m.ensureVisible()
+			m.syncViewport()
 		}
 	}
 	return m, nil
 }
 
-func (m *SidebarModel) ensureVisible() {
-	// Each session takes 2 lines, group headers take 1.
-	linePos := 0
-	for i := 0; i < m.cursor && i < len(m.flatItems); i++ {
-		if m.flatItems[i].isGroup {
-			linePos++
-		} else {
-			linePos += 2
-		}
+// scrollToCursor adjusts the viewport YOffset so the cursor item is visible.
+// Uses cursorLineStart/cursorLineCount computed by syncViewport() from actual
+// rendered output, avoiding assumptions about how many lines each item takes.
+func (m *SidebarModel) scrollToCursor() {
+	linePos := m.cursorLineStart
+	cursorLines := m.cursorLineCount
+	if cursorLines < 1 {
+		cursorLines = 1
 	}
 
-	if linePos < m.scrollOffset {
-		m.scrollOffset = linePos
+	yOff := m.vp.YOffset
+
+	// Scroll up if cursor is above the viewport.
+	if linePos < yOff {
+		yOff = linePos
 	}
 
-	cursorLines := 1
-	if m.cursor < len(m.flatItems) && !m.flatItems[m.cursor].isGroup {
-		cursorLines = 2
+	// Scroll down if cursor is below the viewport.
+	if linePos+cursorLines > yOff+m.vp.Height {
+		yOff = linePos + cursorLines - m.vp.Height
 	}
-	if linePos+cursorLines > m.scrollOffset+m.height {
-		m.scrollOffset = linePos + cursorLines - m.height
-	}
+
+	m.vp.SetYOffset(yOff)
 }
 
 // View renders the sidebar.
 func (m SidebarModel) View() string {
+	// Render the "SESSIONS" header.
+	activeCount := m.countActive()
+	title := styles.SidebarTitle.Render("SESSIONS")
+	countStr := styles.SidebarTitleCount.Render(fmt.Sprintf("%d active", activeCount))
+	gap := m.width - lipgloss.Width(title) - lipgloss.Width(countStr) - 2
+	if gap < 1 {
+		gap = 1
+	}
+	header := title + strings.Repeat(" ", gap) + countStr + " "
+
 	if len(m.flatItems) == 0 {
+		listHeight := m.vp.Height
 		empty := styles.EmptyState.Render("No sessions found")
 		hint := styles.EmptyStateHint.Render("Press n to create one")
-		content := lipgloss.JoinVertical(lipgloss.Left, empty, hint)
-		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, content)
+		body := lipgloss.JoinVertical(lipgloss.Left, empty, hint)
+		body = lipgloss.Place(m.width, listHeight, lipgloss.Center, lipgloss.Center, body)
+		return lipgloss.JoinVertical(lipgloss.Left, header, body)
 	}
 
-	var lines []string
-	for i, item := range m.flatItems {
-		isCursor := i == m.cursor
-		if item.isGroup {
-			lines = append(lines, m.renderGroupHeader(item.groupName, isCursor))
-		} else {
-			lines = append(lines, m.renderSessionItem(item.session, isCursor)...)
-		}
-	}
+	// Content and scroll position are kept in sync by syncViewport()
+	// which is called on every cursor/data change. Just render.
+	return lipgloss.JoinVertical(lipgloss.Left, header, m.vp.View())
+}
 
-	// Apply scroll offset.
-	if m.scrollOffset > 0 {
-		if m.scrollOffset < len(lines) {
-			lines = lines[m.scrollOffset:]
-		} else {
-			lines = nil
-		}
-	}
-
-	// Truncate to height.
-	if len(lines) > m.height {
-		lines = lines[:m.height]
-	}
-
-	// Pad remaining lines to fill height.
-	for len(lines) < m.height {
-		lines = append(lines, "")
-	}
-
-	content := strings.Join(lines, "\n")
-	return lipgloss.NewStyle().Width(m.width).Render(content)
+// countActive returns the cached count of non-closed sessions.
+func (m SidebarModel) countActive() int {
+	return m.activeCount
 }
 
 func (m SidebarModel) renderGroupHeader(name string, isCursor bool) string {
@@ -275,87 +348,185 @@ func (m SidebarModel) renderGroupHeader(name string, isCursor bool) string {
 		}
 	}
 
-	countStr := styles.SidebarGroupCount.Render(fmt.Sprintf(" %d", count))
-	header := styles.SidebarGroupHeader.Render(fmt.Sprintf("%s %s", arrow, name)) + countStr
-
 	if isCursor {
-		header = styles.SidebarItemSelected.Width(m.width).Render(
-			fmt.Sprintf("%s %s %s", arrow, name, fmt.Sprintf("%d", count)),
-		)
+		content := fmt.Sprintf("%s %s", arrow, name)
+		countRendered := fmt.Sprintf("%d", count)
+		innerWidth := m.width - 2 // PaddingLeft(1) inside Width; border is outside
+		if innerWidth < 10 {
+			innerWidth = 10
+		}
+		gap := innerWidth - lipgloss.Width(content) - lipgloss.Width(countRendered)
+		if gap < 1 {
+			gap = 1
+		}
+		full := content + strings.Repeat(" ", gap) + countRendered
+		return styles.SidebarItemSelected.Width(m.width - 1).Render(full)
 	}
 
-	return header
-}
-
-func (m SidebarModel) renderSessionItem(s *session.Session, isCursor bool) []string {
-	icon := statusIcon(s.Status)
-	relTime := relativeTime(time.Since(s.LastActivity))
-
-	// First line: icon + project name + time
-	prefix := "  "
-	if isCursor {
-		prefix = "\u25ba "
-	}
-
-	projectName := s.ProjectName
-	if projectName == "" {
-		projectName = s.ID[:8]
-	}
-
-	// Truncate project name if needed.
-	maxNameWidth := m.width - len(prefix) - len(icon) - len(relTime) - 4
-	if maxNameWidth < 0 {
-		maxNameWidth = 10
-	}
-	if len(projectName) > maxNameWidth {
-		projectName = projectName[:maxNameWidth]
-	}
-
-	nameStyled := styles.SidebarProjectName.Render(projectName)
-	timeStyled := styles.SidebarTime.Render(relTime)
-	gap := m.width - lipgloss.Width(prefix) - lipgloss.Width(icon) - lipgloss.Width(nameStyled) - lipgloss.Width(timeStyled) - 2
+	// Normal group header: triangle + name left, count right-aligned
+	left := styles.SidebarGroupHeader.Render(fmt.Sprintf("%s %s", arrow, name))
+	right := styles.SidebarGroupCount.Render(fmt.Sprintf("%d", count))
+	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right) - 1
 	if gap < 1 {
 		gap = 1
 	}
+	return left + strings.Repeat(" ", gap) + right
+}
 
-	line1 := fmt.Sprintf("%s%s %s%s%s", prefix, icon, nameStyled, strings.Repeat(" ", gap), timeStyled)
+func (m SidebarModel) renderSessionItem(s *session.Session, isCursor bool) []string {
+	relTime := relativeTime(time.Since(s.LastActivity))
 
-	// Second line: summary.
+	displayName := shortPath(s.CWD, s.ProjectName)
+	if displayName == "" && len(s.ID) >= 8 {
+		displayName = s.ID[:8]
+	} else if displayName == "" {
+		displayName = "unknown"
+	}
+
+	// Truncate display name if needed.
+	maxNameWidth := m.width - 10
+	if maxNameWidth < 8 {
+		maxNameWidth = 8
+	}
+	if len(displayName) > maxNameWidth {
+		displayName = displayName[:maxNameWidth]
+	}
+
+	// Truncate summary.
 	summary := s.Summary
-	maxSummary := m.width - 4
-	if maxSummary < 0 {
-		maxSummary = 10
+	maxSummary := m.width - 6
+	if maxSummary < 8 {
+		maxSummary = 8
 	}
 	if len(summary) > maxSummary {
 		summary = summary[:maxSummary-3] + "..."
 	}
-	line2 := styles.SidebarSummary.Render(summary)
+
+	isConfirmingKill := m.ConfirmKillTarget != "" && s.TmuxTarget == m.ConfirmKillTarget
 
 	if isCursor {
-		line1 = styles.SidebarItemSelected.Width(m.width).Render(
-			strings.TrimRight(line1, " "),
-		)
-		line2 = styles.SidebarItemSelected.Width(m.width).Render(
-			strings.TrimRight(line2, " "),
-		)
+		// Selected: blue left border, selection background.
+		// Each segment gets explicit background to prevent ANSI reset bleeding.
+		selBg := styles.ColorSelection
+		if isConfirmingKill {
+			selBg = styles.ColorBgHover
+		}
+		iconStyled := statusIconWithBg(s.Status, selBg)
+		nameStyled := lipgloss.NewStyle().Foreground(styles.ColorBlue).Background(selBg).Bold(true).Render(displayName)
+		timeStyled := lipgloss.NewStyle().Foreground(styles.ColorGray).Background(selBg).Render(relTime)
+
+		innerWidth := m.width - 2 // PaddingLeft(1) inside Width; border is outside
+		if innerWidth < 10 {
+			innerWidth = 10
+		}
+		iconWidth := lipgloss.Width(iconStyled)
+		nameWidth := lipgloss.Width(nameStyled)
+		timeWidth := lipgloss.Width(timeStyled)
+		gap := innerWidth - iconWidth - 1 - nameWidth - timeWidth
+		if gap < 1 {
+			gap = 1
+		}
+		spacer := lipgloss.NewStyle().Background(selBg).Render(" ")
+		gapStr := lipgloss.NewStyle().Background(selBg).Render(strings.Repeat(" ", gap))
+		line1Content := iconStyled + spacer + nameStyled + gapStr + timeStyled
+
+		borderFg := styles.ColorBlue
+		if isConfirmingKill {
+			borderFg = styles.ColorRed
+		}
+		line1Style := lipgloss.NewStyle().
+			Foreground(styles.ColorBlue).
+			Background(selBg).
+			Bold(true).
+			PaddingLeft(1).
+			BorderLeft(true).
+			BorderStyle(styles.SelectionIndicator).
+			BorderForeground(borderFg)
+		line1 := line1Style.Width(m.width - 1).Render(line1Content)
+
+		var line2Content string
+		if isConfirmingKill {
+			killLabel := lipgloss.NewStyle().Foreground(styles.ColorRed).Background(selBg).Bold(true).Render("Kill?")
+			yKey := lipgloss.NewStyle().Foreground(styles.ColorFg).Background(selBg).Render(" y")
+			slash := lipgloss.NewStyle().Foreground(styles.ColorGray).Background(selBg).Render("/")
+			nKey := lipgloss.NewStyle().Foreground(styles.ColorFg).Background(selBg).Bold(true).Render("N")
+			line2Content = killLabel + " " + yKey + slash + nKey
+		} else {
+			line2Content = summary
+		}
+
+		line2Style := lipgloss.NewStyle().
+			Foreground(styles.ColorGray).
+			Background(selBg).
+			PaddingLeft(3).
+			BorderLeft(true).
+			BorderStyle(styles.SelectionIndicator).
+			BorderForeground(borderFg)
+		line2 := line2Style.Width(m.width - 1).Render(line2Content)
+		return []string{line1, line2}
 	}
+
+	// Normal item.
+	icon := statusIcon(s.Status)
+	nameStyled := styles.SidebarProjectName.Render(displayName)
+	timeStyled := styles.SidebarTime.Render(relTime)
+	iconWidth := lipgloss.Width(icon)
+	nameWidth := lipgloss.Width(nameStyled)
+	timeWidth := lipgloss.Width(timeStyled)
+	// 2 spaces indent + icon + 1 space + name + gap + time + 1 right pad
+	gap := m.width - 2 - iconWidth - 1 - nameWidth - timeWidth - 1
+	if gap < 1 {
+		gap = 1
+	}
+	line1 := "  " + icon + " " + nameStyled + strings.Repeat(" ", gap) + timeStyled + " "
+	line2 := styles.SidebarSummary.Render(summary)
 
 	return []string{line1, line2}
 }
 
-func statusIcon(s session.SessionStatus) string {
+// statusIconProps returns the foreground color and character for a status.
+func statusIconProps(s session.SessionStatus) (lipgloss.Color, string) {
 	switch s {
 	case session.StatusActive:
-		return styles.StatusIconActive.Render("\u25cf")
+		return styles.ColorGreen, styles.IconActive
 	case session.StatusWaiting:
-		return styles.StatusIconWaiting.Render("\u25ce")
+		return styles.ColorAmber, styles.IconWaiting
 	case session.StatusIdle:
-		return styles.StatusIconIdle.Render("\u25cb")
+		return styles.ColorGray, styles.IconIdle
 	case session.StatusClosed:
-		return styles.StatusIconClosed.Render("\u25cc")
+		return styles.ColorDim, styles.IconClosed
 	default:
-		return " "
+		return styles.ColorGray, " "
 	}
+}
+
+func statusIcon(s session.SessionStatus) string {
+	fg, ch := statusIconProps(s)
+	return lipgloss.NewStyle().Foreground(fg).Render(ch)
+}
+
+// statusIconWithBg renders a status icon with an explicit background color,
+// preventing ANSI reset bleeding when composed inside a styled container.
+func statusIconWithBg(s session.SessionStatus, bg lipgloss.Color) string {
+	fg, ch := statusIconProps(s)
+	return lipgloss.NewStyle().Foreground(fg).Background(bg).Render(ch)
+}
+
+// shortPath returns a display name derived from the CWD.
+// Shows the last two path components (e.g. "git/opmed-charts") to hint
+// that this is a directory. Falls back to projectName if CWD is empty.
+func shortPath(cwd, projectName string) string {
+	if cwd == "" {
+		return projectName
+	}
+	parts := strings.Split(filepath.ToSlash(cwd), "/")
+	if len(parts) >= 2 {
+		return strings.Join(parts[len(parts)-2:], "/")
+	}
+	if len(parts) == 1 && parts[0] != "" {
+		return parts[0]
+	}
+	return projectName
 }
 
 // relativeTime converts a duration into a short human-readable string.

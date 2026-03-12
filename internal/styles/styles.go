@@ -1,6 +1,5 @@
 // Package styles defines all Lipgloss visual styles for naviClaude.
-// Tokyo Night color scheme throughout. No logic lives here -- only style
-// definitions and color constants.
+// Tokyo Night color scheme matching the design mockups.
 package styles
 
 import "github.com/charmbracelet/lipgloss"
@@ -10,40 +9,75 @@ import "github.com/charmbracelet/lipgloss"
 // ---------------------------------------------------------------------------
 
 const (
-	ColorBg        = lipgloss.Color("#1a1b26")
-	ColorFg        = lipgloss.Color("#c0caf5")
-	ColorSelection = lipgloss.Color("#283457")
-	ColorBlue      = lipgloss.Color("#7aa2f7")
-	ColorGreen     = lipgloss.Color("#9ece6a")
-	ColorAmber     = lipgloss.Color("#e0af68")
-	ColorRed       = lipgloss.Color("#f7768e")
-	ColorGray      = lipgloss.Color("#565f89")
-	ColorPurple    = lipgloss.Color("#bb9af7")
-	ColorCyan      = lipgloss.Color("#7dcfff")
-	ColorBorder    = lipgloss.Color("#3b4261")
-	ColorDim       = lipgloss.Color("#414868")
+	ColorBg        = lipgloss.Color("#16161e") // terminal background (dark)
+	ColorBgPanel   = lipgloss.Color("#1a1a2e") // sidebar / status bar panel bg
+	ColorBgHover   = lipgloss.Color("#1e2240") // hover / key badge bg
+	ColorFg        = lipgloss.Color("#c0caf5") // primary foreground
+	ColorSelection = lipgloss.Color("#2a3a5e") // selected item background (slightly brighter)
+	ColorBlue      = lipgloss.Color("#7aa2f7") // primary accent
+	ColorGreen     = lipgloss.Color("#9ece6a") // active sessions, branch name
+	ColorAmber     = lipgloss.Color("#e0af68") // waiting, group headers
+	ColorRed       = lipgloss.Color("#f7768e") // danger / kill
+	ColorGray      = lipgloss.Color("#565f89") // secondary text, times, descriptions
+	ColorPurple    = lipgloss.Color("#bb9af7") // model, secondary accent
+	ColorCyan      = lipgloss.Color("#7dcfff") // values, highlights
+	ColorBorder    = lipgloss.Color("#333333") // borders, separators
+	ColorDim       = lipgloss.Color("#444444") // closed sessions, faint elements
+	ColorDimText   = lipgloss.Color("#787c99") // closed session names
 )
 
 // ---------------------------------------------------------------------------
 // Sidebar styles
 // ---------------------------------------------------------------------------
 
+// SidebarPanel is the sidebar container with right border separator.
+var SidebarPanel = lipgloss.NewStyle().
+	Background(ColorBgPanel).
+	BorderRight(true).
+	BorderStyle(lipgloss.NormalBorder()).
+	BorderForeground(ColorBorder)
+
+// SidebarPanelFocused is the sidebar container when the preview is in
+// passthrough mode -- blue right border to match mockup.
+var SidebarPanelFocused = lipgloss.NewStyle().
+	Background(ColorBgPanel).
+	BorderRight(true).
+	BorderStyle(lipgloss.NormalBorder()).
+	BorderForeground(ColorBlue)
+
+// SidebarTitle is the "SESSIONS" header at the top of the sidebar.
+var SidebarTitle = lipgloss.NewStyle().
+	Foreground(ColorBlue).
+	Bold(true).
+	PaddingLeft(1)
+
+// SidebarTitleCount is the active session count next to the title.
+var SidebarTitleCount = lipgloss.NewStyle().
+	Foreground(ColorGray)
+
 // SidebarItem is a normal (unselected) session entry in the sidebar.
 var SidebarItem = lipgloss.NewStyle().
 	Foreground(ColorFg).
 	PaddingLeft(2)
 
-// SidebarItemSelected is the highlighted session entry.
+// SelectionIndicator is a thin bar used as the left selection indicator.
+var SelectionIndicator = lipgloss.Border{
+	Left: "\u258e", // LEFT ONE QUARTER BLOCK -- thin solid bar
+}
+
+// SidebarItemSelected is the highlighted session entry with left blue bar.
 var SidebarItemSelected = lipgloss.NewStyle().
 	Foreground(ColorBlue).
 	Background(ColorSelection).
-	PaddingLeft(2).
-	Bold(true)
-
-// SidebarGroupHeader is the tmux session name row (collapsed/expanded toggle).
-var SidebarGroupHeader = lipgloss.NewStyle().
-	Foreground(ColorPurple).
 	Bold(true).
+	PaddingLeft(1).
+	BorderLeft(true).
+	BorderStyle(SelectionIndicator).
+	BorderForeground(ColorBlue)
+
+// SidebarGroupHeader is the tmux session name row -- amber per mockup.
+var SidebarGroupHeader = lipgloss.NewStyle().
+	Foreground(ColorAmber).
 	PaddingLeft(1)
 
 // SidebarGroupCount renders the session count badge next to a group header.
@@ -54,6 +88,11 @@ var SidebarGroupCount = lipgloss.NewStyle().
 var SidebarProjectName = lipgloss.NewStyle().
 	Foreground(ColorFg)
 
+// SidebarProjectNameSelected highlights the project name when selected.
+var SidebarProjectNameSelected = lipgloss.NewStyle().
+	Foreground(ColorBlue).
+	Bold(true)
+
 // SidebarTime is the relative timestamp displayed next to a session.
 var SidebarTime = lipgloss.NewStyle().
 	Foreground(ColorGray)
@@ -63,26 +102,39 @@ var SidebarSummary = lipgloss.NewStyle().
 	Foreground(ColorGray).
 	PaddingLeft(4)
 
-// Status icon styles -- one per SessionStatus value.
+// SidebarSummarySelected is the summary line for the selected session.
+// Matches SidebarItemSelected with left bar + selection background.
+var SidebarSummarySelected = lipgloss.NewStyle().
+	Foreground(ColorGray).
+	Background(ColorSelection).
+	PaddingLeft(3).
+	BorderLeft(true).
+	BorderStyle(SelectionIndicator).
+	BorderForeground(ColorBlue)
 
-// StatusIconActive is the icon for a session that is actively producing output.
+// Status icon characters -- single source of truth for all icon renderers.
+const (
+	IconActive  = "\u25cf" // filled circle
+	IconWaiting = "\u25ce" // bullseye
+	IconIdle    = "\u25cb" // open circle
+	IconClosed  = "\u25cc" // dotted circle
+)
+
+// Status icon styles.
+
 var StatusIconActive = lipgloss.NewStyle().
 	Foreground(ColorGreen)
 
-// StatusIconWaiting is the icon for a session waiting for user input.
 var StatusIconWaiting = lipgloss.NewStyle().
 	Foreground(ColorAmber)
 
-// StatusIconIdle is the icon for a session that is idle (shell prompt visible).
 var StatusIconIdle = lipgloss.NewStyle().
 	Foreground(ColorGray)
 
-// StatusIconClosed is the icon for a historical (closed) session.
 var StatusIconClosed = lipgloss.NewStyle().
 	Foreground(ColorDim)
 
-// SidebarWaitingFlash is applied to a session row during the ~2-second flash
-// that fires when a session transitions from active to waiting.
+// SidebarWaitingFlash is applied during the active->waiting transition flash.
 var SidebarWaitingFlash = lipgloss.NewStyle().
 	Foreground(ColorBg).
 	Background(ColorAmber).
@@ -93,122 +145,127 @@ var SidebarWaitingFlash = lipgloss.NewStyle().
 // Preview panel styles
 // ---------------------------------------------------------------------------
 
-// PreviewBorderUnfocused is the border style for the preview panel when the
-// sidebar is focused (list mode -- dim, unobtrusive).
-var PreviewBorderUnfocused = lipgloss.NewStyle().
-	Border(lipgloss.RoundedBorder()).
-	BorderForeground(ColorBorder)
+// PreviewBorderUnfocused has NO border -- the separator is on the sidebar's
+// right border now. This style is kept for backward compatibility but renders
+// no border.
+var PreviewBorderUnfocused = lipgloss.NewStyle()
 
-// PreviewBorderFocused is the border style when the preview panel is in
-// passthrough mode (blue, visually prominent).
-var PreviewBorderFocused = lipgloss.NewStyle().
-	Border(lipgloss.RoundedBorder()).
-	BorderForeground(ColorBlue)
+// PreviewBorderFocused also has NO border -- in passthrough mode the sidebar's
+// right border turns blue instead.
+var PreviewBorderFocused = lipgloss.NewStyle()
 
-// PreviewHeader is the bar at the top of the preview showing project name,
-// branch, status badge, tmux target, and resource stats.
+// PreviewHeader is the bar at the top of the preview. No heavy background --
+// just a bottom border line per the mockup design.
 var PreviewHeader = lipgloss.NewStyle().
-	Background(ColorDim).
 	Foreground(ColorFg).
 	PaddingLeft(1).
-	PaddingRight(1)
+	PaddingRight(1).
+	BorderBottom(true).
+	BorderStyle(lipgloss.NormalBorder()).
+	BorderForeground(ColorBorder)
 
-// PreviewHeaderLabel is a dimmer label within the header (e.g., "CPU", "MEM").
+// PreviewHeaderFocused is the header when the preview is in passthrough mode.
+// Uses a blue bottom border to visually indicate the pane is focused.
+var PreviewHeaderFocused = lipgloss.NewStyle().
+	Foreground(ColorFg).
+	PaddingLeft(1).
+	PaddingRight(1).
+	BorderBottom(true).
+	BorderStyle(lipgloss.NormalBorder()).
+	BorderForeground(ColorBlue)
+
+// PreviewHeaderLabel is a dimmer label within the header (separators, target).
 var PreviewHeaderLabel = lipgloss.NewStyle().
-	Foreground(ColorGray).
-	Background(ColorDim)
+	Foreground(ColorGray)
 
-// PreviewHeaderValue is a value within the header (e.g., the percentage).
+// PreviewHeaderValue is a value within the header (CPU, mem values).
 var PreviewHeaderValue = lipgloss.NewStyle().
-	Foreground(ColorCyan).
-	Background(ColorDim)
+	Foreground(ColorGray)
 
 // PreviewHeaderBranch highlights the git branch name.
 var PreviewHeaderBranch = lipgloss.NewStyle().
-	Foreground(ColorPurple).
-	Background(ColorDim)
+	Foreground(ColorGreen)
 
-// PreviewPassthroughBadge is the "PASSTHROUGH" indicator badge shown when the
-// preview panel is in passthrough mode.
+// PreviewPassthroughBadge is the "PASSTHROUGH" indicator.
 var PreviewPassthroughBadge = lipgloss.NewStyle().
-	Foreground(ColorBg).
-	Background(ColorBlue).
-	PaddingLeft(1).
-	PaddingRight(1).
+	Foreground(ColorGreen).
 	Bold(true)
 
-// PreviewContent is the base style for the terminal content area inside the
-// preview (the viewport body).
+// PreviewContent is the base style for viewport body.
 var PreviewContent = lipgloss.NewStyle().
 	Foreground(ColorFg)
 
+// PreviewSep is the separator character in the header.
+var PreviewSep = lipgloss.NewStyle().
+	Foreground(ColorBorder)
+
 // ---------------------------------------------------------------------------
-// Status bar styles
+// Status bar styles -- dark panel bg with badge-style keys
 // ---------------------------------------------------------------------------
 
-// StatusBar is the full-width bar at the bottom of the screen.
+// StatusBar is the full-width bar at the bottom.
 var StatusBar = lipgloss.NewStyle().
-	Background(ColorDim).
-	Foreground(ColorFg)
+	Background(ColorBgPanel).
+	Foreground(ColorFg).
+	BorderTop(true).
+	BorderStyle(lipgloss.NormalBorder()).
+	BorderForeground(ColorBorder)
 
-// StatusBarKey is a single key hint label (e.g., "Enter").
+// StatusBarKey is a single key hint label with badge background.
 var StatusBarKey = lipgloss.NewStyle().
 	Foreground(ColorBlue).
-	Background(ColorDim).
-	Bold(true)
+	Background(ColorBgHover).
+	Bold(true).
+	PaddingLeft(1).
+	PaddingRight(1)
 
-// StatusBarDesc is the action description following a key hint (e.g., "focus").
+// StatusBarDesc is the action description following a key hint.
 var StatusBarDesc = lipgloss.NewStyle().
 	Foreground(ColorGray).
-	Background(ColorDim)
+	Background(ColorBgPanel)
 
-// StatusBarSep is the separator between hint pairs (e.g., " | ").
+// StatusBarSep is the separator between hint pairs.
 var StatusBarSep = lipgloss.NewStyle().
 	Foreground(ColorBorder).
-	Background(ColorDim)
+	Background(ColorBgPanel)
 
-// StatusBarVersion is the version string anchored to the right of the status bar.
+// StatusBarVersion is the version string on the right.
 var StatusBarVersion = lipgloss.NewStyle().
 	Foreground(ColorGray).
-	Background(ColorDim)
+	Background(ColorBgPanel)
 
 // ---------------------------------------------------------------------------
 // Overlay / popup styles
 // ---------------------------------------------------------------------------
 
-// HelpBorder is the outer border of the help popup.
 var HelpBorder = lipgloss.NewStyle().
 	Border(lipgloss.RoundedBorder()).
 	BorderForeground(ColorPurple).
+	Background(ColorBgPanel).
 	Padding(1, 2)
 
-// HelpTitle is the title bar inside the help popup.
 var HelpTitle = lipgloss.NewStyle().
 	Foreground(ColorPurple).
 	Bold(true).
 	MarginBottom(1)
 
-// HelpKey renders a keybinding within the help popup.
 var HelpKey = lipgloss.NewStyle().
 	Foreground(ColorBlue).
 	Bold(true)
 
-// HelpDesc renders the description for a keybinding.
 var HelpDesc = lipgloss.NewStyle().
 	Foreground(ColorFg)
 
-// ContextMenuBorder is the border of the right-click context menu.
 var ContextMenuBorder = lipgloss.NewStyle().
 	Border(lipgloss.RoundedBorder()).
-	BorderForeground(ColorBorder)
+	BorderForeground(ColorBorder).
+	Background(ColorBgPanel)
 
-// ContextMenuItem is an unselected item in the context menu.
 var ContextMenuItem = lipgloss.NewStyle().
 	Foreground(ColorFg).
 	PaddingLeft(1).
 	PaddingRight(1)
 
-// ContextMenuItemSelected is the highlighted item in the context menu.
 var ContextMenuItemSelected = lipgloss.NewStyle().
 	Foreground(ColorBlue).
 	Background(ColorSelection).
@@ -216,13 +273,11 @@ var ContextMenuItemSelected = lipgloss.NewStyle().
 	PaddingRight(1).
 	Bold(true)
 
-// ContextMenuItemDanger highlights destructive actions (e.g., Kill) in red.
 var ContextMenuItemDanger = lipgloss.NewStyle().
 	Foreground(ColorRed).
 	PaddingLeft(1).
 	PaddingRight(1)
 
-// ContextMenuItemDangerSelected is the selected state for a danger item.
 var ContextMenuItemDangerSelected = lipgloss.NewStyle().
 	Foreground(ColorBg).
 	Background(ColorRed).
@@ -230,56 +285,95 @@ var ContextMenuItemDangerSelected = lipgloss.NewStyle().
 	PaddingRight(1).
 	Bold(true)
 
-// ContextMenuSep is a visual divider line within the context menu.
 var ContextMenuSep = lipgloss.NewStyle().
 	Foreground(ColorBorder).
 	PaddingLeft(1).
 	PaddingRight(1)
 
-// ContextMenuShortcut renders the parenthetical shortcut hint (e.g., "(K)").
 var ContextMenuShortcut = lipgloss.NewStyle().
 	Foreground(ColorGray)
 
-// SearchInput is the fuzzy search text input box at the top of the sidebar.
 var SearchInput = lipgloss.NewStyle().
 	Border(lipgloss.RoundedBorder()).
 	BorderForeground(ColorBlue).
 	Foreground(ColorFg).
+	Background(ColorBgHover).
 	Padding(0, 1)
 
-// SearchPrompt is the "/" glyph prefix inside the search box.
 var SearchPrompt = lipgloss.NewStyle().
 	Foreground(ColorBlue).
 	Bold(true)
 
-// SearchMatch highlights characters that matched the fuzzy query.
 var SearchMatch = lipgloss.NewStyle().
 	Foreground(ColorAmber).
 	Bold(true)
 
 // ---------------------------------------------------------------------------
-// General focus border helpers
+// Title bar (top of screen)
 // ---------------------------------------------------------------------------
 
-// FocusedBorder is a reusable style for any panel that currently has focus.
+// TitleBar is the full-width bar at the top of the application.
+var TitleBar = lipgloss.NewStyle().
+	Background(ColorBgPanel).
+	Foreground(ColorFg).
+	BorderBottom(true).
+	BorderStyle(lipgloss.NormalBorder()).
+	BorderForeground(ColorBorder)
+
+// TitleBarName is the app name in the title bar.
+var TitleBarName = lipgloss.NewStyle().
+	Foreground(ColorBlue).
+	Bold(true)
+
+// TitleBarDim is for secondary info in the title bar.
+var TitleBarDim = lipgloss.NewStyle().
+	Foreground(ColorGray)
+
+// ---------------------------------------------------------------------------
+// General
+// ---------------------------------------------------------------------------
+
 var FocusedBorder = lipgloss.NewStyle().
 	Border(lipgloss.RoundedBorder()).
 	BorderForeground(ColorBlue)
 
-// UnfocusedBorder is a reusable style for any panel that does not have focus.
 var UnfocusedBorder = lipgloss.NewStyle().
 	Border(lipgloss.RoundedBorder()).
 	BorderForeground(ColorBorder)
 
-// ---------------------------------------------------------------------------
-// Empty state
-// ---------------------------------------------------------------------------
-
-// EmptyState is the centered message shown when no sessions are found.
 var EmptyState = lipgloss.NewStyle().
 	Foreground(ColorGray).
 	Italic(true)
 
-// EmptyStateHint is the action hint below the empty state message.
 var EmptyStateHint = lipgloss.NewStyle().
 	Foreground(ColorBlue)
+
+// LoadingStyle is used for the loading indicator.
+var LoadingStyle = lipgloss.NewStyle().
+	Foreground(ColorBlue)
+
+// ---------------------------------------------------------------------------
+// Conversation preview (closed sessions)
+// ---------------------------------------------------------------------------
+
+// ConversationUserLabel styles the "You" role header.
+var ConversationUserLabel = lipgloss.NewStyle().
+	Foreground(ColorBlue).
+	Bold(true)
+
+// ConversationAssistantLabel styles the "Claude" role header.
+var ConversationAssistantLabel = lipgloss.NewStyle().
+	Foreground(ColorPurple).
+	Bold(true)
+
+// ConversationUserText styles the user message body.
+var ConversationUserText = lipgloss.NewStyle().
+	Foreground(ColorFg)
+
+// ConversationAssistantText styles the assistant message body.
+var ConversationAssistantText = lipgloss.NewStyle().
+	Foreground(ColorDimText)
+
+// ConversationSeparator styles the thin divider between turns.
+var ConversationSeparator = lipgloss.NewStyle().
+	Foreground(ColorBorder)
