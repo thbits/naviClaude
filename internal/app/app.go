@@ -81,6 +81,7 @@ type Model struct {
 	search      ui.SearchModel
 	help        ui.HelpModel
 	contextMenu ui.ContextMenuModel
+	detail      ui.DetailModel
 
 	// Backend services
 	tmuxClient     *tmux.Client
@@ -128,6 +129,7 @@ func New() Model {
 		search:      ui.NewSearch(),
 		help:        ui.NewHelp(),
 		contextMenu: ui.NewContextMenu(),
+		detail:      ui.NewDetail(),
 
 		// Backend
 		tmuxClient:     tc,
@@ -218,6 +220,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case resourceRefreshMsg:
 		m.handleResourceRefresh(msg)
+		return m, nil
+
+	case detailDataMsg:
+		m.detail.SetData(msg.messageCount, msg.startTime)
 		return m, nil
 
 	// -- Async results (progressive: active first, then history) -------------
@@ -410,6 +416,10 @@ func (m Model) View() string {
 	screen := lipgloss.JoinVertical(lipgloss.Left, titleBar, mainContent, statusView)
 
 	// Render overlays on top.
+	if m.detail.IsVisible() {
+		screen = m.detail.View()
+	}
+
 	if m.help.IsVisible() {
 		helpView := m.help.View()
 		screen = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, helpView)
@@ -460,6 +470,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleContextMenuKey(msg)
 	case ModeHelp:
 		return m.handleHelpKey(msg)
+	case ModeDetail:
+		return m.handleDetailKey(msg)
 	}
 	return m, nil
 }
@@ -522,8 +534,14 @@ func (m Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.createNewSession()
 
 	case m.keys.Detail:
-		m.err = fmt.Errorf("detail view: not yet implemented (Phase 2)")
-		return m, nil
+		sess := m.sidebar.SelectedSession()
+		if sess == nil {
+			return m, nil
+		}
+		m.detail.Show(sess)
+		m.mode = ModeDetail
+		m.statusbar.SetMode(ModeDetail.String())
+		return m, loadDetailDataCmd(sess)
 
 	case m.keys.Stats:
 		m.err = fmt.Errorf("stats view: not yet implemented (Phase 2)")
@@ -901,8 +919,10 @@ func (m Model) executeContextAction(action string, sess *session.Session) (tea.M
 		return m, nil
 
 	case "detail":
-		m.err = fmt.Errorf("detail view: not yet implemented (Phase 2)")
-		return m, nil
+		m.detail.Show(sess)
+		m.mode = ModeDetail
+		m.statusbar.SetMode(ModeDetail.String())
+		return m, loadDetailDataCmd(sess)
 
 	case "copy_id":
 		// Best-effort clipboard copy; silently ignore errors.
@@ -1165,6 +1185,7 @@ func (m *Model) resizeComponents() {
 	m.preview.SetSize(previewWidth, contentHeight)
 	m.search.SetSize(sidebarWidth-1, contentHeight)
 	m.help.SetSize(m.width, m.height)
+	m.detail.SetSize(m.width, m.height)
 	// Truncate captured pane lines to the preview viewport width to prevent
 	// overflow when the source pane is wider than the popup.
 	m.captureEngine.SetMaxWidth(previewWidth - 2) // -2 for left padding

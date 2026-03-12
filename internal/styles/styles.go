@@ -377,3 +377,53 @@ var ConversationAssistantText = lipgloss.NewStyle().
 // ConversationSeparator styles the thin divider between turns.
 var ConversationSeparator = lipgloss.NewStyle().
 	Foreground(ColorBorder)
+
+// ---------------------------------------------------------------------------
+// Detail overlay styles
+// ---------------------------------------------------------------------------
+
+var DetailBorder = lipgloss.NewStyle().
+	Border(lipgloss.RoundedBorder()).
+	BorderForeground(ColorPurple).
+	Background(ColorBgPanel).
+	Padding(1, 2)
+
+var DetailTitle = lipgloss.NewStyle().
+	Foreground(ColorBlue).
+	Bold(true)
+
+var DetailLabel = lipgloss.NewStyle().
+	Foreground(ColorGray)
+
+var DetailValue = lipgloss.NewStyle().
+	Foreground(ColorCyan)
+
+// ---------------------------------------------------------------------------
+// Stats overlay styles
+// ---------------------------------------------------------------------------
+
+var StatsBorder = lipgloss.NewStyle().
+	Border(lipgloss.RoundedBorder()).
+	BorderForeground(ColorCyan).
+	Background(ColorBgPanel).
+	Padding(1, 2)
+
+var StatsTitle = lipgloss.NewStyle().
+	Foreground(ColorCyan).
+	Bold(true)
+
+var StatsMetricValue = lipgloss.NewStyle().
+	Foreground(ColorGreen)
+
+var StatsBar = lipgloss.NewStyle().
+	Foreground(ColorBlue)
+
+var StatsBarAlt = lipgloss.NewStyle().
+	Foreground(ColorPurple)
+
+var StatsFilterActive = lipgloss.NewStyle().
+	Foreground(ColorCyan).
+	Bold(true)
+
+var StatsFilterInactive = lipgloss.NewStyle().
+	Foreground(ColorGray)

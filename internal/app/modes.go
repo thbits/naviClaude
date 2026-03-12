@@ -21,6 +21,12 @@ const (
 
 	// ModeHelp displays a full-screen keybinding reference overlay.
 	ModeHelp
+
+	// ModeDetail shows a centered popup with session metadata.
+	ModeDetail
+
+	// ModeStats shows a centered popup with usage statistics.
+	ModeStats
 )
 
 // String returns a short label suitable for the status bar.
@@ -36,6 +42,10 @@ func (m Mode) String() string {
 		return "contextmenu"
 	case ModeHelp:
 		return "help"
+	case ModeDetail:
+		return "detail"
+	case ModeStats:
+		return "stats"
 	default:
 		return "unknown"
 	}
