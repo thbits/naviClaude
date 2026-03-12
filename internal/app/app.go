@@ -181,6 +181,7 @@ func (m Model) Init() tea.Cmd {
 	return tea.Batch(
 		tickPreview(),
 		tickSession(),
+		tickResource(),
 		m.refreshActiveCmd(),
 	)
 }
@@ -209,6 +210,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// The periodic ticker fires the full combined refresh.
 		cmds = append(cmds, m.refreshSessionsCmd())
 		return m, tea.Batch(cmds...)
+
+	case tickResourceMsg:
+		cmds = append(cmds, tickResource())
+		cmds = append(cmds, m.refreshResourceCmd())
+		return m, tea.Batch(cmds...)
+
+	case resourceRefreshMsg:
+		m.handleResourceRefresh(msg)
+		return m, nil
 
 	// -- Async results (progressive: active first, then history) -------------
 	case activeSessionsMsg:

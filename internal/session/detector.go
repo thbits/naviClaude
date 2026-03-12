@@ -19,9 +19,9 @@ import (
 // Claude session is running in a tmux pane.
 var DefaultProcessNames = []string{"claude"}
 
-// processTree holds the entire process tree from a single ps call, including
+// ProcessTree holds the entire process tree from a single ps call, including
 // CPU and RSS stats to avoid per-session ps calls.
-type processTree struct {
+type ProcessTree struct {
 	children map[int][]int   // parent -> child PIDs
 	names    map[int]string  // PID -> process name (basename)
 	ppid     map[int]int     // PID -> parent PID
@@ -29,13 +29,13 @@ type processTree struct {
 	rss      map[int]float64 // PID -> RSS in KB
 }
 
-// buildProcessTree runs a single `ps -eo pid=,ppid=,%cpu=,rss=,comm=` command
+// BuildProcessTree runs a single `ps -eo pid=,ppid=,%cpu=,rss=,comm=` command
 // and builds an in-memory process tree with stats. This replaces hundreds of
 // per-PID pgrep/ps calls.
-func buildProcessTree() *processTree {
+func BuildProcessTree() *ProcessTree {
 	out, err := exec.Command("ps", "-eo", "pid=,ppid=,%cpu=,rss=,comm=").Output()
 	if err != nil {
-		return &processTree{
+		return &ProcessTree{
 			children: make(map[int][]int),
 			names:    make(map[int]string),
 			ppid:     make(map[int]int),
@@ -44,7 +44,7 @@ func buildProcessTree() *processTree {
 		}
 	}
 
-	tree := &processTree{
+	tree := &ProcessTree{
 		children: make(map[int][]int),
 		names:    make(map[int]string),
 		ppid:     make(map[int]int),
@@ -83,14 +83,14 @@ func buildProcessTree() *processTree {
 	return tree
 }
 
-// processStats returns CPU % and memory MB for a PID from the pre-built tree.
-func (t *processTree) processStats(pid int) (cpu float64, memMB float64) {
+// Stats returns CPU % and memory MB for a PID from the pre-built tree.
+func (t *ProcessTree) Stats(pid int) (cpu float64, memMB float64) {
 	return t.cpu[pid], t.rss[pid] / 1024.0
 }
 
-// isAncestorInTree reports whether ancestorPID is an ancestor of descendantPID
+// isAncestorOf reports whether ancestorPID is an ancestor of descendantPID
 // using the pre-built process tree.
-func (t *processTree) isAncestorOf(ancestorPID, descendantPID int) bool {
+func (t *ProcessTree) isAncestorOf(ancestorPID, descendantPID int) bool {
 	pid := descendantPID
 	for i := 0; i < 10; i++ {
 		ppid, ok := t.ppid[pid]
@@ -108,7 +108,7 @@ func (t *processTree) isAncestorOf(ancestorPID, descendantPID int) bool {
 // findMatchingDescendant performs a depth-first walk of the process tree from
 // rootPID and returns the PID of the first descendant whose process name
 // matches any of the given names. Returns 0 if no match is found.
-func (t *processTree) findMatchingDescendant(rootPID int, matchFunc func(string) bool, maxDepth int) int {
+func (t *ProcessTree) findMatchingDescendant(rootPID int, matchFunc func(string) bool, maxDepth int) int {
 	if maxDepth == 0 {
 		return 0
 	}
@@ -169,7 +169,7 @@ func (d *Detector) Detect() ([]*Session, error) {
 	}
 
 	// Build the process tree once for all panes.
-	tree := buildProcessTree()
+	tree := BuildProcessTree()
 
 	// Get our own PID to filter out the pane naviClaude is running in.
 	selfPID := os.Getpid()
@@ -195,7 +195,7 @@ func (d *Detector) Detect() ([]*Session, error) {
 
 // sessionFromPane checks whether a pane is running a Claude process (directly
 // or as a descendant), and if so returns a Session for it.
-func (d *Detector) sessionFromPane(pane tmux.PaneInfo, tree *processTree) *Session {
+func (d *Detector) sessionFromPane(pane tmux.PaneInfo, tree *ProcessTree) *Session {
 	// First check the pane's direct current command.
 	if d.matchesProcessName(pane.CurrentCommand) {
 		return d.buildSession(pane, pane.PID, tree)
@@ -211,7 +211,7 @@ func (d *Detector) sessionFromPane(pane tmux.PaneInfo, tree *processTree) *Sessi
 
 // buildSession constructs a Session from PaneInfo. The claudePID is the PID
 // of the actual Claude process (which may be a grandchild of the pane's shell).
-func (d *Detector) buildSession(pane tmux.PaneInfo, claudePID int, tree *processTree) *Session {
+func (d *Detector) buildSession(pane tmux.PaneInfo, claudePID int, tree *ProcessTree) *Session {
 	s := &Session{
 		TmuxSession:  pane.SessionName,
 		TmuxTarget:   pane.Target,
@@ -226,7 +226,7 @@ func (d *Detector) buildSession(pane tmux.PaneInfo, claudePID int, tree *process
 	s.ID = extractSessionID(claudePID, pane.CurrentPath)
 
 	// Populate CPU and memory from the bulk process tree (no per-session ps call).
-	s.CPU, s.Memory = tree.processStats(claudePID)
+	s.CPU, s.Memory = tree.Stats(claudePID)
 
 	// Try to extract the model from the session .jsonl file (cached).
 	if s.ID != "" {
