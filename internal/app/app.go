@@ -778,6 +778,8 @@ func (m Model) handlePassthroughKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.jumpToPane()
 
 	default:
+		// Any keystroke in passthrough snaps preview back to bottom.
+		m.preview.ResetScroll()
 		// Forward the key to the selected session's tmux pane.
 		sess := m.sidebar.SelectedSession()
 		if sess == nil || sess.TmuxTarget == "" {
@@ -1369,6 +1371,7 @@ func (m *Model) selectPreviewSession(s *session.Session) {
 	if target != m.previewTarget {
 		m.previewTarget = target
 		m.preview.SetContent("")
+		m.preview.ResetScroll()
 	}
 	if s != nil {
 		m.preview.SetSession(s)

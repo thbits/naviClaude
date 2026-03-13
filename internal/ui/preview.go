@@ -16,13 +16,14 @@ import (
 // PreviewModel is the right panel that shows captured terminal content for the
 // selected session.
 type PreviewModel struct {
-	content     string
-	session     *session.Session
-	metrics     *session.SessionMetrics
-	passthrough bool
-	viewport    viewport.Model
-	width       int
-	height      int
+	content      string
+	session      *session.Session
+	metrics      *session.SessionMetrics
+	passthrough  bool
+	userScrolled bool // true when user has scrolled away from bottom
+	viewport     viewport.Model
+	width        int
+	height       int
 }
 
 // NewPreview creates a PreviewModel with the given dimensions.
@@ -50,10 +51,12 @@ func (m *PreviewModel) SetContent(content string) {
 		}
 		content = strings.Join(lines, "\n")
 	}
-	// For live captures, auto-scroll to the bottom so the user sees the
-	// latest output. This matches terminal behavior.
 	m.viewport.SetContent(content)
-	m.viewport.GotoBottom()
+	// Only auto-scroll to bottom if the user hasn't scrolled away.
+	// This lets users read history without being yanked back every 200ms.
+	if !m.userScrolled {
+		m.viewport.GotoBottom()
+	}
 }
 
 // SetSession updates the header metadata.
@@ -96,14 +99,25 @@ func (m *PreviewModel) SetSize(w, h int) {
 	}
 }
 
-// ScrollUp scrolls the viewport up by n lines.
+// ScrollUp scrolls the viewport up by n lines and pauses auto-scroll.
 func (m *PreviewModel) ScrollUp(n int) {
 	m.viewport.SetYOffset(m.viewport.YOffset - n)
+	m.userScrolled = true
 }
 
 // ScrollDown scrolls the viewport down by n lines.
+// Resumes auto-scroll when the user reaches the bottom.
 func (m *PreviewModel) ScrollDown(n int) {
 	m.viewport.SetYOffset(m.viewport.YOffset + n)
+	contentLines := strings.Count(m.content, "\n")
+	if m.viewport.YOffset+m.viewport.Height >= contentLines {
+		m.userScrolled = false
+	}
+}
+
+// ResetScroll clears the user scroll flag (e.g. on session change).
+func (m *PreviewModel) ResetScroll() {
+	m.userScrolled = false
 }
 
 // HalfViewHeight returns half the viewport height for half-page scrolling.
@@ -124,6 +138,15 @@ func (m PreviewModel) Init() tea.Cmd {
 func (m PreviewModel) Update(msg tea.Msg) (PreviewModel, tea.Cmd) {
 	var cmd tea.Cmd
 	m.viewport, cmd = m.viewport.Update(msg)
+
+	// Track user scroll state after viewport processes the event.
+	switch msg.(type) {
+	case tea.MouseMsg:
+		contentLines := strings.Count(m.content, "\n")
+		atBottom := m.viewport.YOffset+m.viewport.Height >= contentLines
+		m.userScrolled = !atBottom
+	}
+
 	return m, cmd
 }
 

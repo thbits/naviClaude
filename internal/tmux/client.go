@@ -63,10 +63,11 @@ func (c *Client) ListPanes() ([]PaneInfo, error) {
 	return ParsePanes(string(out))
 }
 
-// CapturePaneOutput captures the visible contents of a pane, preserving ANSI
-// color sequences.  target is a tmux target string such as "session:1.0".
+// CapturePaneOutput captures the full scrollback + visible contents of a pane,
+// preserving ANSI color sequences. target is a tmux target string such as
+// "session:1.0". The -S - flag captures from the start of the scrollback buffer.
 func (c *Client) CapturePaneOutput(target string) (string, error) {
-	out, err := exec.Command("tmux", "capture-pane", "-e", "-p", "-t", target).Output()
+	out, err := exec.Command("tmux", "capture-pane", "-e", "-p", "-S", "-", "-t", target).Output()
 	if err != nil {
 		return "", fmt.Errorf("tmux capture-pane -t %s: %w", target, err)
 	}
