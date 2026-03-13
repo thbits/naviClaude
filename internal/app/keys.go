@@ -76,6 +76,7 @@ func (km KeyMap) HelpBindings() []HelpBinding {
 		{"j/k", "Navigate sessions"},
 		{"Enter/Tab", "Focus (passthrough)"},
 		{km.Jump, "Jump to pane"},
+		{"Ctrl+U/Ctrl+D", "Scroll preview"},
 		{km.Search, "Search"},
 		{km.NewSession, "New session"},
 		{km.KillSession, "Kill session"},

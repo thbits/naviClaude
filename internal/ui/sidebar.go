@@ -111,6 +111,12 @@ func (m *SidebarModel) ActiveCount() int {
 }
 
 func (m *SidebarModel) rebuildGroups() {
+	// Remember which session is selected so we can follow it after sorting.
+	var selectedID string
+	if sel := m.SelectedSession(); sel != nil {
+		selectedID = sel.ID
+	}
+
 	groupMap := make(map[string][]*session.Session)
 	var closedSessions []*session.Session
 
@@ -166,7 +172,7 @@ func (m *SidebarModel) rebuildGroups() {
 			m.collapsed[k] = false
 		}
 		m.rebuildFlatItems()
-		m.clampCursor()
+		m.restoreCursorByID(selectedID)
 		return
 	}
 
@@ -201,7 +207,7 @@ func (m *SidebarModel) rebuildGroups() {
 	}
 
 	m.rebuildFlatItems()
-	m.clampCursor()
+	m.restoreCursorByID(selectedID)
 }
 
 func (m *SidebarModel) rebuildFlatItems() {
@@ -219,6 +225,22 @@ func (m *SidebarModel) rebuildFlatItems() {
 			}
 		}
 	}
+}
+
+// restoreCursorByID moves the cursor to the session with the given ID after
+// a list rebuild. If the session is no longer in the flat list, falls back
+// to clampCursor so the index stays valid.
+func (m *SidebarModel) restoreCursorByID(id string) {
+	if id != "" {
+		for i, item := range m.flatItems {
+			if !item.isGroup && item.session != nil && item.session.ID == id {
+				m.cursor = i
+				m.syncViewport()
+				return
+			}
+		}
+	}
+	m.clampCursor()
 }
 
 func (m *SidebarModel) clampCursor() {
@@ -434,8 +456,16 @@ func (m SidebarModel) View() string {
 
 	if len(m.flatItems) == 0 {
 		listHeight := m.vp.Height
-		empty := styles.EmptyState.Render("No sessions found")
-		hint := styles.EmptyStateHint.Render("Press n to create one")
+		var emptyText, hintText string
+		if m.searchActive {
+			emptyText = "No matches found"
+			hintText = "Try a different search query"
+		} else {
+			emptyText = "No sessions found"
+			hintText = "Press n to create one"
+		}
+		empty := styles.EmptyState.Render(emptyText)
+		hint := styles.EmptyStateHint.Render(hintText)
 		body := lipgloss.JoinVertical(lipgloss.Left, empty, hint)
 		body = lipgloss.Place(m.width, listHeight, lipgloss.Center, lipgloss.Center, body)
 		return lipgloss.JoinVertical(lipgloss.Left, header, body)

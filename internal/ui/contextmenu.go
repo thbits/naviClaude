@@ -20,11 +20,12 @@ type MenuItem struct {
 
 // ContextMenuModel is a floating context menu for session actions.
 type ContextMenuModel struct {
-	visible bool
-	x, y    int
-	cursor  int
-	items   []MenuItem
-	session *session.Session
+	visible       bool
+	x, y          int
+	cursor        int
+	items         []MenuItem
+	session       *session.Session
+	termW, termH  int
 }
 
 // NewContextMenu creates a ContextMenuModel.
@@ -41,6 +42,12 @@ func (m *ContextMenuModel) Show(x, y int, s *session.Session) {
 	m.cursor = 0
 	m.items = m.buildItems(s)
 	m.skipSeparators(1) // ensure cursor is on a real item
+}
+
+// SetTermSize updates the terminal dimensions used for overflow clamping.
+func (m *ContextMenuModel) SetTermSize(w, h int) {
+	m.termW = w
+	m.termH = h
 }
 
 // Hide closes the context menu.
@@ -224,9 +231,27 @@ func (m ContextMenuModel) View() string {
 	content := strings.Join(rows, "\n")
 	menu := styles.ContextMenuBorder.Render(content)
 
-	// Position the menu at x,y using lipgloss.
+	// Clamp position so the menu stays within the terminal.
+	menuW := lipgloss.Width(menu)
+	menuH := lipgloss.Height(menu)
+	x := m.x
+	y := m.y
+	if m.termW > 0 && x+menuW > m.termW {
+		x = m.termW - menuW
+	}
+	if x < 0 {
+		x = 0
+	}
+	if m.termH > 0 && y+menuH > m.termH {
+		y = m.termH - menuH
+	}
+	if y < 0 {
+		y = 0
+	}
+
+	// Position the menu at clamped x,y using lipgloss.
 	return lipgloss.NewStyle().
-		MarginLeft(m.x).
-		MarginTop(m.y).
+		MarginLeft(x).
+		MarginTop(y).
 		Render(menu)
 }

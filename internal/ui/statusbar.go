@@ -15,6 +15,7 @@ type StatusBarModel struct {
 	width     int
 	mode      string
 	listHints []statusHint // configurable list-mode hints
+	errText   string
 }
 
 type statusHint struct {
@@ -54,6 +55,16 @@ func (m *StatusBarModel) SetSize(w int) {
 	m.width = w
 }
 
+// SetError shows a transient error message in the status bar.
+func (m *StatusBarModel) SetError(msg string) {
+	m.errText = msg
+}
+
+// ClearError removes the transient error message.
+func (m *StatusBarModel) ClearError() {
+	m.errText = ""
+}
+
 // Init satisfies the tea.Model interface.
 func (m StatusBarModel) Init() tea.Cmd {
 	return nil
@@ -66,6 +77,12 @@ func (m StatusBarModel) Update(msg tea.Msg) (StatusBarModel, tea.Cmd) {
 
 // View renders the status bar.
 func (m StatusBarModel) View() string {
+	if m.errText != "" {
+		errStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#f7768e")).Bold(true)
+		bar := errStyle.Render(" " + m.errText)
+		return styles.StatusBar.Width(m.width).Render(bar)
+	}
+
 	hints := m.hintsForMode()
 
 	var parts []string
@@ -108,6 +125,12 @@ func (m StatusBarModel) hintsForMode() []statusHint {
 			{"Esc", "cancel"},
 			{"Enter", "select"},
 		}
+	case "detail":
+		return []statusHint{{"any key", "close"}}
+	case "stats":
+		return []statusHint{{"Tab", "cycle filter"}, {"any key", "close"}}
+	case "contextmenu":
+		return []statusHint{{"j/k", "navigate"}, {"Enter", "select"}, {"Esc", "cancel"}}
 	default: // "list"
 		if len(m.listHints) > 0 {
 			return m.listHints

@@ -115,14 +115,20 @@ type Model struct {
 	sidebarWidthPct    int
 	closedSessionHours float64
 	processNames       []string
-	currentTmuxSession string // the tmux session naviClaude is running in
-	isPopup            bool   // true when running inside tmux display-popup
+	currentTmuxSession string        // the tmux session naviClaude is running in
+	isPopup            bool          // true when running inside tmux display-popup
+	refreshInterval    time.Duration // preview capture tick interval
 }
 
 // New creates a fully-wired Model ready to be passed to tea.NewProgram.
 func New() Model {
 	cfg, _ := config.Load("")
 	keys := KeyMapFromConfig(cfg.Keys)
+
+	refreshInterval, err := time.ParseDuration(cfg.RefreshInterval)
+	if err != nil || refreshInterval < 50*time.Millisecond {
+		refreshInterval = 200 * time.Millisecond
+	}
 
 	tc := tmux.New()
 	hs, _ := session.NewHistoryScanner("")
@@ -159,6 +165,7 @@ func New() Model {
 		processNames:       cfg.ProcessNames,
 		currentTmuxSession: detectCurrentTmuxSession(),
 		isPopup:            os.Getenv("TMUX_POPUP") != "",
+		refreshInterval:    refreshInterval,
 	}
 
 	// Wire auto-collapse threshold.
@@ -194,7 +201,7 @@ func (m Model) Init() tea.Cmd {
 		return tea.Quit
 	}
 	return tea.Batch(
-		tickPreview(),
+		m.tickPreviewCmd(),
 		tickSession(),
 		tickResource(),
 		m.refreshActiveCmd(),
@@ -216,7 +223,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// -- Tickers -------------------------------------------------------------
 	case tickPreviewMsg:
-		cmds = append(cmds, tickPreview())
+		cmds = append(cmds, m.tickPreviewCmd())
 		cmds = append(cmds, m.capturePreviewCmd())
 		return m, tea.Batch(cmds...)
 
@@ -479,10 +486,11 @@ func (m Model) View() string {
 // ---------------------------------------------------------------------------
 
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	m.statusbar.ClearError()
 	key := msg.String()
 
-	// Global quit.
-	if key == KeyCtrlC {
+	// Global quit — but in passthrough mode Ctrl+C is forwarded to the pane.
+	if key == KeyCtrlC && m.mode != ModePassthrough {
 		return m, tea.Quit
 	}
 
@@ -632,6 +640,7 @@ func (m Model) handlePassthroughKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.mode = ModeList
 			m.preview.SetPassthrough(false)
 			m.statusbar.SetMode(ModeList.String())
+			m.statusbar.SetError("session ended — returned to list mode")
 			return m, nil
 		}
 		if err := m.passthrough.SendKey(sess.TmuxTarget, msg); err != nil {
@@ -639,7 +648,7 @@ func (m Model) handlePassthroughKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.mode = ModeList
 			m.preview.SetPassthrough(false)
 			m.statusbar.SetMode(ModeList.String())
-			m.err = fmt.Errorf("passthrough send failed: %w", err)
+			m.statusbar.SetError("session ended — returned to list mode")
 			return m, nil
 		}
 		// Eager capture: refresh preview immediately after sending a key
@@ -859,6 +868,7 @@ func (m Model) resumeSession(sess *session.Session) (tea.Model, tea.Cmd) {
 	target := m.currentTmuxSession
 	if target == "" {
 		m.err = fmt.Errorf("resume: cannot determine current tmux session")
+		m.statusbar.SetError("cannot determine current tmux session")
 		return m, nil
 	}
 	if err := m.manager.Resume(sess, target); err != nil {
@@ -905,6 +915,7 @@ func (m Model) createNewSession() (tea.Model, tea.Cmd) {
 	}
 	if tmuxSess == "" {
 		m.err = fmt.Errorf("new session: cannot determine target tmux session")
+		m.statusbar.SetError("cannot determine target tmux session")
 		return m, nil
 	}
 
@@ -1096,6 +1107,22 @@ func (m *Model) applySessionRefresh(msg sessionRefreshMsg) {
 	combined = append(combined, msg.closed...)
 	m.sessions = combined
 
+	// If kill confirmation is pending and the target session is gone, cancel it.
+	if m.confirmKill && m.confirmSession != nil {
+		found := false
+		for _, s := range combined {
+			if s.TmuxTarget == m.confirmSession.TmuxTarget {
+				found = true
+				break
+			}
+		}
+		if !found {
+			m.confirmKill = false
+			m.confirmSession = nil
+			m.sidebar.ConfirmKillTarget = ""
+		}
+	}
+
 	// Don't overwrite the sidebar during search -- the search model controls
 	// what the sidebar displays via filtered results.
 	if m.mode != ModeSearch {
@@ -1245,6 +1272,7 @@ func (m *Model) resizeComponents() {
 	m.help.SetSize(m.width, m.height)
 	m.detail.SetSize(m.width, m.height)
 	m.statsModel.SetSize(m.width, m.height)
+	m.contextMenu.SetTermSize(m.width, m.height)
 	// Truncate captured pane lines to the preview viewport width to prevent
 	// overflow when the source pane is wider than the popup.
 	m.captureEngine.SetMaxWidth(previewWidth - 2) // -2 for left padding
@@ -1353,8 +1381,8 @@ func (m *Model) updateSessionStatus(target string, status session.SessionStatus)
 // Ticker constructors
 // ---------------------------------------------------------------------------
 
-func tickPreview() tea.Cmd {
-	return tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg {
+func (m Model) tickPreviewCmd() tea.Cmd {
+	return tea.Tick(m.refreshInterval, func(t time.Time) tea.Msg {
 		return tickPreviewMsg{}
 	})
 }
