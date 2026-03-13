@@ -27,6 +27,9 @@ const (
 
 	// ModeStats shows a centered popup with usage statistics.
 	ModeStats
+
+	// ModeThemePicker shows a centered popup for selecting a color theme.
+	ModeThemePicker
 )
 
 // String returns a short label suitable for the status bar.
@@ -46,6 +49,8 @@ func (m Mode) String() string {
 		return "detail"
 	case ModeStats:
 		return "stats"
+	case ModeThemePicker:
+		return "themepicker"
 	default:
 		return "unknown"
 	}

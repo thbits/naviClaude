@@ -84,6 +84,7 @@ type Model struct {
 	contextMenu ui.ContextMenuModel
 	detail      ui.DetailModel
 	statsModel  ui.StatsModel
+	themePicker ui.ThemePickerModel
 
 	// Backend services
 	tmuxClient     *tmux.Client
@@ -144,6 +145,7 @@ func New() Model {
 		contextMenu: ui.NewContextMenu(),
 		detail:      ui.NewDetail(),
 		statsModel:  ui.NewStats(),
+		themePicker: ui.NewThemePicker(cfg.Theme),
 
 		// Backend
 		tmuxClient:     tc,
@@ -457,6 +459,10 @@ func (m Model) View() string {
 		screen = ui.PlaceOverlay(screen, m.statsModel.View())
 	}
 
+	if m.themePicker.IsVisible() {
+		screen = ui.PlaceOverlay(screen, m.themePicker.View())
+	}
+
 	if m.detail.IsVisible() {
 		screen = ui.PlaceOverlay(screen, m.detail.View())
 	}
@@ -515,6 +521,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleDetailKey(msg)
 	case ModeStats:
 		return m.handleStatsKey(msg)
+	case ModeThemePicker:
+		return m.handleThemePickerKey(msg)
 	}
 	return m, nil
 }
@@ -592,6 +600,12 @@ func (m Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.mode = ModeStats
 		m.statusbar.SetMode(ModeStats.String())
 		return m, m.computeStatsCmd()
+
+	case KeyThemePicker:
+		m.themePicker.Show(m.cfg.Theme)
+		m.mode = ModeThemePicker
+		m.statusbar.SetMode(ModeThemePicker.String())
+		return m, nil
 
 	case "ctrl+u":
 		m.preview.ScrollUp(m.preview.HalfViewHeight())
@@ -1273,6 +1287,7 @@ func (m *Model) resizeComponents() {
 	m.help.SetSize(m.width, m.height)
 	m.detail.SetSize(m.width, m.height)
 	m.statsModel.SetSize(m.width, m.height)
+	m.themePicker.SetSize(m.width, m.height)
 	m.contextMenu.SetTermSize(m.width, m.height)
 	// Truncate captured pane lines to the preview viewport width to prevent
 	// overflow when the source pane is wider than the popup.

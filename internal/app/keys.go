@@ -82,6 +82,7 @@ func (km KeyMap) HelpBindings() []HelpBinding {
 		{km.KillSession, "Kill session"},
 		{km.Detail, "Detail"},
 		{km.Stats, "Stats"},
+		{KeyThemePicker, "Theme picker"},
 		{km.Help, "Help"},
 		{km.Quit, "Quit"},
 	}
@@ -111,4 +112,5 @@ const (
 	KeyJumpFromPT       = "ctrl+f"
 	KeyMenuCancel       = "esc"
 	KeyMenuSelect       = "enter"
+	KeyThemePicker      = "T"
 )

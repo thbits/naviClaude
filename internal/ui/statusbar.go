@@ -129,6 +129,8 @@ func (m StatusBarModel) hintsForMode() []statusHint {
 		return []statusHint{{"any key", "close"}}
 	case "stats":
 		return []statusHint{{"Tab", "cycle filter"}, {"any key", "close"}}
+	case "themepicker":
+		return []statusHint{{"j/k", "navigate"}, {"Enter", "apply"}, {"Esc", "cancel"}}
 	case "contextmenu":
 		return []statusHint{{"j/k", "navigate"}, {"Enter", "select"}, {"Esc", "cancel"}}
 	default: // "list"

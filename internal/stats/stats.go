@@ -8,6 +8,7 @@ type Stats struct {
 	AvgSessionsPerDay float64
 	ProjectCounts    []ProjectCount
 	WeeklyActivity   []DayActivity
+	HourlyActivity   [24]int // message count per hour, only populated for "today" filter
 	ModelUsage       []ModelUsageEntry
 	LongestSession   LongestInfo
 	PeakHour         int

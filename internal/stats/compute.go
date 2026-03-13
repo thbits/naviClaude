@@ -78,6 +78,9 @@ func Compute(claudeDir string, activeCount int, filter string) (*Stats, error) {
 
 			// Weekly activity (last 7 days).
 			st.WeeklyActivity = filterDailyActivity(cc.DailyActivity, filter)
+			if filter == "today" {
+				st.HourlyActivity = buildHourlyActivity(claudeDir)
+			}
 
 			// Model usage grouped by family.
 			st.ModelUsage = groupModelUsage(cc.ModelUsage)
@@ -105,7 +108,7 @@ func Compute(claudeDir string, activeCount int, filter string) (*Stats, error) {
 	}
 
 	// Scan project directories for project breakdown.
-	st.ProjectCounts = scanProjectCounts(claudeDir)
+	st.ProjectCounts = scanProjectCounts(claudeDir, filter)
 
 	return st, nil
 }
@@ -284,7 +287,36 @@ func supplementStaleData(st *Stats, claudeDir string, lastDate time.Time) {
 	}
 }
 
-func scanProjectCounts(claudeDir string) []ProjectCount {
+func buildHourlyActivity(claudeDir string) [24]int {
+	var hours [24]int
+	today := time.Now().Format("2006-01-02")
+	pattern := filepath.Join(claudeDir, "projects", "*", "*.jsonl")
+	files, err := filepath.Glob(pattern)
+	if err != nil {
+		return hours
+	}
+	for _, f := range files {
+		info, err := os.Stat(f)
+		if err != nil {
+			continue
+		}
+		if info.ModTime().Format("2006-01-02") == today {
+			hours[info.ModTime().Hour()]++
+		}
+	}
+	return hours
+}
+
+func scanProjectCounts(claudeDir string, filter string) []ProjectCount {
+	now := time.Now()
+	var cutoff time.Time
+	switch filter {
+	case "today":
+		cutoff = time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	case "week":
+		cutoff = now.AddDate(0, 0, -7)
+	}
+
 	projectsDir := filepath.Join(claudeDir, "projects")
 	entries, err := os.ReadDir(projectsDir)
 	if err != nil {
@@ -296,13 +328,24 @@ func scanProjectCounts(claudeDir string) []ProjectCount {
 		if !e.IsDir() {
 			continue
 		}
-		// Count .jsonl files in this project dir.
 		pattern := filepath.Join(projectsDir, e.Name(), "*.jsonl")
 		files, err := filepath.Glob(pattern)
 		if err != nil {
 			continue
 		}
-		if len(files) == 0 {
+
+		count := 0
+		for _, f := range files {
+			if cutoff.IsZero() {
+				count++
+			} else {
+				info, err := os.Stat(f)
+				if err == nil && info.ModTime().After(cutoff) {
+					count++
+				}
+			}
+		}
+		if count == 0 {
 			continue
 		}
 
@@ -316,7 +359,7 @@ func scanProjectCounts(claudeDir string) []ProjectCount {
 			name = e.Name()
 		}
 
-		counts = append(counts, ProjectCount{Name: name, Count: len(files)})
+		counts = append(counts, ProjectCount{Name: name, Count: count})
 	}
 
 	sort.Slice(counts, func(i, j int) bool {

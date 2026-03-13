@@ -148,12 +148,61 @@ func (m StatsModel) View() string {
 	}
 
 	// Activity bar chart.
-	if len(s.WeeklyActivity) > 0 {
+	if s.Filter == "today" {
+		lines = append(lines, styles.DetailLabel.Render("Today's Activity (by hour)"))
+		maxVal := 0
+		for _, v := range s.HourlyActivity {
+			if v > maxVal {
+				maxVal = v
+			}
+		}
+		maxBarHeight := 4
+		for row := maxBarHeight; row >= 1; row-- {
+			var rowStr strings.Builder
+			rowStr.WriteString("  ")
+			for h := 0; h < 24; h++ {
+				barHeight := 0
+				if maxVal > 0 {
+					barHeight = s.HourlyActivity[h] * maxBarHeight / maxVal
+				}
+				if barHeight >= row {
+					rowStr.WriteString(styles.StatsBar.Render("\u2588"))
+				} else {
+					rowStr.WriteString(" ")
+				}
+				rowStr.WriteString(" ")
+			}
+			lines = append(lines, rowStr.String())
+		}
+		// Hour labels: 0, 6, 12, 18, 23
+		var hourLabels strings.Builder
+		hourLabels.WriteString("  ")
+		for h := 0; h < 24; h++ {
+			switch h {
+			case 0:
+				hourLabels.WriteString("0 ")
+			case 6:
+				hourLabels.WriteString("6 ")
+			case 12:
+				hourLabels.WriteString("12")
+			case 13:
+				hourLabels.WriteString(" ")
+			case 18:
+				hourLabels.WriteString("18")
+			case 19:
+				hourLabels.WriteString(" ")
+			case 23:
+				hourLabels.WriteString("23")
+			default:
+				hourLabels.WriteString("  ")
+			}
+		}
+		lines = append(lines, styles.DetailLabel.Render(hourLabels.String()))
+		lines = append(lines, "")
+	} else if len(s.WeeklyActivity) > 0 {
 		chartLabel := "Activity"
 		if s.Filter == "week" {
 			chartLabel = "Weekly Activity"
-		} else if s.Filter == "today" {
-			chartLabel = "Today's Activity"
 		}
 		lines = append(lines, styles.DetailLabel.Render(chartLabel))
 		maxMsgs := 0
@@ -163,7 +212,6 @@ func (m StatsModel) View() string {
 			}
 		}
 		maxBarHeight := 6
-		// Use single-char bars for 30-day view, double for 7-day.
 		barChar := "\u2588"
 		spaceChar := " "
 		sepChar := ""
@@ -189,13 +237,11 @@ func (m StatsModel) View() string {
 			}
 			lines = append(lines, rowStr.String())
 		}
-		// Day labels -- show subset for 30-day view.
 		var dayLabels strings.Builder
 		dayLabels.WriteString("  ")
 		for i, d := range s.WeeklyActivity {
 			label := d.Date
 			if len(s.WeeklyActivity) <= 7 {
-				// Weekly: show 2-letter day name.
 				if len(label) >= 10 {
 					t, err := time.Parse("2006-01-02", label)
 					if err == nil {
@@ -206,7 +252,6 @@ func (m StatsModel) View() string {
 				}
 				dayLabels.WriteString(fmt.Sprintf("%-3s", label))
 			} else {
-				// 30-day: show day number every 7 days, space otherwise.
 				if i == 0 || i == len(s.WeeklyActivity)-1 || i%7 == 0 {
 					if len(label) >= 10 {
 						dayLabels.WriteString(label[8:10])

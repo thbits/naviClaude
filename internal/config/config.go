@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -69,6 +70,25 @@ func DefaultPath() string {
 		return ""
 	}
 	return filepath.Join(home, ".config", "naviclaude", "config.yaml")
+}
+
+// Save writes cfg as YAML to path. Creates the file and parent directories
+// if they do not exist. If path is empty, DefaultPath() is used.
+func Save(cfg Config, path string) error {
+	if path == "" {
+		path = DefaultPath()
+	}
+	if path == "" {
+		return fmt.Errorf("config: cannot determine config path")
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("config: mkdir: %w", err)
+	}
+	data, err := yaml.Marshal(cfg)
+	if err != nil {
+		return fmt.Errorf("config: marshal: %w", err)
+	}
+	return os.WriteFile(path, data, 0o644)
 }
 
 // Load reads a YAML config file and returns a Config. Missing fields retain
