@@ -6,10 +6,14 @@ TUI for managing Claude Code sessions across tmux.
 
 - **Session sidebar** -- lists active and recently closed Claude Code sessions, grouped by project
 - **Live preview** -- real-time tmux pane capture of the selected session
+- **Activity sparklines** -- per-session message activity visualization on the selected item
+- **Context usage bar** -- shows current token usage vs context window limit
+- **Breathing status dots** -- active sessions pulse green, waiting sessions pulse amber
 - **Passthrough mode** -- type directly into a session without leaving the TUI
 - **Fuzzy search** -- filter sessions by name
 - **Session management** -- create new sessions, kill existing ones, resume in the current pane
 - **Detail popup** -- view session metadata (model, project, cost, token counts)
+- **Rich preview header** -- status badge, uptime, message count, CPU/memory
 - **Usage statistics** -- per-project breakdown with bar charts
 - **10 built-in color themes** with a live theme picker
 - **Configurable key bindings** and layout options
