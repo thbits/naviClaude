@@ -19,6 +19,7 @@ type Config struct {
 	ProcessNames       []string    `yaml:"process_names"`
 	CollapseAfterHours float64     `yaml:"collapse_after_hours"`  // auto-collapse groups idle longer than this (0 = disabled)
 	ActiveWindowSecs   int         `yaml:"active_window_secs"`    // seconds after last .jsonl write to keep session "active" (default 5)
+	Theme              string      `yaml:"theme"`                 // color theme name (default "tokyo-night")
 }
 
 // KeyBindings maps user-facing actions to key names (tea.KeyMsg.String() format).
@@ -57,6 +58,7 @@ func DefaultConfig() Config {
 		ProcessNames:       []string{"claude"},
 		CollapseAfterHours: 8,
 		ActiveWindowSecs:   5,
+		Theme:              "tokyo-night",
 	}
 }
 
@@ -111,6 +113,9 @@ func Load(path string) (Config, error) {
 	}
 	if cfg.ActiveWindowSecs == 0 {
 		cfg.ActiveWindowSecs = 5
+	}
+	if cfg.Theme == "" {
+		cfg.Theme = "tokyo-night"
 	}
 
 	return cfg, nil

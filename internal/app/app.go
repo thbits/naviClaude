@@ -123,6 +123,7 @@ type Model struct {
 // New creates a fully-wired Model ready to be passed to tea.NewProgram.
 func New() Model {
 	cfg, _ := config.Load("")
+	styles.ApplyTheme(styles.Named(cfg.Theme))
 	keys := KeyMapFromConfig(cfg.Keys)
 
 	refreshInterval, err := time.ParseDuration(cfg.RefreshInterval)

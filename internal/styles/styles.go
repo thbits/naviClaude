@@ -5,10 +5,10 @@ package styles
 import "github.com/charmbracelet/lipgloss"
 
 // ---------------------------------------------------------------------------
-// Tokyo Night color palette
+// Tokyo Night color palette (defaults; overridden by ApplyTheme)
 // ---------------------------------------------------------------------------
 
-const (
+var (
 	ColorBg        = lipgloss.Color("#16161e") // terminal background (dark)
 	ColorBgPanel   = lipgloss.Color("#1a1a2e") // sidebar / status bar panel bg
 	ColorBgHover   = lipgloss.Color("#1e2240") // hover / key badge bg
@@ -427,3 +427,261 @@ var StatsFilterActive = lipgloss.NewStyle().
 
 var StatsFilterInactive = lipgloss.NewStyle().
 	Foreground(ColorGray)
+
+// ApplyTheme applies the given palette, reassigning all color variables
+// and rebuilding all style variables. Call once at startup before rendering.
+func ApplyTheme(p Palette) {
+	// Reassign color variables.
+	ColorBg = p.Bg
+	ColorBgPanel = p.BgPanel
+	ColorBgHover = p.BgHover
+	ColorFg = p.Fg
+	ColorSelection = p.Selection
+	ColorBlue = p.Blue
+	ColorGreen = p.Green
+	ColorAmber = p.Amber
+	ColorRed = p.Red
+	ColorGray = p.Gray
+	ColorPurple = p.Purple
+	ColorCyan = p.Cyan
+	ColorBorder = p.Border
+	ColorDim = p.Dim
+	ColorDimText = p.DimText
+
+	// Rebuild all style variables to use the new colors.
+	SidebarPanel = lipgloss.NewStyle().
+		Background(ColorBgPanel).
+		BorderRight(true).
+		BorderStyle(lipgloss.NormalBorder()).
+		BorderForeground(ColorBorder)
+
+	SidebarPanelFocused = lipgloss.NewStyle().
+		Background(ColorBgPanel).
+		BorderRight(true).
+		BorderStyle(lipgloss.NormalBorder()).
+		BorderForeground(ColorBlue)
+
+	SidebarTitle = lipgloss.NewStyle().
+		Foreground(ColorBlue).
+		Bold(true).
+		PaddingLeft(1)
+
+	SidebarTitleCount = lipgloss.NewStyle().
+		Foreground(ColorGray)
+
+	SidebarItem = lipgloss.NewStyle().
+		Foreground(ColorFg).
+		PaddingLeft(2)
+
+	SidebarItemSelected = lipgloss.NewStyle().
+		Foreground(ColorBlue).
+		Background(ColorSelection).
+		Bold(true).
+		PaddingLeft(1).
+		BorderLeft(true).
+		BorderStyle(SelectionIndicator).
+		BorderForeground(ColorBlue)
+
+	SidebarGroupHeader = lipgloss.NewStyle().
+		Foreground(ColorAmber).
+		PaddingLeft(1)
+
+	SidebarGroupCount = lipgloss.NewStyle().
+		Foreground(ColorGray)
+
+	SidebarProjectName = lipgloss.NewStyle().
+		Foreground(ColorFg)
+
+	SidebarProjectNameSelected = lipgloss.NewStyle().
+		Foreground(ColorBlue).
+		Bold(true)
+
+	SidebarTime = lipgloss.NewStyle().
+		Foreground(ColorGray)
+
+	SidebarSummary = lipgloss.NewStyle().
+		Foreground(ColorGray).
+		PaddingLeft(4)
+
+	SidebarSummarySelected = lipgloss.NewStyle().
+		Foreground(ColorGray).
+		Background(ColorSelection).
+		PaddingLeft(3).
+		BorderLeft(true).
+		BorderStyle(SelectionIndicator).
+		BorderForeground(ColorBlue)
+
+	StatusIconActive = lipgloss.NewStyle().Foreground(ColorGreen)
+	StatusIconWaiting = lipgloss.NewStyle().Foreground(ColorAmber)
+	StatusIconIdle = lipgloss.NewStyle().Foreground(ColorGray)
+	StatusIconClosed = lipgloss.NewStyle().Foreground(ColorDim)
+
+	SidebarWaitingFlash = lipgloss.NewStyle().
+		Foreground(ColorBg).
+		Background(ColorAmber).
+		PaddingLeft(2).
+		Bold(true)
+
+	PreviewBorderUnfocused = lipgloss.NewStyle()
+	PreviewBorderFocused = lipgloss.NewStyle()
+
+	PreviewHeader = lipgloss.NewStyle().
+		Foreground(ColorFg).
+		PaddingLeft(1).
+		PaddingRight(1).
+		BorderBottom(true).
+		BorderStyle(lipgloss.NormalBorder()).
+		BorderForeground(ColorBorder)
+
+	PreviewHeaderFocused = lipgloss.NewStyle().
+		Foreground(ColorFg).
+		PaddingLeft(1).
+		PaddingRight(1).
+		BorderBottom(true).
+		BorderStyle(lipgloss.NormalBorder()).
+		BorderForeground(ColorBlue)
+
+	PreviewHeaderLabel = lipgloss.NewStyle().Foreground(ColorGray)
+	PreviewHeaderValue = lipgloss.NewStyle().Foreground(ColorGray)
+	PreviewHeaderBranch = lipgloss.NewStyle().Foreground(ColorGreen)
+	PreviewPassthroughBadge = lipgloss.NewStyle().Foreground(ColorGreen).Bold(true)
+	PreviewContent = lipgloss.NewStyle().Foreground(ColorFg)
+	PreviewSep = lipgloss.NewStyle().Foreground(ColorBorder)
+
+	StatusBar = lipgloss.NewStyle().
+		Background(ColorBgPanel).
+		Foreground(ColorFg).
+		BorderTop(true).
+		BorderStyle(lipgloss.NormalBorder()).
+		BorderForeground(ColorBorder)
+
+	StatusBarKey = lipgloss.NewStyle().
+		Foreground(ColorBlue).
+		Background(ColorBgHover).
+		Bold(true).
+		PaddingLeft(1).
+		PaddingRight(1)
+
+	StatusBarDesc = lipgloss.NewStyle().
+		Foreground(ColorGray).
+		Background(ColorBgPanel)
+
+	StatusBarSep = lipgloss.NewStyle().
+		Foreground(ColorBorder).
+		Background(ColorBgPanel)
+
+	StatusBarVersion = lipgloss.NewStyle().
+		Foreground(ColorGray).
+		Background(ColorBgPanel)
+
+	HelpBorder = lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(ColorPurple).
+		Background(ColorBgPanel).
+		Padding(1, 2)
+
+	HelpTitle = lipgloss.NewStyle().
+		Foreground(ColorPurple).
+		Bold(true).
+		MarginBottom(1)
+
+	HelpKey = lipgloss.NewStyle().Foreground(ColorBlue).Bold(true)
+	HelpDesc = lipgloss.NewStyle().Foreground(ColorFg)
+
+	ContextMenuBorder = lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(ColorBorder).
+		Background(ColorBgPanel)
+
+	ContextMenuItem = lipgloss.NewStyle().
+		Foreground(ColorFg).
+		PaddingLeft(1).
+		PaddingRight(1)
+
+	ContextMenuItemSelected = lipgloss.NewStyle().
+		Foreground(ColorBlue).
+		Background(ColorSelection).
+		PaddingLeft(1).
+		PaddingRight(1).
+		Bold(true)
+
+	ContextMenuItemDanger = lipgloss.NewStyle().
+		Foreground(ColorRed).
+		PaddingLeft(1).
+		PaddingRight(1)
+
+	ContextMenuItemDangerSelected = lipgloss.NewStyle().
+		Foreground(ColorBg).
+		Background(ColorRed).
+		PaddingLeft(1).
+		PaddingRight(1).
+		Bold(true)
+
+	ContextMenuSep = lipgloss.NewStyle().
+		Foreground(ColorBorder).
+		PaddingLeft(1).
+		PaddingRight(1)
+
+	ContextMenuShortcut = lipgloss.NewStyle().Foreground(ColorGray)
+
+	SearchInput = lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(ColorBlue).
+		Foreground(ColorFg).
+		Background(ColorBgHover).
+		Padding(0, 1)
+
+	SearchPrompt = lipgloss.NewStyle().Foreground(ColorBlue).Bold(true)
+	SearchMatch = lipgloss.NewStyle().Foreground(ColorAmber).Bold(true)
+
+	TitleBar = lipgloss.NewStyle().
+		Background(ColorBgPanel).
+		Foreground(ColorFg).
+		BorderBottom(true).
+		BorderStyle(lipgloss.NormalBorder()).
+		BorderForeground(ColorBorder)
+
+	TitleBarName = lipgloss.NewStyle().Foreground(ColorBlue).Bold(true)
+	TitleBarDim = lipgloss.NewStyle().Foreground(ColorGray)
+
+	FocusedBorder = lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(ColorBlue)
+
+	UnfocusedBorder = lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(ColorBorder)
+
+	EmptyState = lipgloss.NewStyle().Foreground(ColorGray).Italic(true)
+	EmptyStateHint = lipgloss.NewStyle().Foreground(ColorBlue)
+	LoadingStyle = lipgloss.NewStyle().Foreground(ColorBlue)
+
+	ConversationUserLabel = lipgloss.NewStyle().Foreground(ColorBlue).Bold(true)
+	ConversationAssistantLabel = lipgloss.NewStyle().Foreground(ColorPurple).Bold(true)
+	ConversationUserText = lipgloss.NewStyle().Foreground(ColorFg)
+	ConversationAssistantText = lipgloss.NewStyle().Foreground(ColorDimText)
+	ConversationSeparator = lipgloss.NewStyle().Foreground(ColorBorder)
+
+	DetailBorder = lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(ColorPurple).
+		Background(ColorBgPanel).
+		Padding(1, 2)
+
+	DetailTitle = lipgloss.NewStyle().Foreground(ColorBlue).Bold(true)
+	DetailLabel = lipgloss.NewStyle().Foreground(ColorGray)
+	DetailValue = lipgloss.NewStyle().Foreground(ColorCyan)
+
+	StatsBorder = lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(ColorCyan).
+		Background(ColorBgPanel).
+		Padding(1, 2)
+
+	StatsTitle = lipgloss.NewStyle().Foreground(ColorCyan).Bold(true)
+	StatsMetricValue = lipgloss.NewStyle().Foreground(ColorGreen)
+	StatsBar = lipgloss.NewStyle().Foreground(ColorBlue)
+	StatsBarAlt = lipgloss.NewStyle().Foreground(ColorPurple)
+	StatsFilterActive = lipgloss.NewStyle().Foreground(ColorCyan).Bold(true)
+	StatsFilterInactive = lipgloss.NewStyle().Foreground(ColorGray)
+}
