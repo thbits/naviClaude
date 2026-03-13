@@ -13,8 +13,9 @@ var (
 	ColorBgPanel   = lipgloss.Color("#1a1a2e") // sidebar / status bar panel bg
 	ColorBgHover   = lipgloss.Color("#1e2240") // hover / key badge bg
 	ColorFg        = lipgloss.Color("#c0caf5") // primary foreground
-	ColorSelection = lipgloss.Color("#2a3a5e") // selected item background (slightly brighter)
-	ColorBlue      = lipgloss.Color("#7aa2f7") // primary accent
+	ColorSelection    = lipgloss.Color("#2a3a5e") // selected item background (slightly brighter)
+	ColorSelectionDim = lipgloss.Color("#243350") // dimmer selection for summary lines
+	ColorBlue         = lipgloss.Color("#7aa2f7") // primary accent
 	ColorGreen     = lipgloss.Color("#9ece6a") // active sessions, branch name
 	ColorAmber     = lipgloss.Color("#e0af68") // waiting, group headers
 	ColorRed       = lipgloss.Color("#f7768e") // danger / kill
@@ -106,11 +107,11 @@ var SidebarSummary = lipgloss.NewStyle().
 // Matches SidebarItemSelected with left bar + selection background.
 var SidebarSummarySelected = lipgloss.NewStyle().
 	Foreground(ColorGray).
-	Background(ColorSelection).
+	Background(ColorSelectionDim).
 	PaddingLeft(3).
 	BorderLeft(true).
 	BorderStyle(SelectionIndicator).
-	BorderForeground(ColorBlue)
+	BorderForeground(ColorPurple)
 
 // Status icon characters -- single source of truth for all icon renderers.
 const (
@@ -437,6 +438,7 @@ func ApplyTheme(p Palette) {
 	ColorBgHover = p.BgHover
 	ColorFg = p.Fg
 	ColorSelection = p.Selection
+	ColorSelectionDim = p.SelectionDim
 	ColorBlue = p.Blue
 	ColorGreen = p.Green
 	ColorAmber = p.Amber
@@ -505,11 +507,11 @@ func ApplyTheme(p Palette) {
 
 	SidebarSummarySelected = lipgloss.NewStyle().
 		Foreground(ColorGray).
-		Background(ColorSelection).
+		Background(ColorSelectionDim).
 		PaddingLeft(3).
 		BorderLeft(true).
 		BorderStyle(SelectionIndicator).
-		BorderForeground(ColorBlue)
+		BorderForeground(ColorPurple)
 
 	StatusIconActive = lipgloss.NewStyle().Foreground(ColorGreen)
 	StatusIconWaiting = lipgloss.NewStyle().Foreground(ColorAmber)

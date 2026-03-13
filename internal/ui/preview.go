@@ -138,7 +138,7 @@ func (m PreviewModel) View() string {
 }
 
 func (m PreviewModel) renderHeader() string {
-	sep := styles.PreviewSep.Render(" | ")
+	sep := styles.PreviewSep.Render(" \u2022 ")
 	maxWidth := m.width - 3 // account for left padding
 	if maxWidth < 10 {
 		maxWidth = 10

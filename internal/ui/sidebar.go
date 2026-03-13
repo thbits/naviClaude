@@ -562,6 +562,16 @@ func (m SidebarModel) countActive() int {
 	return m.activeCount
 }
 
+// groupIndex returns the position of the named group (0-based), or -1 if not found.
+func (m SidebarModel) groupIndex(name string) int {
+	for i, g := range m.groups {
+		if g.Name == name {
+			return i
+		}
+	}
+	return -1
+}
+
 func (m SidebarModel) renderGroupHeader(name string, isCursor bool) string {
 	arrow := "\u25bc" // down-pointing triangle (expanded)
 	if m.collapsed[name] {
@@ -589,7 +599,11 @@ func (m SidebarModel) renderGroupHeader(name string, isCursor bool) string {
 			gap = 1
 		}
 		full := content + strings.Repeat(" ", gap) + countRendered
-		return styles.SidebarItemSelected.Width(m.width - 1).Render(full)
+		rendered := styles.SidebarItemSelected.Width(m.width - 1).Render(full)
+		if m.groupIndex(name) > 0 {
+			return "\n" + rendered
+		}
+		return rendered
 	}
 
 	// Normal group header: triangle + name left, count right-aligned
@@ -599,7 +613,11 @@ func (m SidebarModel) renderGroupHeader(name string, isCursor bool) string {
 	if gap < 1 {
 		gap = 1
 	}
-	return left + strings.Repeat(" ", gap) + right
+	line := left + strings.Repeat(" ", gap) + right
+	if m.groupIndex(name) > 0 {
+		return "\n" + line
+	}
+	return line
 }
 
 func (m SidebarModel) renderSessionItem(s *session.Session, isCursor bool) []string {
@@ -675,10 +693,11 @@ func (m SidebarModel) renderSessionItem(s *session.Session, isCursor bool) []str
 
 		var line2Content string
 		if isConfirmingKill {
-			killLabel := lipgloss.NewStyle().Foreground(styles.ColorRed).Background(selBg).Bold(true).Render("Kill?")
-			yKey := lipgloss.NewStyle().Foreground(styles.ColorFg).Background(selBg).Render(" y")
-			slash := lipgloss.NewStyle().Foreground(styles.ColorGray).Background(selBg).Render("/")
-			nKey := lipgloss.NewStyle().Foreground(styles.ColorFg).Background(selBg).Bold(true).Render("N")
+			dimBg := styles.ColorSelectionDim
+			killLabel := lipgloss.NewStyle().Foreground(styles.ColorRed).Background(dimBg).Bold(true).Render("Kill?")
+			yKey := lipgloss.NewStyle().Foreground(styles.ColorFg).Background(dimBg).Render(" y")
+			slash := lipgloss.NewStyle().Foreground(styles.ColorGray).Background(dimBg).Render("/")
+			nKey := lipgloss.NewStyle().Foreground(styles.ColorFg).Background(dimBg).Bold(true).Render("N")
 			line2Content = killLabel + " " + yKey + slash + nKey
 		} else {
 			line2Content = summary
@@ -686,7 +705,7 @@ func (m SidebarModel) renderSessionItem(s *session.Session, isCursor bool) []str
 
 		line2Style := lipgloss.NewStyle().
 			Foreground(styles.ColorGray).
-			Background(selBg).
+			Background(styles.ColorSelectionDim).
 			PaddingLeft(3).
 			BorderLeft(true).
 			BorderStyle(styles.SelectionIndicator).

@@ -1414,10 +1414,11 @@ func (m *Model) resizeComponents() {
 	m.captureEngine.SetMaxWidth(previewWidth - 2) // -2 for left padding
 }
 
+
 func (m Model) renderTitleBar() string {
 	left := styles.TitleBarName.Render(" naviClaude")
 	info := styles.TitleBarDim.Render(fmt.Sprintf("%d sessions", m.sidebar.ActiveCount()))
-	sep := styles.TitleBarDim.Render(" | ")
+	sep := styles.TitleBarDim.Render(" \u2022 ")
 
 	leftLine := left + sep + info
 

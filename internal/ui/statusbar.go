@@ -86,7 +86,7 @@ func (m StatusBarModel) View() string {
 	hints := m.hintsForMode()
 
 	var parts []string
-	sep := styles.StatusBarSep.Render(" | ")
+	sep := styles.StatusBarSep.Render(" \u2022 ")
 
 	for i, h := range hints {
 		part := styles.StatusBarKey.Render(h.key) + " " + styles.StatusBarDesc.Render(h.desc)
