@@ -1,14 +1,15 @@
 package ui
 
 import (
+	"sort"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/sahilm/fuzzy"
-	"github.com/tomhalo/naviclaude/internal/session"
-	"github.com/tomhalo/naviclaude/internal/styles"
+	"github.com/thbits/naviClaude/internal/session"
+	"github.com/thbits/naviClaude/internal/styles"
 )
 
 // SearchModel provides fuzzy search over sessions.
@@ -22,22 +23,27 @@ type SearchModel struct {
 	height   int
 }
 
-// sessionSource implements fuzzy.Source for the session list.
-type sessionSource []*session.Session
+// nameSource searches only project names (higher weight).
+type nameSource []*session.Session
 
-func (s sessionSource) String(i int) string {
+func (s nameSource) String(i int) string { return s[i].ProjectName }
+func (s nameSource) Len() int            { return len(s) }
+
+// fullSource searches all fields (lower weight fallback).
+type fullSource []*session.Session
+
+func (s fullSource) String(i int) string {
 	sess := s[i]
 	return strings.Join([]string{
 		sess.ProjectName,
 		sess.CWD,
 		sess.GitBranch,
 		sess.Summary,
+		sess.TmuxSession,
 	}, " ")
 }
 
-func (s sessionSource) Len() int {
-	return len(s)
-}
+func (s fullSource) Len() int { return len(s) }
 
 // NewSearch creates a SearchModel.
 func NewSearch() SearchModel {
@@ -129,12 +135,72 @@ func (m *SearchModel) runSearch() {
 		return
 	}
 
-	source := sessionSource(m.sessions)
-	matches := fuzzy.FindFrom(query, source)
+	// Scoring strategy:
+	//   3000  -- fuzzy match on project name (typo-tolerant, highest priority)
+	//   2000  -- case-insensitive substring match on summary (reliable content search)
+	//    500  -- case-insensitive substring match on CWD / git branch / tmux session
+	//   fuzzy score (< 500) -- fuzzy fallback on full concatenated fields
+	type scored struct {
+		session *session.Session
+		score   int
+	}
 
-	m.results = make([]*session.Session, len(matches))
-	for i, match := range matches {
-		m.results[i] = m.sessions[match.Index]
+	lower := strings.ToLower(query)
+	bestScore := make(map[int]int) // session index -> best weighted score
+
+	// Fuzzy match on project name (highest weight, typo-tolerant).
+	nameMatches := fuzzy.FindFrom(query, nameSource(m.sessions))
+	for _, match := range nameMatches {
+		s := 3000 + match.Score
+		if s > bestScore[match.Index] {
+			bestScore[match.Index] = s
+		}
+	}
+
+	// Substring match on summary -- reliable for keyword content search.
+	for i, sess := range m.sessions {
+		if sess.Summary != "" && strings.Contains(strings.ToLower(sess.Summary), lower) {
+			s := 2000
+			if s > bestScore[i] {
+				bestScore[i] = s
+			}
+		}
+	}
+
+	// Substring match on other fields: CWD, git branch, tmux session name.
+	for i, sess := range m.sessions {
+		fields := []string{sess.CWD, sess.GitBranch, sess.TmuxSession}
+		for _, f := range fields {
+			if f != "" && strings.Contains(strings.ToLower(f), lower) {
+				s := 500
+				if s > bestScore[i] {
+					bestScore[i] = s
+				}
+				break
+			}
+		}
+	}
+
+	// Fuzzy fallback on the full concatenated string (catches partial matches
+	// not covered by substring search above, e.g. typos in CWD).
+	fullMatches := fuzzy.FindFrom(query, fullSource(m.sessions))
+	for _, match := range fullMatches {
+		if match.Score > bestScore[match.Index] {
+			bestScore[match.Index] = match.Score
+		}
+	}
+
+	var results []scored
+	for idx, score := range bestScore {
+		results = append(results, scored{session: m.sessions[idx], score: score})
+	}
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].score > results[j].score
+	})
+
+	m.results = make([]*session.Session, len(results))
+	for i, r := range results {
+		m.results[i] = r.session
 	}
 
 	if m.cursor >= len(m.results) {

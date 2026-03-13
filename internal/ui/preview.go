@@ -8,8 +8,9 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/tomhalo/naviclaude/internal/session"
-	"github.com/tomhalo/naviclaude/internal/styles"
+	"github.com/charmbracelet/x/ansi"
+	"github.com/thbits/naviClaude/internal/session"
+	"github.com/thbits/naviClaude/internal/styles"
 )
 
 // PreviewModel is the right panel that shows captured terminal content for the
@@ -34,9 +35,24 @@ func NewPreview(width, height int) PreviewModel {
 }
 
 // SetContent updates the terminal capture displayed in the viewport.
+// Lines wider than the viewport are truncated using ANSI-aware truncation.
+// For live sessions, the viewport auto-scrolls to the bottom to follow output.
+// The scroll position is only preserved when the user has manually scrolled up.
 func (m *PreviewModel) SetContent(content string) {
 	m.content = content
+	if m.viewport.Width > 0 {
+		lines := strings.Split(content, "\n")
+		for i, line := range lines {
+			if ansi.StringWidth(line) > m.viewport.Width {
+				lines[i] = ansi.Truncate(line, m.viewport.Width, "")
+			}
+		}
+		content = strings.Join(lines, "\n")
+	}
+	// For live captures, auto-scroll to the bottom so the user sees the
+	// latest output. This matches terminal behavior.
 	m.viewport.SetContent(content)
+	m.viewport.GotoBottom()
 }
 
 // SetSession updates the header metadata.
@@ -67,6 +83,11 @@ func (m *PreviewModel) SetSize(w, h int) {
 	}
 	m.viewport.Width = contentWidth
 	m.viewport.Height = contentHeight
+
+	// Re-wrap existing content to the new width so lines don't overflow.
+	if m.content != "" {
+		m.viewport.SetContent(m.content)
+	}
 }
 
 // ScrollUp scrolls the viewport up by n lines.
@@ -182,6 +203,103 @@ func (m PreviewModel) renderHeader() string {
 		headerStyle = styles.PreviewHeaderFocused
 	}
 	return headerStyle.Width(maxWidth).Render(headerLine)
+}
+
+// SetGroupSummary renders a summary view for a tmux session group.
+func (m *PreviewModel) SetGroupSummary(groupName string, sessions []*session.Session) {
+	m.session = nil
+
+	var active, waiting, idle int
+	models := map[string]int{}
+	projects := map[string]int{}
+	var totalCPU float64
+	var totalMem float64
+	var newest time.Time
+
+	for _, s := range sessions {
+		switch s.Status {
+		case session.StatusActive:
+			active++
+		case session.StatusWaiting:
+			waiting++
+		case session.StatusIdle:
+			idle++
+		}
+		if s.Model != "" {
+			models[s.Model]++
+		}
+		if s.ProjectName != "" {
+			projects[s.ProjectName]++
+		}
+		totalCPU += s.CPU
+		totalMem += s.Memory
+		if s.LastActivity.After(newest) {
+			newest = s.LastActivity
+		}
+	}
+
+	label := lipgloss.NewStyle().Foreground(styles.ColorGray)
+	value := lipgloss.NewStyle().Foreground(styles.ColorCyan)
+	sep := lipgloss.NewStyle().Foreground(styles.ColorGray).Render(strings.Repeat("\u2500", 35))
+
+	var b strings.Builder
+	b.WriteString("\n")
+	b.WriteString("  " + lipgloss.NewStyle().Foreground(styles.ColorBlue).Bold(true).Render(groupName) + "\n")
+	b.WriteString("  " + sep + "\n\n")
+
+	// Status breakdown.
+	b.WriteString("  " + label.Render("Sessions  ") + value.Render(fmt.Sprintf("%d", len(sessions))))
+	if active > 0 {
+		b.WriteString("  " + lipgloss.NewStyle().Foreground(styles.ColorGreen).Render(fmt.Sprintf("%d active", active)))
+	}
+	if waiting > 0 {
+		b.WriteString("  " + lipgloss.NewStyle().Foreground(styles.ColorAmber).Render(fmt.Sprintf("%d waiting", waiting)))
+	}
+	if idle > 0 {
+		b.WriteString("  " + lipgloss.NewStyle().Foreground(styles.ColorGray).Render(fmt.Sprintf("%d idle", idle)))
+	}
+	b.WriteString("\n")
+
+	// Resources (if any active).
+	if active+waiting > 0 {
+		b.WriteString("  " + label.Render("Resources ") +
+			value.Render(fmt.Sprintf("CPU %.1f%%  MEM %.0fMB", totalCPU, totalMem)) + "\n")
+	}
+
+	// Last activity.
+	if !newest.IsZero() {
+		b.WriteString("  " + label.Render("Activity  ") +
+			value.Render(relativeTime(time.Since(newest))+" ago") + "\n")
+	}
+
+	b.WriteString("\n")
+
+	// Models used.
+	if len(models) > 0 {
+		b.WriteString("  " + label.Render("Models") + "\n")
+		for model, count := range models {
+			b.WriteString(fmt.Sprintf("    %s %s\n",
+				value.Render(fmt.Sprintf("%d", count)),
+				label.Render(model)))
+		}
+		b.WriteString("\n")
+	}
+
+	// Projects in this session.
+	if len(projects) > 0 {
+		b.WriteString("  " + label.Render("Projects") + "\n")
+		for project, count := range projects {
+			b.WriteString(fmt.Sprintf("    %s %s\n",
+				value.Render(fmt.Sprintf("%d", count)),
+				label.Render(project)))
+		}
+		b.WriteString("\n")
+	}
+
+	b.WriteString("  " + lipgloss.NewStyle().Foreground(styles.ColorGray).Render("Select a session to preview") + "\n")
+
+	m.content = b.String()
+	m.viewport.SetContent(m.content)
 }
 
 func (m PreviewModel) statusBadge(status session.SessionStatus) string {

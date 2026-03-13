@@ -10,8 +10,8 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/tomhalo/naviclaude/internal/session"
-	"github.com/tomhalo/naviclaude/internal/styles"
+	"github.com/thbits/naviClaude/internal/session"
+	"github.com/thbits/naviClaude/internal/styles"
 )
 
 // sessionGroup groups sessions by their tmux session name (or "Closed").
@@ -36,22 +36,59 @@ type SidebarModel struct {
 	width             int
 	height            int
 	collapsed         map[string]bool
-	ConfirmKillTarget string // tmux target of session pending kill confirmation
+	savedCollapsed    map[string]bool // snapshot before search expand-all
+	userToggled       map[string]bool // tracks groups the user has manually toggled
+	searchActive      bool            // when true, skip auto-collapse in rebuildGroups
+	ConfirmKillTarget string          // tmux target of session pending kill confirmation
 	vp                viewport.Model
-	cursorLineStart   int // actual line index where the cursor item starts
-	cursorLineCount   int // actual number of lines the cursor item occupies
-	activeCount       int // cached count of non-closed sessions
+	cursorLineStart   int     // actual line index where the cursor item starts
+	cursorLineCount   int     // actual number of lines the cursor item occupies
+	activeCount       int     // cached count of non-closed sessions
+	collapseAfterHrs  float64 // auto-collapse groups idle longer than this (hours)
 }
 
 // NewSidebar creates a SidebarModel with the given dimensions.
 func NewSidebar(width, height int) SidebarModel {
 	vp := viewport.New(width, height-1) // -1 for header
 	return SidebarModel{
-		width:     width,
-		height:    height,
-		collapsed: make(map[string]bool),
-		vp:        vp,
+		width:       width,
+		height:      height,
+		collapsed:   make(map[string]bool),
+		userToggled: make(map[string]bool),
+		vp:          vp,
 	}
+}
+
+// SetCollapseAfterHours sets the threshold for auto-collapsing stale groups.
+func (m *SidebarModel) SetCollapseAfterHours(hours float64) {
+	m.collapseAfterHrs = hours
+}
+
+// ExpandAll sets search mode: all groups expand and stay expanded across
+// subsequent SetSessions calls until RestoreCollapsed is called.
+// Saves the current collapsed state so it can be restored later.
+func (m *SidebarModel) ExpandAll() {
+	m.searchActive = true
+	m.savedCollapsed = make(map[string]bool)
+	for k, v := range m.collapsed {
+		m.savedCollapsed[k] = v
+	}
+	for k := range m.collapsed {
+		m.collapsed[k] = false
+	}
+	m.rebuildFlatItems()
+	m.clampCursor()
+}
+
+// RestoreCollapsed clears search mode and restores the collapsed state saved
+// by ExpandAll, re-applying auto-collapse rules.
+func (m *SidebarModel) RestoreCollapsed() {
+	m.searchActive = false
+	if m.savedCollapsed != nil {
+		m.collapsed = m.savedCollapsed
+		m.savedCollapsed = nil
+	}
+	m.rebuildGroups()
 }
 
 // SetSessions rebuilds groups from the given sessions. Active sessions are
@@ -85,12 +122,29 @@ func (m *SidebarModel) rebuildGroups() {
 		}
 	}
 
-	// Sort group names alphabetically.
+	// Sort sessions within each group by LastActivity descending (most recent first).
+	for _, sessions := range groupMap {
+		sort.Slice(sessions, func(i, j int) bool {
+			return sessions[i].LastActivity.After(sessions[j].LastActivity)
+		})
+	}
+	sort.Slice(closedSessions, func(i, j int) bool {
+		return closedSessions[i].LastActivity.After(closedSessions[j].LastActivity)
+	})
+
+	// Sort group names by the most recent session activity (most active group first).
 	var names []string
 	for name := range groupMap {
 		names = append(names, name)
 	}
-	sort.Strings(names)
+	sort.Slice(names, func(i, j int) bool {
+		gi := groupMap[names[i]]
+		gj := groupMap[names[j]]
+		if len(gi) == 0 || len(gj) == 0 {
+			return len(gi) > len(gj)
+		}
+		return gi[0].LastActivity.After(gj[0].LastActivity)
+	})
 
 	m.groups = nil
 	for _, name := range names {
@@ -104,6 +158,46 @@ func (m *SidebarModel) rebuildGroups() {
 			Name:     "Closed",
 			Sessions: closedSessions,
 		})
+	}
+
+	// During search, all groups stay expanded so results are selectable.
+	if m.searchActive {
+		for k := range m.collapsed {
+			m.collapsed[k] = false
+		}
+		m.rebuildFlatItems()
+		m.clampCursor()
+		return
+	}
+
+	// Always collapse Closed group by default (unless user toggled it open).
+	if !m.userToggled["Closed"] {
+		m.collapsed["Closed"] = true
+	}
+
+	// Auto-collapse stale groups (unless user has manually toggled them).
+	if m.collapseAfterHrs > 0 {
+		cutoff := time.Now().Add(-time.Duration(m.collapseAfterHrs * float64(time.Hour)))
+		for _, g := range m.groups {
+			if g.Name == "Closed" {
+				continue
+			}
+			if m.userToggled[g.Name] {
+				continue // user has explicitly toggled this group; respect their choice
+			}
+			allStale := true
+			for _, s := range g.Sessions {
+				if s.LastActivity.After(cutoff) {
+					allStale = false
+					break
+				}
+			}
+			if allStale {
+				m.collapsed[g.Name] = true
+			} else {
+				m.collapsed[g.Name] = false
+			}
+		}
 	}
 
 	m.rebuildFlatItems()
@@ -184,6 +278,29 @@ func (m *SidebarModel) SelectedSession() *session.Session {
 	return item.session
 }
 
+// SelectedGroupName returns the group name if the cursor is on a group header,
+// or empty string otherwise.
+func (m *SidebarModel) SelectedGroupName() string {
+	if m.cursor < 0 || m.cursor >= len(m.flatItems) {
+		return ""
+	}
+	item := m.flatItems[m.cursor]
+	if item.isGroup {
+		return item.groupName
+	}
+	return ""
+}
+
+// GroupSessions returns the sessions belonging to a named group.
+func (m *SidebarModel) GroupSessions(name string) []*session.Session {
+	for _, g := range m.groups {
+		if g.Name == name {
+			return g.Sessions
+		}
+	}
+	return nil
+}
+
 // SelectByID moves the cursor to the session with the given ID.
 // Returns true if the session was found.
 func (m *SidebarModel) SelectByID(id string) bool {
@@ -260,6 +377,7 @@ func (m SidebarModel) Update(msg tea.Msg) (SidebarModel, tea.Cmd) {
 				item := m.flatItems[m.cursor]
 				if item.isGroup {
 					m.collapsed[item.groupName] = !m.collapsed[item.groupName]
+					m.userToggled[item.groupName] = true // user explicitly toggled
 					m.rebuildFlatItems()
 					m.clampCursor()
 				}
@@ -470,6 +588,7 @@ func (m SidebarModel) renderSessionItem(s *session.Session, isCursor bool) []str
 	icon := statusIcon(s.Status)
 	nameStyled := styles.SidebarProjectName.Render(displayName)
 	timeStyled := styles.SidebarTime.Render(relTime)
+
 	iconWidth := lipgloss.Width(icon)
 	nameWidth := lipgloss.Width(nameStyled)
 	timeWidth := lipgloss.Width(timeStyled)

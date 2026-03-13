@@ -5,7 +5,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/tomhalo/naviclaude/internal/styles"
+	"github.com/thbits/naviClaude/internal/styles"
 )
 
 const appVersion = "v0.1.0"

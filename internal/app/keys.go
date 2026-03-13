@@ -1,6 +1,6 @@
 package app
 
-import "github.com/tomhalo/naviclaude/internal/config"
+import "github.com/thbits/naviClaude/internal/config"
 
 // KeyMap holds configurable key bindings loaded from config.
 type KeyMap struct {
@@ -94,6 +94,8 @@ func (km KeyMap) StatusHints() []HelpBinding {
 		{km.Search, "search"},
 		{km.NewSession, "new"},
 		{km.KillSession, "kill"},
+		{km.Detail, "detail"},
+		{km.Stats, "stats"},
 		{km.Help, "help"},
 	}
 }

@@ -9,13 +9,13 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/tomhalo/naviclaude/internal/config"
-	"github.com/tomhalo/naviclaude/internal/preview"
-	"github.com/tomhalo/naviclaude/internal/session"
-	"github.com/tomhalo/naviclaude/internal/stats"
-	"github.com/tomhalo/naviclaude/internal/styles"
-	"github.com/tomhalo/naviclaude/internal/tmux"
-	"github.com/tomhalo/naviclaude/internal/ui"
+	"github.com/thbits/naviClaude/internal/config"
+	"github.com/thbits/naviClaude/internal/preview"
+	"github.com/thbits/naviClaude/internal/session"
+	"github.com/thbits/naviClaude/internal/stats"
+	"github.com/thbits/naviClaude/internal/styles"
+	"github.com/thbits/naviClaude/internal/tmux"
+	"github.com/thbits/naviClaude/internal/ui"
 )
 
 // tickPreviewMsg triggers a preview capture refresh.
@@ -103,7 +103,8 @@ type Model struct {
 	err              error              // last error, shown briefly
 	confirmKill      bool               // waiting for kill confirmation
 	confirmSession   *session.Session   // session pending kill confirmation
-	pendingNewTarget string             // tmux target of a just-created session; kept until detected
+	pendingNewTarget    string // tmux target of a just-created session; kept until detected
+	previewTarget       string // tmux target currently shown in the preview panel
 
 	// Stats cache
 	statsCache *stats.Cache
@@ -139,7 +140,7 @@ func New() Model {
 
 		// Backend
 		tmuxClient:     tc,
-		detector:       session.NewDetector(tc, cfg.ProcessNames),
+		detector:       session.NewDetector(tc, cfg.ProcessNames, cfg.ActiveWindowSecs),
 		historyScanner: hs,
 		manager:        session.NewManager(tc),
 		captureEngine:  preview.NewCaptureEngine(tc),
@@ -159,6 +160,9 @@ func New() Model {
 		currentTmuxSession: detectCurrentTmuxSession(),
 		isPopup:            os.Getenv("TMUX_POPUP") != "",
 	}
+
+	// Wire auto-collapse threshold.
+	m.sidebar.SetCollapseAfterHours(cfg.CollapseAfterHours)
 
 	// Wire dynamic key labels into help and status bar.
 	helpBindings := keys.HelpBindings()
@@ -305,6 +309,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case previewCaptureMsg:
+		// Discard stale results: if the user navigated away while the capture
+		// was in flight, the result belongs to a different session.
+		if sel := m.sidebar.SelectedSession(); sel == nil || sel.TmuxTarget != msg.target {
+			return m, nil
+		}
 		if msg.err != nil {
 			// Pane may have disappeared; not fatal.
 			m.preview.SetContent(fmt.Sprintf("  Capture failed: %s", msg.err))
@@ -435,18 +444,17 @@ func (m Model) View() string {
 
 	screen := lipgloss.JoinVertical(lipgloss.Left, titleBar, mainContent, statusView)
 
-	// Render overlays on top.
+	// Render overlays on top, composited over the main window.
 	if m.statsModel.IsVisible() {
-		screen = m.statsModel.View()
+		screen = ui.PlaceOverlay(screen, m.statsModel.View())
 	}
 
 	if m.detail.IsVisible() {
-		screen = m.detail.View()
+		screen = ui.PlaceOverlay(screen, m.detail.View())
 	}
 
 	if m.help.IsVisible() {
-		helpView := m.help.View()
-		screen = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, helpView)
+		screen = ui.PlaceOverlay(screen, m.help.View())
 	}
 
 	if m.contextMenu.IsVisible() {
@@ -524,6 +532,7 @@ func (m Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Push initial (unfiltered) results to sidebar immediately so
 		// active sessions don't linger from the previous full list.
 		m.sidebar.SetSessions(m.search.Results())
+		m.sidebar.ExpandAll() // show all groups including Closed during search
 		return m, nil
 
 	case KeyEnter, KeyTab:
@@ -536,7 +545,7 @@ func (m Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		if sess.Status == session.StatusClosed {
 			// Show conversation history in the preview pane.
-			m.preview.SetSession(sess)
+			m.selectPreviewSession(sess)
 			return m, m.loadClosedPreviewCmd(sess)
 		}
 		// Enter passthrough mode for active sessions.
@@ -589,11 +598,14 @@ func (m Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.sidebar, cmd = m.sidebar.Update(msg)
 		// After navigation, update preview session header.
 		if sel := m.sidebar.SelectedSession(); sel != nil {
-			m.preview.SetSession(sel)
+			m.selectPreviewSession(sel)
 			// Auto-load conversation preview for closed sessions.
 			if sel.Status == session.StatusClosed {
 				return m, tea.Batch(cmd, m.loadClosedPreviewCmd(sel))
 			}
+		} else if groupName := m.sidebar.SelectedGroupName(); groupName != "" {
+			// Show group summary when hovering on a group header.
+			m.preview.SetGroupSummary(groupName, m.sidebar.GroupSessions(groupName))
 		}
 		return m, cmd
 	}
@@ -646,6 +658,7 @@ func (m Model) handleSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.mode = ModeList
 		m.statusbar.SetMode(ModeList.String())
 		m.sidebar.SetSessions(m.sessions)
+		m.sidebar.RestoreCollapsed()
 		return m, nil
 
 	case "enter":
@@ -653,6 +666,7 @@ func (m Model) handleSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		sess := m.sidebar.SelectedSession()
 		m.search.Deactivate()
 		m.sidebar.SetSessions(m.sessions)
+		m.sidebar.RestoreCollapsed()
 		if sess == nil {
 			// On a group header -- toggle collapse, stay in list mode.
 			m.mode = ModeList
@@ -664,7 +678,7 @@ func (m Model) handleSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.mode = ModeList
 			m.statusbar.SetMode(ModeList.String())
 			m.selectSessionInSidebar(sess)
-			m.preview.SetSession(sess)
+			m.selectPreviewSession(sess)
 			return m, m.loadClosedPreviewCmd(sess)
 		}
 		// Select and enter passthrough for active sessions.
@@ -679,7 +693,7 @@ func (m Model) handleSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.sidebar, cmd = m.sidebar.Update(msg)
 		if sel := m.sidebar.SelectedSession(); sel != nil {
-			m.preview.SetSession(sel)
+			m.selectPreviewSession(sel)
 			if sel.Status == session.StatusClosed {
 				return m, tea.Batch(cmd, m.loadClosedPreviewCmd(sel))
 			}
@@ -751,7 +765,7 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			var cmd tea.Cmd
 			m.sidebar, cmd = m.sidebar.Update(msg)
 			if sel := m.sidebar.SelectedSession(); sel != nil {
-				m.preview.SetSession(sel)
+				m.selectPreviewSession(sel)
 			}
 			return m, cmd
 		}
@@ -1107,7 +1121,7 @@ func (m *Model) applySessionRefresh(msg sessionRefreshMsg) {
 		for i, item := range m.sidebar.FlatItems() {
 			if item.Session != nil && item.Session.TmuxTarget == m.pendingNewTarget {
 				m.sidebar.SetCursor(i)
-				m.preview.SetSession(item.Session)
+				m.selectPreviewSession(item.Session)
 				return
 			}
 		}
@@ -1115,7 +1129,23 @@ func (m *Model) applySessionRefresh(msg sessionRefreshMsg) {
 
 	// Update the preview header for the currently selected session.
 	if sel := m.sidebar.SelectedSession(); sel != nil {
-		m.preview.SetSession(sel)
+		m.selectPreviewSession(sel)
+	}
+}
+
+// selectPreviewSession updates the preview header for the given session and
+// clears stale content when the selection changes to a different pane target.
+func (m *Model) selectPreviewSession(s *session.Session) {
+	target := ""
+	if s != nil {
+		target = s.TmuxTarget
+	}
+	if target != m.previewTarget {
+		m.previewTarget = target
+		m.preview.SetContent("")
+	}
+	if s != nil {
+		m.preview.SetSession(s)
 	}
 }
 

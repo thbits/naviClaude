@@ -5,9 +5,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/lipgloss"
-	"github.com/tomhalo/naviclaude/internal/stats"
-	"github.com/tomhalo/naviclaude/internal/styles"
+	"github.com/thbits/naviClaude/internal/stats"
+	"github.com/thbits/naviClaude/internal/styles"
 )
 
 const (
@@ -98,14 +97,14 @@ func (m StatsModel) View() string {
 		content := styles.StatsTitle.Render("Statistics") + "\n\n" +
 			styles.DetailLabel.Render("  Computing...")
 		popup := styles.StatsBorder.Render(content)
-		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, popup)
+		return popup
 	}
 
 	if m.stats == nil {
 		content := styles.StatsTitle.Render("Statistics") + "\n\n" +
 			styles.DetailLabel.Render("  No data available.")
 		popup := styles.StatsBorder.Render(content)
-		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, popup)
+		return popup
 	}
 
 	s := m.stats
@@ -148,9 +147,15 @@ func (m StatsModel) View() string {
 		lines = append(lines, "")
 	}
 
-	// Weekly activity bar chart.
+	// Activity bar chart.
 	if len(s.WeeklyActivity) > 0 {
-		lines = append(lines, styles.DetailLabel.Render("Weekly Activity"))
+		chartLabel := "Activity"
+		if s.Filter == "week" {
+			chartLabel = "Weekly Activity"
+		} else if s.Filter == "today" {
+			chartLabel = "Today's Activity"
+		}
+		lines = append(lines, styles.DetailLabel.Render(chartLabel))
 		maxMsgs := 0
 		for _, d := range s.WeeklyActivity {
 			if d.MessageCount > maxMsgs {
@@ -158,6 +163,15 @@ func (m StatsModel) View() string {
 			}
 		}
 		maxBarHeight := 6
+		// Use single-char bars for 30-day view, double for 7-day.
+		barChar := "\u2588"
+		spaceChar := " "
+		sepChar := ""
+		if len(s.WeeklyActivity) <= 7 {
+			barChar = "\u2588\u2588"
+			spaceChar = "  "
+			sepChar = " "
+		}
 		for row := maxBarHeight; row >= 1; row-- {
 			var rowStr strings.Builder
 			rowStr.WriteString("  ")
@@ -167,28 +181,42 @@ func (m StatsModel) View() string {
 					barHeight = d.MessageCount * maxBarHeight / maxMsgs
 				}
 				if barHeight >= row {
-					rowStr.WriteString(styles.StatsBar.Render("\u2588\u2588"))
+					rowStr.WriteString(styles.StatsBar.Render(barChar))
 				} else {
-					rowStr.WriteString("  ")
+					rowStr.WriteString(spaceChar)
 				}
-				rowStr.WriteString(" ")
+				rowStr.WriteString(sepChar)
 			}
 			lines = append(lines, rowStr.String())
 		}
-		// Day labels.
+		// Day labels -- show subset for 30-day view.
 		var dayLabels strings.Builder
 		dayLabels.WriteString("  ")
-		for _, d := range s.WeeklyActivity {
+		for i, d := range s.WeeklyActivity {
 			label := d.Date
-			if len(label) >= 10 {
-				t, err := time.Parse("2006-01-02", label)
-				if err == nil {
-					label = t.Format("Mon")[:2]
+			if len(s.WeeklyActivity) <= 7 {
+				// Weekly: show 2-letter day name.
+				if len(label) >= 10 {
+					t, err := time.Parse("2006-01-02", label)
+					if err == nil {
+						label = t.Format("Mon")[:2]
+					} else {
+						label = label[8:10]
+					}
+				}
+				dayLabels.WriteString(fmt.Sprintf("%-3s", label))
+			} else {
+				// 30-day: show day number every 7 days, space otherwise.
+				if i == 0 || i == len(s.WeeklyActivity)-1 || i%7 == 0 {
+					if len(label) >= 10 {
+						dayLabels.WriteString(label[8:10])
+					} else {
+						dayLabels.WriteString(" ")
+					}
 				} else {
-					label = label[8:10]
+					dayLabels.WriteString(" ")
 				}
 			}
-			dayLabels.WriteString(fmt.Sprintf("%-3s", label))
 		}
 		lines = append(lines, styles.DetailLabel.Render(dayLabels.String()))
 		lines = append(lines, "")
@@ -231,13 +259,15 @@ func (m StatsModel) View() string {
 		styles.DetailValue.Render(fmt.Sprintf("%02d:00", s.PeakHour)))
 
 	lines = append(lines, "")
+	lines = append(lines, styles.DetailLabel.Render("  Data from Claude Code's stats since installation"))
+	lines = append(lines, "")
 	lines = append(lines, styles.DetailLabel.Render("Tab")+" "+styles.HelpDesc.Render("filter")+"  "+
 		styles.DetailLabel.Render("Any key")+" "+styles.HelpDesc.Render("close"))
 
 	content := strings.Join(lines, "\n")
 	popup := styles.StatsBorder.Render(content)
 
-	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, popup)
+	return popup
 }
 
 func (m StatsModel) renderFilterBadge() string {

@@ -1,4 +1,4 @@
-module github.com/tomhalo/naviclaude
+module github.com/thbits/naviClaude
 
 go 1.26.1
 

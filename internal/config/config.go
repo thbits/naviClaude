@@ -17,6 +17,8 @@ type Config struct {
 	PopupHeight        int         `yaml:"popup_height"`
 	ResumeInCurrent    bool        `yaml:"resume_in_current_session"`
 	ProcessNames       []string    `yaml:"process_names"`
+	CollapseAfterHours float64     `yaml:"collapse_after_hours"`  // auto-collapse groups idle longer than this (0 = disabled)
+	ActiveWindowSecs   int         `yaml:"active_window_secs"`    // seconds after last .jsonl write to keep session "active" (default 5)
 }
 
 // KeyBindings maps user-facing actions to key names (tea.KeyMsg.String() format).
@@ -53,6 +55,8 @@ func DefaultConfig() Config {
 		PopupHeight:        85,
 		ResumeInCurrent:    true,
 		ProcessNames:       []string{"claude"},
+		CollapseAfterHours: 8,
+		ActiveWindowSecs:   5,
 	}
 }
 
@@ -104,6 +108,9 @@ func Load(path string) (Config, error) {
 	}
 	if len(cfg.ProcessNames) == 0 {
 		cfg.ProcessNames = []string{"claude"}
+	}
+	if cfg.ActiveWindowSecs == 0 {
+		cfg.ActiveWindowSecs = 5
 	}
 
 	return cfg, nil

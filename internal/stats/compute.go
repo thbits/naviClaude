@@ -129,40 +129,28 @@ func CountSessionFiles(claudeDir string) int {
 
 func filterDailyActivity(daily []dailyActivity, filter string) []DayActivity {
 	now := time.Now()
-	var cutoff time.Time
 
-	switch filter {
-	case "today":
-		cutoff = time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
-	case "week":
-		cutoff = now.AddDate(0, 0, -7)
-	default: // "all" -- last 7 days for the chart
-		cutoff = now.AddDate(0, 0, -7)
-	}
-
-	var result []DayActivity
+	// Build a map of all available daily data.
+	dayMap := make(map[string]DayActivity)
 	for _, d := range daily {
-		dt, err := time.Parse("2006-01-02", d.Date)
-		if err != nil {
-			continue
-		}
-		if dt.Before(cutoff) {
-			continue
-		}
-		result = append(result, DayActivity{
+		dayMap[d.Date] = DayActivity{
 			Date:         d.Date,
 			MessageCount: d.MessageCount,
 			SessionCount: d.SessionCount,
-		})
+		}
 	}
 
-	// Ensure we have entries for all 7 days (fill gaps with zeros).
-	if filter != "today" && len(result) < 7 {
-		dayMap := make(map[string]DayActivity)
-		for _, r := range result {
-			dayMap[r.Date] = r
+	switch filter {
+	case "today":
+		key := now.Format("2006-01-02")
+		if da, ok := dayMap[key]; ok {
+			return []DayActivity{da}
 		}
-		result = nil
+		return []DayActivity{{Date: key}}
+
+	case "week":
+		// Last 7 days.
+		var result []DayActivity
 		for i := 6; i >= 0; i-- {
 			d := now.AddDate(0, 0, -i)
 			key := d.Format("2006-01-02")
@@ -172,9 +160,21 @@ func filterDailyActivity(daily []dailyActivity, filter string) []DayActivity {
 				result = append(result, DayActivity{Date: key})
 			}
 		}
-	}
+		return result
 
-	return result
+	default: // "all" -- last 30 days for the chart
+		var result []DayActivity
+		for i := 29; i >= 0; i-- {
+			d := now.AddDate(0, 0, -i)
+			key := d.Format("2006-01-02")
+			if da, ok := dayMap[key]; ok {
+				result = append(result, da)
+			} else {
+				result = append(result, DayActivity{Date: key})
+			}
+		}
+		return result
+	}
 }
 
 func groupModelUsage(usage map[string]modelUsageRaw) []ModelUsageEntry {
@@ -236,7 +236,11 @@ func supplementStaleData(st *Stats, claudeDir string, lastDate time.Time) {
 		return
 	}
 
-	dayCounts := make(map[string]int)
+	type dayStats struct {
+		sessions int
+		messages int // estimated from file count (each session ~ some messages)
+	}
+	dayCounts := make(map[string]*dayStats)
 	for _, f := range files {
 		info, err := os.Stat(f)
 		if err != nil {
@@ -244,7 +248,16 @@ func supplementStaleData(st *Stats, claudeDir string, lastDate time.Time) {
 		}
 		if info.ModTime().After(lastDate) {
 			day := info.ModTime().Format("2006-01-02")
-			dayCounts[day]++
+			if dayCounts[day] == nil {
+				dayCounts[day] = &dayStats{}
+			}
+			dayCounts[day].sessions++
+			// Estimate messages from file size (roughly 1 message per 2KB).
+			msgs := int(info.Size() / 2048)
+			if msgs < 1 {
+				msgs = 1
+			}
+			dayCounts[day].messages += msgs
 		}
 	}
 
@@ -253,12 +266,21 @@ func supplementStaleData(st *Stats, claudeDir string, lastDate time.Time) {
 	for i := range st.WeeklyActivity {
 		dayMap[st.WeeklyActivity[i].Date] = &st.WeeklyActivity[i]
 	}
-	for day, count := range dayCounts {
+	for day, ds := range dayCounts {
 		if da, ok := dayMap[day]; ok {
 			if da.SessionCount == 0 {
-				da.SessionCount = count
+				da.SessionCount = ds.sessions
+			}
+			if da.MessageCount == 0 {
+				da.MessageCount = ds.messages
 			}
 		}
+	}
+
+	// Also supplement total counts.
+	for _, ds := range dayCounts {
+		st.TotalSessions += ds.sessions
+		st.TotalMessages += ds.messages
 	}
 }
 

@@ -7,7 +7,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/tomhalo/naviclaude/internal/session"
+	"github.com/thbits/naviClaude/internal/session"
 )
 
 // detailDataMsg carries data loaded from the session's .jsonl file.

@@ -3,7 +3,7 @@ package preview
 import (
 	"strings"
 
-	"github.com/tomhalo/naviclaude/internal/session"
+	"github.com/thbits/naviClaude/internal/session"
 )
 
 // StatusDetector detects the status of a Claude Code session by analyzing
@@ -35,48 +35,54 @@ func (d *StatusDetector) DetectFromContent(target, content string) session.Sessi
 // Reset is a no-op (kept for interface compatibility).
 func (d *StatusDetector) Reset(target string) {}
 
-// matchesInputPrompt reports whether the captured pane content ends with a
-// line that matches a known Claude Code input prompt:
-//   - The Unicode prompt character (U+276F) used by Claude Code (❯)
-//   - A [Y/n] or [y/N] confirmation prompt
-//   - An "Allow?" permission request
+// matchesInputPrompt reports whether the captured pane content contains a
+// known Claude Code interactive prompt within the last several non-empty lines.
+//
+// We do NOT detect the ❯ (U+276F) character because it is always visible in
+// every Claude session as part of the standard TUI layout. Instead we look for
+// specific interactive patterns that only appear when Claude needs user input.
 func matchesInputPrompt(content string) bool {
-	last := lastNonEmptyLine(content)
-	if last == "" {
-		return false
-	}
+	lines := lastNNonEmptyLines(content, 6)
+	for _, line := range lines {
+		lower := strings.ToLower(line)
 
-	// Claude Code prompt character: ❯ (U+276F), optionally followed by a space
-	// and cursor.
-	if strings.HasPrefix(last, "\u276f") {
-		return true
-	}
+		// Confirmation prompts: [Y/n] or [y/N]
+		if strings.Contains(lower, "[y/n]") || strings.Contains(lower, "[n/y]") {
+			return true
+		}
 
-	// Case-insensitive confirmation prompts: [Y/n] or [y/N]
-	lower := strings.ToLower(last)
-	if strings.Contains(lower, "[y/n]") || strings.Contains(lower, "[n/y]") {
-		return true
-	}
+		// Permission request
+		if strings.Contains(line, "Allow?") {
+			return true
+		}
 
-	// Permission request
-	if strings.Contains(last, "Allow?") {
-		return true
+		// Interactive selection menus (onboarding, trust dialog, etc.)
+		if strings.Contains(lower, "enter to select") ||
+			strings.Contains(lower, "enter to confirm") {
+			return true
+		}
+
+		// Interrupted session waiting for new direction
+		if strings.Contains(line, "What should Claude do instead?") {
+			return true
+		}
 	}
 
 	return false
 }
 
-// lastNonEmptyLine returns the last line in s that contains at least one
-// non-whitespace character after stripping ANSI escape sequences.
-func lastNonEmptyLine(s string) string {
+// lastNNonEmptyLines returns up to n non-empty lines from the end of the string
+// after stripping ANSI escape sequences.
+func lastNNonEmptyLines(s string, n int) []string {
 	lines := strings.Split(s, "\n")
-	for i := len(lines) - 1; i >= 0; i-- {
+	var result []string
+	for i := len(lines) - 1; i >= 0 && len(result) < n; i-- {
 		stripped := stripANSI(lines[i])
 		if strings.TrimSpace(stripped) != "" {
-			return stripped
+			result = append(result, stripped)
 		}
 	}
-	return ""
+	return result
 }
 
 // stripANSI removes ANSI/VT100 escape sequences from a string using a simple

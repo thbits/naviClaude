@@ -5,9 +5,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/lipgloss"
-	"github.com/tomhalo/naviclaude/internal/session"
-	"github.com/tomhalo/naviclaude/internal/styles"
+	"github.com/thbits/naviClaude/internal/session"
+	"github.com/thbits/naviClaude/internal/styles"
 )
 
 // DetailModel renders a centered popup with session metadata.
@@ -125,9 +124,7 @@ func (m DetailModel) View() string {
 	lines = append(lines, styles.HelpDesc.Render("Press any key to close"))
 
 	content := strings.Join(lines, "\n")
-	popup := styles.DetailBorder.Render(content)
-
-	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, popup)
+	return styles.DetailBorder.Render(content)
 }
 
 type detailRow struct {

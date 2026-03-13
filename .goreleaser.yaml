@@ -1,0 +1,59 @@
+version: 2
+
+project_name: naviclaude
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: naviclaude
+    main: ./cmd/naviclaude
+    binary: naviclaude
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+
+archives:
+  - id: naviclaude
+    format: tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - README.md
+
+checksum:
+  name_template: "checksums.txt"
+
+release:
+  github:
+    owner: thbits
+    name: naviClaude
+
+brews:
+  - name: naviclaude
+    repository:
+      owner: thbits
+      name: homebrew-naviclaude
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    homepage: "https://github.com/thbits/naviClaude"
+    description: "TUI for managing Claude Code sessions across tmux"
+    license: "MIT"
+    install: |
+      bin.install "naviclaude"
+    test: |
+      system "#{bin}/naviclaude", "--version"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"

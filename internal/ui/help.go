@@ -4,8 +4,7 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
-	"github.com/tomhalo/naviclaude/internal/styles"
+	"github.com/thbits/naviClaude/internal/styles"
 )
 
 // HelpModel renders a centered overlay popup with keybinding reference.
@@ -126,9 +125,7 @@ func (m HelpModel) View() string {
 
 	content := strings.Join(lines, "\n")
 
-	popup := styles.HelpBorder.Render(content)
-
-	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, popup)
+	return styles.HelpBorder.Render(content)
 }
 
 func renderBindings(bindings []helpBinding) []string {

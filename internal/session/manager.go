@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"strconv"
 
-	"github.com/tomhalo/naviclaude/internal/tmux"
+	"github.com/thbits/naviClaude/internal/tmux"
 )
 
 // Manager performs lifecycle operations on Claude sessions: creating new ones,

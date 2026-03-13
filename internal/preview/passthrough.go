@@ -2,7 +2,7 @@ package preview
 
 import (
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/tomhalo/naviclaude/internal/tmux"
+	"github.com/thbits/naviClaude/internal/tmux"
 )
 
 // Passthrough forwards Bubble Tea key events to a tmux pane via send-keys.

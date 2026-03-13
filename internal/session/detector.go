@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tomhalo/naviclaude/internal/tmux"
+	"github.com/thbits/naviClaude/internal/tmux"
 )
 
 // DefaultProcessNames is the default list of process names that indicate a
@@ -88,6 +88,7 @@ func (t *ProcessTree) Stats(pid int) (cpu float64, memMB float64) {
 	return t.cpu[pid], t.rss[pid] / 1024.0
 }
 
+
 // isAncestorOf reports whether ancestorPID is an ancestor of descendantPID
 // using the pre-built process tree.
 func (t *ProcessTree) isAncestorOf(ancestorPID, descendantPID int) bool {
@@ -129,19 +130,25 @@ func (t *ProcessTree) findMatchingDescendant(rootPID int, matchFunc func(string)
 type Detector struct {
 	tmuxClient   *tmux.Client
 	processNames []string
+	activeWindow time.Duration    // how recently .jsonl must be written to count as active
 	modelCache   map[string]string // sessionID -> model (cached, never changes mid-session)
 }
 
 // NewDetector creates a Detector that uses the given tmux client and matches
 // pane processes against processNames. If processNames is nil or empty, the
-// DefaultProcessNames list is used.
-func NewDetector(client *tmux.Client, processNames []string) *Detector {
+// DefaultProcessNames list is used. activeWindowSecs controls how many seconds
+// after the last .jsonl write a session is considered active (0 = use default 5s).
+func NewDetector(client *tmux.Client, processNames []string, activeWindowSecs int) *Detector {
 	if len(processNames) == 0 {
 		processNames = DefaultProcessNames
+	}
+	if activeWindowSecs <= 0 {
+		activeWindowSecs = 5
 	}
 	return &Detector{
 		tmuxClient:   client,
 		processNames: processNames,
+		activeWindow: time.Duration(activeWindowSecs) * time.Second,
 		modelCache:   make(map[string]string),
 	}
 }
@@ -162,6 +169,8 @@ func (d *Detector) cachedModel(sessionID, cwd string) string {
 
 // Detect returns all active sessions found by walking the process tree of
 // every tmux pane. It uses a single bulk ps call for the entire process tree.
+// It also performs lightweight prompt detection on each session's pane to
+// determine waiting-for-input status.
 func (d *Detector) Detect() ([]*Session, error) {
 	panes, err := d.tmuxClient.ListPanes()
 	if err != nil {
@@ -188,9 +197,99 @@ func (d *Detector) Detect() ([]*Session, error) {
 		if s == nil {
 			continue
 		}
+		// Prompt detection runs regardless of active/idle status -- a waiting
+		// prompt always takes priority.
+		if content, err := d.tmuxClient.CapturePaneOutput(s.TmuxTarget); err == nil {
+			if isWaitingForInput(content) {
+				s.Status = StatusWaiting
+			}
+		}
 		sessions = append(sessions, s)
 	}
 	return sessions, nil
+}
+
+// isWaitingForInput checks if the pane content shows a Claude Code interactive
+// prompt. We do NOT look for the ❯ (U+276F) character because it is always
+// visible in every Claude session as part of the standard TUI layout (the input
+// prompt sits between separator lines and is always rendered, even when Claude
+// just finished responding).
+//
+// Instead we detect specific interactive UI patterns:
+//   - Confirmation prompts: [Y/n], [y/N], Allow?
+//   - Interactive selections: "Enter to select", "Enter to confirm"
+//   - Interrupted sessions: "What should Claude do instead?"
+//   - Permission prompts with action hints
+func isWaitingForInput(content string) bool {
+	lines := lastNNonEmptyLines(content, 6)
+	for _, line := range lines {
+		lower := strings.ToLower(line)
+
+		// Confirmation prompts: [Y/n] or [y/N]
+		if strings.Contains(lower, "[y/n]") || strings.Contains(lower, "[n/y]") {
+			return true
+		}
+
+		// Permission request
+		if strings.Contains(line, "Allow?") {
+			return true
+		}
+
+		// Interactive selection menus (onboarding, trust dialog, etc.)
+		if strings.Contains(lower, "enter to select") ||
+			strings.Contains(lower, "enter to confirm") {
+			return true
+		}
+
+		// Interrupted session waiting for new direction
+		if strings.Contains(line, "What should Claude do instead?") {
+			return true
+		}
+	}
+	return false
+}
+
+// lastNNonEmptyLines returns up to n non-empty lines from the end of the string
+// after stripping ANSI escape sequences.
+func lastNNonEmptyLines(s string, n int) []string {
+	lines := strings.Split(s, "\n")
+	var result []string
+	for i := len(lines) - 1; i >= 0 && len(result) < n; i-- {
+		stripped := stripANSIBasic(lines[i])
+		if strings.TrimSpace(stripped) != "" {
+			result = append(result, stripped)
+		}
+	}
+	return result
+}
+
+// stripANSIBasic removes ANSI/VT100 escape sequences and common Unicode
+// control characters from a string.
+func stripANSIBasic(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	i := 0
+	for i < len(s) {
+		c := s[i]
+		if c == '\x1b' && i+1 < len(s) && s[i+1] == '[' {
+			i += 2
+			for i < len(s) {
+				if s[i] >= 0x40 && s[i] <= 0x7e {
+					i++
+					break
+				}
+				i++
+			}
+			continue
+		}
+		if c == '\x1b' {
+			i += 2
+			continue
+		}
+		b.WriteByte(c)
+		i++
+	}
+	return b.String()
 }
 
 // sessionFromPane checks whether a pane is running a Claude process (directly
@@ -216,7 +315,7 @@ func (d *Detector) buildSession(pane tmux.PaneInfo, claudePID int, tree *Process
 		TmuxSession:  pane.SessionName,
 		TmuxTarget:   pane.Target,
 		CWD:          pane.CurrentPath,
-		Status:       StatusActive,
+		Status:       StatusIdle, // default; promoted below
 		LastActivity: time.Now(),
 		ProjectName:  filepath.Base(pane.CurrentPath),
 		PID:          claudePID,
@@ -228,12 +327,34 @@ func (d *Detector) buildSession(pane tmux.PaneInfo, claudePID int, tree *Process
 	// Populate CPU and memory from the bulk process tree (no per-session ps call).
 	s.CPU, s.Memory = tree.Stats(claudePID)
 
-	// Try to extract the model from the session .jsonl file (cached).
+	// Determine status from .jsonl mod time:
+	//   Active  -- the .jsonl file was written within the last 5s,
+	//              meaning Claude was recently generating or running tools
+	//   Idle    -- process running but the file hasn't been written recently
 	if s.ID != "" {
 		s.Model = d.cachedModel(s.ID, pane.CurrentPath)
+		if modTime := sessionFileModTime(s.ID, pane.CurrentPath); !modTime.IsZero() {
+			s.LastActivity = modTime
+			if time.Since(modTime) <= d.activeWindow {
+				s.Status = StatusActive
+			}
+		}
 	}
 
 	return s
+}
+
+// sessionFileModTime returns the modification time of a session's .jsonl file.
+func sessionFileModTime(sessionID, cwd string) time.Time {
+	path := SessionFilePath(sessionID, cwd)
+	if path == "" {
+		return time.Time{}
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return time.Time{}
+	}
+	return info.ModTime()
 }
 
 // extractSessionID attempts to determine the session ID for a running Claude

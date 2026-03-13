@@ -4,7 +4,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/x/ansi"
-	"github.com/tomhalo/naviclaude/internal/tmux"
+	"github.com/thbits/naviClaude/internal/tmux"
 )
 
 // CaptureEngine wraps the tmux client to capture pane content with ANSI
