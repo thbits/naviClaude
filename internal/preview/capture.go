@@ -32,13 +32,19 @@ func (e *CaptureEngine) Capture(target string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if e.maxWidth <= 0 {
-		return raw, nil
-	}
 	lines := strings.Split(raw, "\n")
-	for i, line := range lines {
-		if ansi.StringWidth(line) > e.maxWidth {
-			lines[i] = ansi.Truncate(line, e.maxWidth, "")
+
+	// Trim trailing blank lines so GotoBottom doesn't scroll past
+	// the actual content into empty space.
+	for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
+		lines = lines[:len(lines)-1]
+	}
+
+	if e.maxWidth > 0 {
+		for i, line := range lines {
+			if ansi.StringWidth(line) > e.maxWidth {
+				lines[i] = ansi.Truncate(line, e.maxWidth, "")
+			}
 		}
 	}
 	return strings.Join(lines, "\n"), nil

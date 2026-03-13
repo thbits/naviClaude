@@ -30,6 +30,9 @@ const (
 
 	// ModeThemePicker shows a centered popup for selecting a color theme.
 	ModeThemePicker
+
+	// ModeNameInput shows an inline text input for naming a new tmux session.
+	ModeNameInput
 )
 
 // String returns a short label suitable for the status bar.
@@ -51,6 +54,8 @@ func (m Mode) String() string {
 		return "stats"
 	case ModeThemePicker:
 		return "themepicker"
+	case ModeNameInput:
+		return "name input"
 	default:
 		return "unknown"
 	}

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -67,6 +68,14 @@ type newSessionMsg struct {
 	err         error
 }
 
+// newTmuxSessionMsg carries the result of creating a new tmux session with Claude.
+type newTmuxSessionMsg struct {
+	tmuxTarget  string
+	tmuxSession string
+	cwd         string
+	err         error
+}
+
 // errMsg is a transient error notification.
 type errMsg struct{ err error }
 
@@ -85,6 +94,7 @@ type Model struct {
 	detail      ui.DetailModel
 	statsModel  ui.StatsModel
 	themePicker ui.ThemePickerModel
+	nameInput   ui.NameInputModel
 
 	// Backend services
 	tmuxClient     *tmux.Client
@@ -105,6 +115,7 @@ type Model struct {
 	confirmKill      bool               // waiting for kill confirmation
 	confirmSession   *session.Session   // session pending kill confirmation
 	pendingNewTarget    string // tmux target of a just-created session; kept until detected
+	pendingNewTmuxCWD   string // CWD for the tmux session being named
 	previewTarget       string // tmux target currently shown in the preview panel
 
 	// Stats cache
@@ -146,6 +157,7 @@ func New(version string) Model {
 		detail:      ui.NewDetail(),
 		statsModel:  ui.NewStats(),
 		themePicker: ui.NewThemePicker(cfg.Theme),
+		nameInput:   ui.NewNameInput(),
 
 		// Backend
 		tmuxClient:     tc,
@@ -267,9 +279,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			active := m.mergePendingPlaceholder(msg.active)
 			m.activeSessions = active
-			m.sessions = active
-			if m.mode != ModeSearch {
-				m.sidebar.SetSessions(active)
+			// Don't push active-only to the sidebar if we already have closed
+			// sessions -- it would temporarily remove them and destabilize the
+			// cursor. The combined list is rebuilt once history arrives.
+			if len(m.sessions) == 0 {
+				m.sessions = active
+				if m.mode != ModeSearch {
+					m.sidebar.SetSessions(active)
+				}
 			}
 			if sel := m.sidebar.SelectedSession(); sel != nil {
 				m.preview.SetSession(sel)
@@ -327,6 +344,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			// Pane may have disappeared; not fatal.
 			m.preview.SetContent(fmt.Sprintf("  Capture failed: %s", msg.err))
+		} else if strings.TrimSpace(msg.content) == "" {
+			// Empty pane content (session still loading or idle blank screen).
+			m.preview.SetContent("  Waiting for session output...")
 		} else {
 			m.preview.SetContent(msg.content)
 			// Only apply Waiting status from preview detection.
@@ -371,6 +391,37 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Fire a refresh so the real session (with ID etc.) replaces the placeholder.
 		return m, m.refreshSessionsCmd()
 
+	case newTmuxSessionMsg:
+		if msg.err != nil {
+			m.err = fmt.Errorf("new tmux session: %w", msg.err)
+			return m, nil
+		}
+		// Create a placeholder session and select it in the sidebar.
+		placeholder := &session.Session{
+			TmuxSession:  msg.tmuxSession,
+			TmuxTarget:   msg.tmuxTarget,
+			CWD:          msg.cwd,
+			ProjectName:  filepath.Base(msg.cwd),
+			Status:       session.StatusActive,
+			LastActivity: time.Now(), // prevent auto-collapse of the new group
+		}
+		if placeholder.ProjectName == "" || placeholder.ProjectName == "." {
+			placeholder.ProjectName = "claude"
+		}
+		m.sessions = append([]*session.Session{placeholder}, m.sessions...)
+		m.sidebar.SetSessions(m.sessions)
+		// Select by target since ID is unknown yet.
+		for i, item := range m.sidebar.FlatItems() {
+			if item.Session != nil && item.Session.TmuxTarget == msg.tmuxTarget {
+				m.sidebar.SetCursor(i)
+				break
+			}
+		}
+		m.selectPreviewSession(placeholder)
+		m.pendingNewTarget = msg.tmuxTarget
+		// Stay in list mode -- the user can press Enter to focus if they want.
+		return m, m.refreshSessionsCmd()
+
 	case closedPreviewMsg:
 		if msg.err != nil {
 			m.preview.SetContent(fmt.Sprintf("  Could not load session: %s", msg.err))
@@ -412,8 +463,8 @@ func (m Model) View() string {
 		contentHeight = 1
 	}
 
-	// Build the sidebar column. If search is active, stack the search input
-	// above the sidebar.
+	// Build the sidebar column. If search or name input is active, stack
+	// the input above the sidebar.
 	var sidebarView string
 	if m.search.IsActive() {
 		searchView := m.search.View()
@@ -424,6 +475,15 @@ func (m Model) View() string {
 		}
 		m.sidebar.SetSize(sidebarWidth-1, remainingHeight)
 		sidebarView = lipgloss.JoinVertical(lipgloss.Left, searchView, m.sidebar.View())
+	} else if m.nameInput.IsActive() {
+		inputView := m.nameInput.View()
+		inputHeight := lipgloss.Height(inputView)
+		remainingHeight := contentHeight - inputHeight
+		if remainingHeight < 1 {
+			remainingHeight = 1
+		}
+		m.sidebar.SetSize(sidebarWidth-1, remainingHeight)
+		sidebarView = lipgloss.JoinVertical(lipgloss.Left, inputView, m.sidebar.View())
 	} else {
 		m.sidebar.SetSize(sidebarWidth-1, contentHeight)
 		sidebarView = m.sidebar.View()
@@ -523,6 +583,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleStatsKey(msg)
 	case ModeThemePicker:
 		return m.handleThemePickerKey(msg)
+	case ModeNameInput:
+		return m.handleNameInputKey(msg)
 	}
 	return m, nil
 }
@@ -585,6 +647,9 @@ func (m Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case m.keys.NewSession:
 		return m.createNewSession()
 
+	case m.keys.NewTmuxSession:
+		return m.createNewTmuxSession()
+
 	case m.keys.Detail:
 		sess := m.sidebar.SelectedSession()
 		if sess == nil {
@@ -638,9 +703,10 @@ func (m Model) handlePassthroughKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
 
 	switch key {
-	case KeyExitPassthrough, KeyExitPassthrough2:
+	case KeyExitPassthrough, KeyExitPassthrough2, KeyExitPassthrough3:
 		m.mode = ModeList
 		m.preview.SetPassthrough(false)
+		m.pendingNewTarget = "" // stop forcing cursor to new session
 		m.statusbar.SetMode(ModeList.String())
 		return m, nil
 
@@ -654,6 +720,7 @@ func (m Model) handlePassthroughKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			// No active session to forward to; exit passthrough.
 			m.mode = ModeList
 			m.preview.SetPassthrough(false)
+			m.pendingNewTarget = ""
 			m.statusbar.SetMode(ModeList.String())
 			m.statusbar.SetError("session ended — returned to list mode")
 			return m, nil
@@ -662,6 +729,7 @@ func (m Model) handlePassthroughKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			// Send-keys failed; session may have died.
 			m.mode = ModeList
 			m.preview.SetPassthrough(false)
+			m.pendingNewTarget = ""
 			m.statusbar.SetMode(ModeList.String())
 			m.statusbar.SetError("session ended — returned to list mode")
 			return m, nil
@@ -730,6 +798,30 @@ func (m Model) handleSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.search, cmd = m.search.Update(msg)
 		// Update sidebar with filtered results.
 		m.sidebar.SetSessions(m.search.Results())
+		return m, cmd
+	}
+}
+
+func (m Model) handleNameInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	key := msg.String()
+
+	switch key {
+	case "esc":
+		m.nameInput.Deactivate()
+		m.mode = ModeList
+		m.statusbar.SetMode(ModeList.String())
+		return m, nil
+
+	case "enter":
+		name := m.nameInput.Value()
+		m.nameInput.Deactivate()
+		m.mode = ModeList
+		m.statusbar.SetMode(ModeList.String())
+		return m.confirmNewTmuxSession(name)
+
+	default:
+		var cmd tea.Cmd
+		m.nameInput, cmd = m.nameInput.Update(msg)
 		return m, cmd
 	}
 }
@@ -948,6 +1040,46 @@ func (m Model) createNewSession() (tea.Model, tea.Cmd) {
 	}
 }
 
+func (m Model) createNewTmuxSession() (tea.Model, tea.Cmd) {
+	// Use configured directory, or fall back to home dir.
+	cwd := m.cfg.NewSessionDir
+	if cwd == "" {
+		cwd, _ = os.UserHomeDir()
+	}
+	// Expand ~ prefix.
+	if strings.HasPrefix(cwd, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			cwd = filepath.Join(home, cwd[2:])
+		}
+	} else if cwd == "~" {
+		cwd, _ = os.UserHomeDir()
+	}
+	m.pendingNewTmuxCWD = cwd
+	m.mode = ModeNameInput
+	m.nameInput.SetSize(m.sidebarWidth())
+	cmd := m.nameInput.Activate()
+	m.statusbar.SetMode(ModeNameInput.String())
+	return m, cmd
+}
+
+func (m Model) confirmNewTmuxSession(name string) (tea.Model, tea.Cmd) {
+	cwd := m.pendingNewTmuxCWD
+	manager := m.manager
+	claudeCmd := m.cfg.ClaudeCommand
+	sessionName := strings.TrimSpace(name)
+	return m, func() tea.Msg {
+		tmuxSess, target, err := manager.CreateNewTmuxSession(cwd, claudeCmd, sessionName)
+		if err != nil {
+			return newTmuxSessionMsg{err: err}
+		}
+		return newTmuxSessionMsg{
+			tmuxTarget:  target,
+			tmuxSession: tmuxSess,
+			cwd:         cwd,
+		}
+	}
+}
+
 func (m Model) executeContextAction(action string, sess *session.Session) (tea.Model, tea.Cmd) {
 	if sess == nil {
 		return m, nil
@@ -1155,18 +1287,6 @@ func (m *Model) applySessionRefresh(msg sessionRefreshMsg) {
 	// reflects any sessions that appeared/disappeared during the refresh.
 	if m.mode == ModeSearch {
 		m.sidebar.SetSessions(m.search.Results())
-	}
-
-	// If there's a pending new session, keep it selected after the refresh
-	// so the user stays focused on it in passthrough mode.
-	if m.pendingNewTarget != "" {
-		for i, item := range m.sidebar.FlatItems() {
-			if item.Session != nil && item.Session.TmuxTarget == m.pendingNewTarget {
-				m.sidebar.SetCursor(i)
-				m.selectPreviewSession(item.Session)
-				return
-			}
-		}
 	}
 
 	// Update the preview header for the currently selected session.
@@ -1404,7 +1524,7 @@ func (m Model) tickPreviewCmd() tea.Cmd {
 }
 
 func tickSession() tea.Cmd {
-	return tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
+	return tea.Tick(1*time.Second, func(t time.Time) tea.Msg {
 		return tickSessionMsg{}
 	})
 }

@@ -45,6 +45,13 @@ type SidebarModel struct {
 	cursorLineCount   int     // actual number of lines the cursor item occupies
 	activeCount       int     // cached count of non-closed sessions
 	collapseAfterHrs  float64 // auto-collapse groups idle longer than this (hours)
+
+	// Tracked selection: persists across data refreshes and is only updated
+	// by explicit user navigation (j/k, search select, SetCursor, SelectByID).
+	// rebuildGroups uses these to restore the cursor after re-sorting.
+	trackedID     string // session ID the cursor should follow
+	trackedTarget string // tmux target fallback (for placeholder sessions with no ID)
+	trackedGroup  string // group header name fallback
 }
 
 // NewSidebar creates a SidebarModel with the given dimensions.
@@ -111,11 +118,9 @@ func (m *SidebarModel) ActiveCount() int {
 }
 
 func (m *SidebarModel) rebuildGroups() {
-	// Remember which session is selected so we can follow it after sorting.
-	var selectedID string
-	if sel := m.SelectedSession(); sel != nil {
-		selectedID = sel.ID
-	}
+	// Use the tracked selection (set by user navigation) to restore the
+	// cursor after rebuilding. This is decoupled from the current cursor
+	// position so data refreshes never override the user's choice.
 
 	groupMap := make(map[string][]*session.Session)
 	var closedSessions []*session.Session
@@ -129,14 +134,21 @@ func (m *SidebarModel) rebuildGroups() {
 	}
 
 	// Sort sessions within each group by LastActivity descending (most recent first).
-	for _, sessions := range groupMap {
+	// Use ID as a stable tie-breaker to prevent flicker between refreshes.
+	stableSort := func(sessions []*session.Session) {
 		sort.Slice(sessions, func(i, j int) bool {
-			return sessions[i].LastActivity.After(sessions[j].LastActivity)
+			ti := sessions[i].LastActivity
+			tj := sessions[j].LastActivity
+			if !ti.Equal(tj) {
+				return ti.After(tj)
+			}
+			return sessions[i].ID < sessions[j].ID
 		})
 	}
-	sort.Slice(closedSessions, func(i, j int) bool {
-		return closedSessions[i].LastActivity.After(closedSessions[j].LastActivity)
-	})
+	for _, sessions := range groupMap {
+		stableSort(sessions)
+	}
+	stableSort(closedSessions)
 
 	// Sort group names by the most recent session activity (most active group first).
 	var names []string
@@ -149,7 +161,13 @@ func (m *SidebarModel) rebuildGroups() {
 		if len(gi) == 0 || len(gj) == 0 {
 			return len(gi) > len(gj)
 		}
-		return gi[0].LastActivity.After(gj[0].LastActivity)
+		ti := gi[0].LastActivity
+		tj := gj[0].LastActivity
+		if !ti.Equal(tj) {
+			return ti.After(tj)
+		}
+		// Stable tie-breaker: alphabetical by group name.
+		return names[i] < names[j]
 	})
 
 	m.groups = nil
@@ -172,7 +190,7 @@ func (m *SidebarModel) rebuildGroups() {
 			m.collapsed[k] = false
 		}
 		m.rebuildFlatItems()
-		m.restoreCursorByID(selectedID)
+		m.restoreCursor(m.trackedID, m.trackedTarget, m.trackedGroup)
 		return
 	}
 
@@ -207,7 +225,7 @@ func (m *SidebarModel) rebuildGroups() {
 	}
 
 	m.rebuildFlatItems()
-	m.restoreCursorByID(selectedID)
+	m.restoreCursor(m.trackedID, m.trackedTarget, m.trackedGroup)
 }
 
 func (m *SidebarModel) rebuildFlatItems() {
@@ -230,16 +248,52 @@ func (m *SidebarModel) rebuildFlatItems() {
 // restoreCursorByID moves the cursor to the session with the given ID after
 // a list rebuild. If the session is no longer in the flat list, falls back
 // to clampCursor so the index stays valid.
-func (m *SidebarModel) restoreCursorByID(id string) {
-	if id != "" {
+func (m *SidebarModel) restoreCursor(id, tmuxTarget, groupName string) {
+	// Best match: both ID and target (handles duplicate IDs across tmux sessions).
+	if id != "" && tmuxTarget != "" {
 		for i, item := range m.flatItems {
-			if !item.isGroup && item.session != nil && item.session.ID == id {
+			if !item.isGroup && item.session != nil && item.session.ID == id && item.session.TmuxTarget == tmuxTarget {
 				m.cursor = i
+				m.updateTracked()
 				m.syncViewport()
 				return
 			}
 		}
 	}
+	// Fall back to ID only.
+	if id != "" {
+		for i, item := range m.flatItems {
+			if !item.isGroup && item.session != nil && item.session.ID == id {
+				m.cursor = i
+				m.updateTracked()
+				m.syncViewport()
+				return
+			}
+		}
+	}
+	// Fall back to tmux target only (for placeholder sessions with no ID yet).
+	if tmuxTarget != "" {
+		for i, item := range m.flatItems {
+			if !item.isGroup && item.session != nil && item.session.TmuxTarget == tmuxTarget {
+				m.cursor = i
+				m.updateTracked()
+				m.syncViewport()
+				return
+			}
+		}
+	}
+	// Fall back to matching a group header by name.
+	if groupName != "" {
+		for i, item := range m.flatItems {
+			if item.isGroup && item.groupName == groupName {
+				m.cursor = i
+				m.updateTracked()
+				m.syncViewport()
+				return
+			}
+		}
+	}
+	// Session not found. Keep the cursor index as-is.
 	m.clampCursor()
 }
 
@@ -247,6 +301,9 @@ func (m *SidebarModel) clampCursor() {
 	if len(m.flatItems) == 0 {
 		m.cursor = 0
 		return
+	}
+	if m.cursor < 0 {
+		m.cursor = 0
 	}
 	if m.cursor >= len(m.flatItems) {
 		m.cursor = len(m.flatItems) - 1
@@ -329,6 +386,7 @@ func (m *SidebarModel) SelectByID(id string) bool {
 	for i, item := range m.flatItems {
 		if !item.isGroup && item.session != nil && item.session.ID == id {
 			m.cursor = i
+			m.updateTracked()
 			m.syncViewport()
 			return true
 		}
@@ -356,10 +414,29 @@ func (m *SidebarModel) Cursor() int {
 	return m.cursor
 }
 
-// SetCursor moves the cursor to the given index.
+// SetCursor moves the cursor to the given index and updates the tracked selection.
 func (m *SidebarModel) SetCursor(idx int) {
 	m.cursor = idx
+	m.updateTracked()
 	m.syncViewport()
+}
+
+// updateTracked saves the current cursor's identity so rebuildGroups can
+// restore it after re-sorting. Only call this after user-initiated navigation.
+func (m *SidebarModel) updateTracked() {
+	m.trackedID = ""
+	m.trackedTarget = ""
+	m.trackedGroup = ""
+	if m.cursor < 0 || m.cursor >= len(m.flatItems) {
+		return
+	}
+	item := m.flatItems[m.cursor]
+	if item.isGroup {
+		m.trackedGroup = item.groupName
+	} else if item.session != nil {
+		m.trackedID = item.session.ID
+		m.trackedTarget = item.session.TmuxTarget
+	}
 }
 
 // SetSize updates the sidebar dimensions.
@@ -388,11 +465,13 @@ func (m SidebarModel) Update(msg tea.Msg) (SidebarModel, tea.Cmd) {
 			if m.cursor < len(m.flatItems)-1 {
 				m.cursor++
 			}
+			m.updateTracked()
 			m.syncViewport()
 		case "k", "up":
 			if m.cursor > 0 {
 				m.cursor--
 			}
+			m.updateTracked()
 			m.syncViewport()
 		case "enter":
 			if m.cursor >= 0 && m.cursor < len(m.flatItems) {
@@ -407,10 +486,12 @@ func (m SidebarModel) Update(msg tea.Msg) (SidebarModel, tea.Cmd) {
 		case "G":
 			if len(m.flatItems) > 0 {
 				m.cursor = len(m.flatItems) - 1
+				m.updateTracked()
 				m.syncViewport()
 			}
 		case "g":
 			m.cursor = 0
+			m.updateTracked()
 			m.syncViewport()
 		}
 	}

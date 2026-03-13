@@ -155,6 +155,60 @@ func (c *Client) SplitWindow(opts SplitWindowOptions) error {
 	return nil
 }
 
+// NewSessionOptions holds parameters for tmux new-session.
+type NewSessionOptions struct {
+	Name       string // session name (-s flag)
+	WindowName string // initial window name (-n flag)
+	StartDir   string // working directory (-c flag)
+}
+
+// NewSessionPrint creates a new detached tmux session and returns the target
+// identifier of its first pane (e.g. "newsess:0.0").
+func (c *Client) NewSessionPrint(opts NewSessionOptions) (string, error) {
+	format := "#{session_name}:#{window_index}.#{pane_index}"
+	args := []string{"new-session", "-d", "-P", "-F", format}
+	if opts.Name != "" {
+		args = append(args, "-s", opts.Name)
+	}
+	if opts.WindowName != "" {
+		args = append(args, "-n", opts.WindowName)
+	}
+	if opts.StartDir != "" {
+		args = append(args, "-c", opts.StartDir)
+	}
+	out, err := exec.Command("tmux", args...).Output()
+	if err != nil {
+		return "", fmt.Errorf("tmux new-session: %w", err)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// ResizeToClient resizes all windows in a session to match the current client
+// dimensions. This is needed for detached sessions which default to 80x24.
+func (c *Client) ResizeToClient(sessionName string) error {
+	// Get client dimensions.
+	out, err := exec.Command("tmux", "display-message", "-p", "#{client_width} #{client_height}").Output()
+	if err != nil {
+		return err
+	}
+	parts := strings.Fields(strings.TrimSpace(string(out)))
+	if len(parts) != 2 {
+		return fmt.Errorf("unexpected tmux display-message output: %q", string(out))
+	}
+	w, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return err
+	}
+	h, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return err
+	}
+	// Resize the session's window.
+	target := sessionName + ":"
+	exec.Command("tmux", "resize-window", "-t", target, "-x", strconv.Itoa(w), "-y", strconv.Itoa(h)).Run()
+	return nil
+}
+
 // NewWindowOptions holds parameters for tmux new-window.
 type NewWindowOptions struct {
 	Target  string // session target, e.g. "mysession:"

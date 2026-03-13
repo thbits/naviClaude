@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/thbits/naviClaude/internal/tmux"
 )
@@ -68,6 +69,53 @@ func (m *Manager) Kill(sess *Session) error {
 		return fmt.Errorf("kill process %d: %w", sess.PID, err)
 	}
 	return nil
+}
+
+// CreateNewTmuxSession creates a brand new tmux session (detached), sends the
+// given command to start Claude, and returns the pane target. The command is
+// sent via send-keys so that shell aliases and PATH are respected.
+// If sessionName is empty, the directory basename is used as the tmux session name.
+func (m *Manager) CreateNewTmuxSession(cwd, claudeCmd, sessionName string) (tmuxSession, target string, err error) {
+	if cwd == "" {
+		cwd = "."
+	}
+	windowName := filepath.Base(cwd)
+	if windowName == "" || windowName == "." || windowName == "/" {
+		windowName = "claude"
+	}
+	if sessionName == "" {
+		sessionName = windowName
+	}
+
+	target, err = m.tmuxClient.NewSessionPrint(tmux.NewSessionOptions{
+		Name:       sessionName,
+		WindowName: windowName,
+		StartDir:   cwd,
+	})
+	if err == nil {
+		// Resize to match the current client so the pane isn't tiny (detached
+		// sessions default to 80x24). Errors are non-fatal.
+		m.tmuxClient.ResizeToClient(sessionName)
+	}
+	if err != nil {
+		return "", "", fmt.Errorf("create tmux session: %w", err)
+	}
+
+	// Send the claude command to the new pane so aliases resolve.
+	if claudeCmd != "" {
+		if err := m.tmuxClient.SendKeys(target, claudeCmd); err != nil {
+			return "", "", fmt.Errorf("send claude command: %w", err)
+		}
+		if err := m.tmuxClient.SendKeys(target, "Enter"); err != nil {
+			return "", "", fmt.Errorf("send enter: %w", err)
+		}
+	}
+
+	// Extract the tmux session name from the target (e.g. "mysess:0.0" -> "mysess").
+	parts := strings.SplitN(target, ":", 2)
+	tmuxSession = parts[0]
+
+	return tmuxSession, target, nil
 }
 
 // CreateNew opens a new tmux window in targetTmuxSession, changes to cwd, and

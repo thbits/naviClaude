@@ -21,6 +21,8 @@ type Config struct {
 	CollapseAfterHours float64     `yaml:"collapse_after_hours"`  // auto-collapse groups idle longer than this (0 = disabled)
 	ActiveWindowSecs   int         `yaml:"active_window_secs"`    // seconds after last .jsonl write to keep session "active" (default 5)
 	Theme              string      `yaml:"theme"`                 // color theme name (default "tokyo-night")
+	ClaudeCommand      string      `yaml:"claude_command"`        // command to start Claude in new sessions (default "claude")
+	NewSessionDir      string      `yaml:"new_session_dir"`       // working directory for new tmux sessions (default "~")
 }
 
 // KeyBindings maps user-facing actions to key names (tea.KeyMsg.String() format).
@@ -28,7 +30,8 @@ type KeyBindings struct {
 	Focus       string `yaml:"focus"`
 	Jump        string `yaml:"jump"`
 	Search      string `yaml:"search"`
-	NewSession  string `yaml:"new_session"`
+	NewSession      string `yaml:"new_session"`
+	NewTmuxSession  string `yaml:"new_tmux_session"`
 	KillSession string `yaml:"kill_session"`
 	Detail      string `yaml:"detail"`
 	Stats       string `yaml:"stats"`
@@ -43,7 +46,8 @@ func DefaultConfig() Config {
 			Focus:       "enter",
 			Jump:        "f",
 			Search:      "/",
-			NewSession:  "n",
+			NewSession:     "n",
+			NewTmuxSession: "N",
 			KillSession: "K",
 			Detail:      "d",
 			Stats:       "s",
@@ -60,6 +64,7 @@ func DefaultConfig() Config {
 		CollapseAfterHours: 8,
 		ActiveWindowSecs:   5,
 		Theme:              "tokyo-night",
+		ClaudeCommand:      "claude",
 	}
 }
 
@@ -136,6 +141,9 @@ func Load(path string) (Config, error) {
 	}
 	if cfg.Theme == "" {
 		cfg.Theme = "tokyo-night"
+	}
+	if cfg.ClaudeCommand == "" {
+		cfg.ClaudeCommand = "claude"
 	}
 
 	return cfg, nil

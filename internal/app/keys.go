@@ -4,29 +4,31 @@ import "github.com/thbits/naviClaude/internal/config"
 
 // KeyMap holds configurable key bindings loaded from config.
 type KeyMap struct {
-	Quit        string
-	Search      string
-	Focus       string
-	Jump        string
-	NewSession  string
-	KillSession string
-	Detail      string
-	Stats       string
-	Help        string
+	Quit           string
+	Search         string
+	Focus          string
+	Jump           string
+	NewSession     string
+	NewTmuxSession string
+	KillSession    string
+	Detail         string
+	Stats          string
+	Help           string
 }
 
 // DefaultKeyMap returns the default key bindings.
 func DefaultKeyMap() KeyMap {
 	return KeyMap{
-		Quit:        "q",
-		Search:      "/",
-		Focus:       "enter",
-		Jump:        "f",
-		NewSession:  "n",
-		KillSession: "K",
-		Detail:      "d",
-		Stats:       "s",
-		Help:        "?",
+		Quit:           "q",
+		Search:         "/",
+		Focus:          "enter",
+		Jump:           "f",
+		NewSession:     "n",
+		NewTmuxSession: "N",
+		KillSession:    "K",
+		Detail:         "d",
+		Stats:          "s",
+		Help:           "?",
 	}
 }
 
@@ -48,6 +50,9 @@ func KeyMapFromConfig(kb config.KeyBindings) KeyMap {
 	}
 	if kb.NewSession != "" {
 		km.NewSession = kb.NewSession
+	}
+	if kb.NewTmuxSession != "" {
+		km.NewTmuxSession = kb.NewTmuxSession
 	}
 	if kb.KillSession != "" {
 		km.KillSession = kb.KillSession
@@ -79,6 +84,7 @@ func (km KeyMap) HelpBindings() []HelpBinding {
 		{"Ctrl+U/Ctrl+D", "Scroll preview"},
 		{km.Search, "Search"},
 		{km.NewSession, "New session"},
+		{km.NewTmuxSession, "New tmux session"},
 		{km.KillSession, "Kill session"},
 		{km.Detail, "Detail"},
 		{km.Stats, "Stats"},
@@ -95,6 +101,7 @@ func (km KeyMap) StatusHints() []HelpBinding {
 		{km.Jump, "jump"},
 		{km.Search, "search"},
 		{km.NewSession, "new"},
+		{km.NewTmuxSession, "new tmux session"},
 		{km.KillSession, "kill"},
 		{km.Detail, "detail"},
 		{km.Stats, "stats"},
@@ -109,6 +116,7 @@ const (
 	KeyCtrlC            = "ctrl+c"
 	KeyExitPassthrough  = "tab"
 	KeyExitPassthrough2 = "ctrl+]"
+	KeyExitPassthrough3 = "shift+tab"
 	KeyJumpFromPT       = "ctrl+f"
 	KeyMenuCancel       = "esc"
 	KeyMenuSelect       = "enter"

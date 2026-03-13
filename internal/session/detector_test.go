@@ -502,10 +502,9 @@ func TestParseSessionFile(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		// Empty file still gets an ID from filename, so sess is non-nil.
-		// The session will have ID "empty" from the filename.
-		if sess == nil {
-			t.Fatal("expected session with ID from filename")
+		// Empty file has no CWD, so it should be skipped (returns nil).
+		if sess != nil {
+			t.Fatal("expected nil for empty file with no CWD")
 		}
 	})
 

@@ -258,8 +258,9 @@ func parseSessionFile(filePath string) (*Session, error) {
 		return nil, err
 	}
 
-	// A file that produced no usable records (or had no session ID) is skipped.
-	if sess.ID == "" {
+	// A file that produced no usable records, no session ID, or no CWD
+	// (e.g. empty or metadata-only .jsonl) is skipped.
+	if sess.ID == "" || sess.CWD == "" {
 		return nil, nil
 	}
 
