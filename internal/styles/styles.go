@@ -192,6 +192,21 @@ var PreviewPassthroughBadge = lipgloss.NewStyle().
 	Foreground(ColorGreen).
 	Bold(true)
 
+// StatusBadgeActive renders the "ACTIVE" text in the preview header.
+var StatusBadgeActive = lipgloss.NewStyle().
+	Foreground(ColorGreen).
+	Bold(true)
+
+// StatusBadgeWaiting renders the "WAITING" text in the preview header.
+var StatusBadgeWaiting = lipgloss.NewStyle().
+	Foreground(ColorAmber).
+	Bold(true)
+
+// StatusBadgeIdle renders the "IDLE" text in the preview header.
+var StatusBadgeIdle = lipgloss.NewStyle().
+	Foreground(ColorGray).
+	Bold(true)
+
 // PreviewContent is the base style for viewport body.
 var PreviewContent = lipgloss.NewStyle().
 	Foreground(ColorFg)
@@ -547,6 +562,9 @@ func ApplyTheme(p Palette) {
 	PreviewHeaderValue = lipgloss.NewStyle().Foreground(ColorGray)
 	PreviewHeaderBranch = lipgloss.NewStyle().Foreground(ColorGreen)
 	PreviewPassthroughBadge = lipgloss.NewStyle().Foreground(ColorGreen).Bold(true)
+	StatusBadgeActive = lipgloss.NewStyle().Foreground(ColorGreen).Bold(true)
+	StatusBadgeWaiting = lipgloss.NewStyle().Foreground(ColorAmber).Bold(true)
+	StatusBadgeIdle = lipgloss.NewStyle().Foreground(ColorGray).Bold(true)
 	PreviewContent = lipgloss.NewStyle().Foreground(ColorFg)
 	PreviewSep = lipgloss.NewStyle().Foreground(ColorBorder)
 

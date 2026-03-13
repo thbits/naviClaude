@@ -18,6 +18,7 @@ import (
 type PreviewModel struct {
 	content     string
 	session     *session.Session
+	metrics     *session.SessionMetrics
 	passthrough bool
 	viewport    viewport.Model
 	width       int
@@ -58,6 +59,11 @@ func (m *PreviewModel) SetContent(content string) {
 // SetSession updates the header metadata.
 func (m *PreviewModel) SetSession(s *session.Session) {
 	m.session = s
+}
+
+// SetMetrics updates the session metrics displayed in the header.
+func (m *PreviewModel) SetMetrics(metrics *session.SessionMetrics) {
+	m.metrics = metrics
 }
 
 // SetPassthrough sets whether the preview is in passthrough mode.
@@ -165,8 +171,19 @@ func (m PreviewModel) renderHeader() string {
 		leftParts = append(leftParts, styles.PreviewHeaderBranch.Render(s.GitBranch))
 	}
 
-	// Status badge (colored).
-	leftParts = append(leftParts, m.statusBadge(s.Status))
+	// Status text badge (colored).
+	var statusBadge string
+	switch s.Status {
+	case session.StatusActive:
+		statusBadge = styles.StatusBadgeActive.Render("ACTIVE")
+	case session.StatusWaiting:
+		statusBadge = styles.StatusBadgeWaiting.Render("WAITING")
+	case session.StatusIdle:
+		statusBadge = styles.StatusBadgeIdle.Render("IDLE")
+	default:
+		statusBadge = styles.StatusBadgeIdle.Render("CLOSED")
+	}
+	leftParts = append(leftParts, statusBadge)
 
 	// Tmux target in gray (e.g. "infra:1.2").
 	if s.TmuxTarget != "" {
@@ -175,8 +192,21 @@ func (m PreviewModel) renderHeader() string {
 
 	leftLine := strings.Join(leftParts, sep)
 
-	// Right side: CPU, MEM, and relative time.
+	// Right side: uptime, message count, CPU, MEM, and relative time.
 	var rightParts []string
+
+	// Uptime (from metrics).
+	if m.metrics != nil && !m.metrics.StartTime.IsZero() {
+		uptime := time.Since(m.metrics.StartTime)
+		uptimeStr := formatUptime(uptime)
+		rightParts = append(rightParts, styles.PreviewHeaderLabel.Render("\u23f1 ")+styles.PreviewHeaderValue.Render(uptimeStr))
+	}
+
+	// Message count (from metrics).
+	if m.metrics != nil && m.metrics.MessageCount > 0 {
+		rightParts = append(rightParts, styles.PreviewHeaderLabel.Render("msgs ")+styles.PreviewHeaderValue.Render(fmt.Sprintf("%d", m.metrics.MessageCount)))
+	}
+
 	rightParts = append(rightParts, styles.PreviewHeaderValue.Render(fmt.Sprintf("CPU %.1f%%", s.CPU)))
 	rightParts = append(rightParts, styles.PreviewHeaderValue.Render(fmt.Sprintf("MEM %.0fMB", s.Memory)))
 
@@ -300,6 +330,22 @@ func (m *PreviewModel) SetGroupSummary(groupName string, sessions []*session.Ses
 
 	m.content = b.String()
 	m.viewport.SetContent(m.content)
+}
+
+// formatUptime formats a duration into a compact human-readable string.
+func formatUptime(d time.Duration) string {
+	if d < time.Minute {
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	}
+	if d < time.Hour {
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	}
+	hours := int(d.Hours())
+	mins := int(d.Minutes()) % 60
+	if mins == 0 {
+		return fmt.Sprintf("%dh", hours)
+	}
+	return fmt.Sprintf("%dh%dm", hours, mins)
 }
 
 func (m PreviewModel) statusBadge(status session.SessionStatus) string {

@@ -52,6 +52,8 @@ type SidebarModel struct {
 	trackedID     string // session ID the cursor should follow
 	trackedTarget string // tmux target fallback (for placeholder sessions with no ID)
 	trackedGroup  string // group header name fallback
+
+	metrics *session.SessionMetrics
 }
 
 // NewSidebar creates a SidebarModel with the given dimensions.
@@ -110,6 +112,12 @@ func (m *SidebarModel) SetSessions(sessions []*session.Session) {
 	}
 	m.activeCount = count
 	m.rebuildGroups()
+}
+
+// SetMetrics updates the metrics for the selected session.
+func (m *SidebarModel) SetMetrics(metrics *session.SessionMetrics) {
+	m.metrics = metrics
+	m.syncViewport() // re-render to show/hide sparkline immediately
 }
 
 // ActiveCount returns the cached count of non-closed sessions.
@@ -711,7 +719,36 @@ func (m SidebarModel) renderSessionItem(s *session.Session, isCursor bool) []str
 			BorderStyle(styles.SelectionIndicator).
 			BorderForeground(borderFg)
 		line2 := line2Style.Width(m.width - 1).Render(line2Content)
-		return []string{line1, line2}
+
+		var extraLines []string
+		dimBg := styles.ColorSelectionDim
+		extraStyle := lipgloss.NewStyle().
+			Background(dimBg).
+			PaddingLeft(3).
+			BorderLeft(true).
+			BorderStyle(styles.SelectionIndicator).
+			BorderForeground(borderFg).
+			Width(m.width - 1)
+
+		if m.metrics == nil && m.width >= 35 {
+			// Loading indicator while metrics are being fetched.
+			loading := lipgloss.NewStyle().Foreground(styles.ColorGray).Background(dimBg).Render("loading...")
+			extraLines = append(extraLines, extraStyle.Render(loading))
+		} else if m.metrics != nil && m.width >= 35 {
+			// Line 3: Sparkline + message count
+			sparkline := m.renderSparkline(m.metrics, dimBg)
+			extraLines = append(extraLines, extraStyle.Render(sparkline))
+
+			// Line 4: Token bar (only if token data exists)
+			tokenBar := m.renderTokenBar(m.metrics, dimBg)
+			if tokenBar != "" {
+				extraLines = append(extraLines, extraStyle.Render(tokenBar))
+			}
+		}
+
+		result := []string{line1, line2}
+		result = append(result, extraLines...)
+		return result
 	}
 
 	// Normal item.
@@ -790,4 +827,106 @@ func relativeTime(d time.Duration) string {
 	default:
 		return fmt.Sprintf("%dd", int(d.Hours()/24))
 	}
+}
+
+// renderSparkline returns the sparkline bars + message count as raw styled
+// content (not wrapped in the selection border -- the caller handles that).
+func (m SidebarModel) renderSparkline(metrics *session.SessionMetrics, bg lipgloss.Color) string {
+	blocks := []string{"\u2581", "\u2582", "\u2583", "\u2584", "\u2585", "\u2586", "\u2587", "\u2588"}
+
+	// Find max value for scaling
+	maxVal := 0
+	for _, v := range metrics.RecentActivity {
+		if v > maxVal {
+			maxVal = v
+		}
+	}
+
+	var b strings.Builder
+
+	// Only render bars if there's recent activity
+	if maxVal > 0 {
+		barCount := 10
+		if m.width < 45 {
+			barCount = 6
+		}
+
+		startIdx := 10 - barCount
+		for i := startIdx; i < 10; i++ {
+			val := metrics.RecentActivity[i]
+			level := 0
+			if maxVal > 0 && val > 0 {
+				level = (val * 7) / maxVal
+			}
+
+			var color lipgloss.Color
+			switch {
+			case val == 0:
+				color = styles.ColorBorder
+			case level <= 2:
+				color = styles.ColorBlue
+			case level <= 4:
+				color = styles.ColorPurple
+			default:
+				color = styles.ColorGreen
+			}
+
+			b.WriteString(lipgloss.NewStyle().Foreground(color).Background(bg).Render(blocks[level]))
+		}
+		b.WriteString(lipgloss.NewStyle().Foreground(styles.ColorGray).Background(bg).Render(" "))
+	}
+
+	// Always show message count
+	b.WriteString(lipgloss.NewStyle().Foreground(styles.ColorGray).Background(bg).Render(
+		fmt.Sprintf("%d msgs", metrics.MessageCount)))
+
+	return b.String()
+}
+
+// renderTokenBar returns the token usage bar as raw styled content
+// (not wrapped in the selection border -- the caller handles that).
+func (m SidebarModel) renderTokenBar(metrics *session.SessionMetrics, bg lipgloss.Color) string {
+	if metrics.ContextLimit == 0 || metrics.TokensUsed == 0 {
+		return ""
+	}
+
+	barWidth := m.width - 28 // leave room for "ctx " prefix + " NNK/NNNK (NN%)" label + padding
+	if barWidth < 5 {
+		barWidth = 5
+	}
+	if barWidth > 20 {
+		barWidth = 20
+	}
+
+	pct := float64(metrics.TokensUsed) / float64(metrics.ContextLimit)
+	if pct > 1.0 {
+		pct = 1.0
+	}
+	filled := int(pct * float64(barWidth))
+	if filled < 0 {
+		filled = 0
+	}
+
+	var b strings.Builder
+
+	// Distinct prefix label so it's clearly not part of the sparkline
+	b.WriteString(lipgloss.NewStyle().Foreground(styles.ColorCyan).Background(bg).Render("ctx "))
+
+	// Bar using different chars than sparkline: thin horizontal bar
+	for i := 0; i < barWidth; i++ {
+		if i < filled {
+			b.WriteString(lipgloss.NewStyle().Foreground(styles.ColorCyan).Background(bg).Render("\u2501"))
+		} else {
+			b.WriteString(lipgloss.NewStyle().Foreground(styles.ColorBorder).Background(bg).Render("\u2500"))
+		}
+	}
+
+	// Label: X/Y (N%)
+	usedK := metrics.TokensUsed / 1000
+	limitK := metrics.ContextLimit / 1000
+	pctInt := int(pct * 100)
+	b.WriteString(lipgloss.NewStyle().Foreground(styles.ColorGray).Background(bg).Render(
+		fmt.Sprintf(" %dK/%dK (%d%%)", usedK, limitK, pctInt)))
+
+	return b.String()
 }

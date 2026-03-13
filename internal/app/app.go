@@ -118,6 +118,10 @@ type Model struct {
 	pendingNewTmuxCWD   string // CWD for the tmux session being named
 	previewTarget       string // tmux target currently shown in the preview panel
 
+	// Metrics for currently selected session
+	currentMetrics   *session.SessionMetrics
+	metricsSessionID string // session ID the metrics belong to
+
 	// Stats cache
 	statsCache *stats.Cache
 
@@ -272,6 +276,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case metricsMsg:
+		// Only apply if metrics are still for the currently selected session.
+		if sel := m.sidebar.SelectedSession(); sel != nil && sel.ID == msg.sessionID {
+			m.currentMetrics = msg.metrics
+			m.metricsSessionID = msg.sessionID
+			m.sidebar.SetMetrics(msg.metrics)
+			m.preview.SetMetrics(msg.metrics)
+		}
+		return m, nil
+
 	// -- Async results (progressive: active first, then history) -------------
 	case activeSessionsMsg:
 		if msg.err != nil {
@@ -290,6 +304,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if sel := m.sidebar.SelectedSession(); sel != nil {
 				m.preview.SetSession(sel)
+				// Fire metrics load for the initially selected session.
+				if sel.ID != "" && sel.ID != m.metricsSessionID {
+					m.metricsSessionID = sel.ID
+					return m, tea.Batch(m.refreshHistoryCmd(), loadMetricsCmd(sel))
+				}
 			}
 		}
 		// Fire the slower history scan.
@@ -683,19 +702,29 @@ func (m Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	default:
 		// Navigation keys: delegate to sidebar.
 		var cmd tea.Cmd
+		var cmds []tea.Cmd
 		m.sidebar, cmd = m.sidebar.Update(msg)
+		cmds = append(cmds, cmd)
 		// After navigation, update preview session header.
 		if sel := m.sidebar.SelectedSession(); sel != nil {
 			m.selectPreviewSession(sel)
+			// Fire metrics load if selection changed.
+			if sel.ID != m.metricsSessionID {
+				m.currentMetrics = nil
+				m.metricsSessionID = sel.ID
+				m.sidebar.SetMetrics(nil)
+				m.preview.SetMetrics(nil)
+				cmds = append(cmds, loadMetricsCmd(sel))
+			}
 			// Auto-load conversation preview for closed sessions.
 			if sel.Status == session.StatusClosed {
-				return m, tea.Batch(cmd, m.loadClosedPreviewCmd(sel))
+				cmds = append(cmds, m.loadClosedPreviewCmd(sel))
 			}
 		} else if groupName := m.sidebar.SelectedGroupName(); groupName != "" {
 			// Show group summary when hovering on a group header.
 			m.preview.SetGroupSummary(groupName, m.sidebar.GroupSessions(groupName))
 		}
-		return m, cmd
+		return m, tea.Batch(cmds...)
 	}
 }
 
