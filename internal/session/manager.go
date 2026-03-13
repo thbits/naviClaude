@@ -44,7 +44,7 @@ func (m *Manager) resumeWithFlags(sess *Session, targetTmuxSession string, fork 
 	if name == "" {
 		name = "claude"
 	}
-	cmd := fmt.Sprintf("cd %q && claude --resume %s", cwd, sess.ID)
+	cmd := fmt.Sprintf("cd %q && claude --resume %q", cwd, sess.ID)
 	if fork {
 		cmd += " --fork-session"
 	}
