@@ -8,12 +8,11 @@ import (
 	"github.com/thbits/naviClaude/internal/styles"
 )
 
-const appVersion = "v0.1.0"
-
 // StatusBarModel renders the bottom bar with contextual keybinding hints.
 type StatusBarModel struct {
 	width     int
 	mode      string
+	version   string
 	listHints []statusHint // configurable list-mode hints
 	errText   string
 }
@@ -23,11 +22,12 @@ type statusHint struct {
 	desc string
 }
 
-// NewStatusBar creates a StatusBarModel with the given width.
-func NewStatusBar(width int) StatusBarModel {
+// NewStatusBar creates a StatusBarModel with the given width and version string.
+func NewStatusBar(width int, version string) StatusBarModel {
 	return StatusBarModel{
-		width: width,
-		mode:  "list",
+		width:   width,
+		mode:    "list",
+		version: version,
 	}
 }
 
@@ -97,7 +97,7 @@ func (m StatusBarModel) View() string {
 	}
 
 	left := strings.Join(parts, "")
-	right := styles.StatusBarVersion.Render(appVersion)
+	right := styles.StatusBarVersion.Render(m.version)
 
 	// Compute gap between left hints and right-aligned version.
 	leftWidth := lipgloss.Width(left)

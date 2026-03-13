@@ -122,7 +122,7 @@ type Model struct {
 }
 
 // New creates a fully-wired Model ready to be passed to tea.NewProgram.
-func New() Model {
+func New(version string) Model {
 	cfg, _ := config.Load("")
 	styles.ApplyTheme(styles.Named(cfg.Theme))
 	keys := KeyMapFromConfig(cfg.Keys)
@@ -139,7 +139,7 @@ func New() Model {
 		// UI
 		sidebar:     ui.NewSidebar(30, 24),
 		preview:     ui.NewPreview(50, 24),
-		statusbar:   ui.NewStatusBar(80),
+		statusbar:   ui.NewStatusBar(80, version),
 		search:      ui.NewSearch(),
 		help:        ui.NewHelp(),
 		contextMenu: ui.NewContextMenu(),

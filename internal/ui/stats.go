@@ -304,8 +304,6 @@ func (m StatsModel) View() string {
 		styles.DetailValue.Render(fmt.Sprintf("%02d:00", s.PeakHour)))
 
 	lines = append(lines, "")
-	lines = append(lines, styles.DetailLabel.Render("  Data from Claude Code's stats since installation"))
-	lines = append(lines, "")
 	lines = append(lines, styles.DetailLabel.Render("Tab")+" "+styles.HelpDesc.Render("filter")+"  "+
 		styles.DetailLabel.Render("Any key")+" "+styles.HelpDesc.Render("close"))
 

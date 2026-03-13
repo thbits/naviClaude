@@ -18,3 +18,8 @@ Thumbs.db
 
 # Git worktrees
 .worktrees/
+
+# Claude Code / dev tooling
+.agents/
+.claude/
+skills-lock.json

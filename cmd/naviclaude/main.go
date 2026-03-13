@@ -17,7 +17,7 @@ func main() {
 		return
 	}
 
-	m := app.New()
+	m := app.New(version)
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseAllMotion())
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
