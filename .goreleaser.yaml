@@ -41,7 +41,7 @@ brews:
   - name: naviclaude
     repository:
       owner: thbits
-      name: homebrew-naviclaude
+      name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
     homepage: "https://github.com/thbits/naviClaude"
     description: "TUI for managing Claude Code sessions across tmux"

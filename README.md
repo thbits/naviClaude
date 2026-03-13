@@ -29,7 +29,7 @@ TUI for managing Claude Code sessions across tmux.
 ### Homebrew
 
 ```
-brew install thbits/naviclaude/naviclaude
+brew install thbits/tap/naviclaude
 ```
 
 ### Manual
