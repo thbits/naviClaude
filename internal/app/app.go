@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/thbits/naviClaude/internal/config"
@@ -81,6 +82,15 @@ type errMsg struct{ err error }
 
 func (e errMsg) Error() string { return e.err.Error() }
 
+// breathingTickMsg drives the breathing animation for status dots.
+type breathingTickMsg struct{}
+
+func breathingTickCmd() tea.Cmd {
+	return tea.Tick(400*time.Millisecond, func(t time.Time) tea.Msg {
+		return breathingTickMsg{}
+	})
+}
+
 // Model is the top-level Bubble Tea model that composes all UI components
 // and backend services.
 type Model struct {
@@ -124,6 +134,10 @@ type Model struct {
 
 	// Stats cache
 	statsCache *stats.Cache
+
+	// Animation
+	breathingFrame int
+	spinner        spinner.Model
 
 	// Configuration
 	cfg                config.Config
@@ -187,6 +201,12 @@ func New(version string) Model {
 		refreshInterval:    refreshInterval,
 	}
 
+	// Initialize loading spinner.
+	s := spinner.New()
+	s.Spinner = spinner.Dot
+	s.Style = lipgloss.NewStyle().Foreground(styles.ColorBlue)
+	m.spinner = s
+
 	// Wire auto-collapse threshold.
 	m.sidebar.SetCollapseAfterHours(cfg.CollapseAfterHours)
 
@@ -224,6 +244,8 @@ func (m Model) Init() tea.Cmd {
 		tickSession(),
 		tickResource(),
 		m.refreshActiveCmd(),
+		breathingTickCmd(),
+		m.spinner.Tick,
 	)
 }
 
@@ -256,6 +278,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, tickResource())
 		cmds = append(cmds, m.refreshResourceCmd())
 		return m, tea.Batch(cmds...)
+
+	case breathingTickMsg:
+		m.breathingFrame++
+		m.sidebar.SetBreathingFrame(m.breathingFrame)
+		return m, breathingTickCmd()
+
+	case spinner.TickMsg:
+		var cmd tea.Cmd
+		m.spinner, cmd = m.spinner.Update(msg)
+		return m, cmd
 
 	case resourceRefreshMsg:
 		m.handleResourceRefresh(msg)
@@ -468,7 +500,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // View renders the full UI. No loading overlay -- show the layout immediately.
 func (m Model) View() string {
 	if m.width == 0 || m.height == 0 {
-		return "Initializing..."
+		return m.spinner.View() + " Initializing..."
 	}
 
 	sidebarWidth := m.sidebarWidth()
@@ -481,6 +513,9 @@ func (m Model) View() string {
 	if contentHeight < 1 {
 		contentHeight = 1
 	}
+
+	// Pass spinner view to sidebar for the loading/empty state.
+	m.sidebar.SetSpinnerView(m.spinner.View())
 
 	// Build the sidebar column. If search or name input is active, stack
 	// the input above the sidebar.

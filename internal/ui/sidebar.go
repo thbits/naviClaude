@@ -54,6 +54,9 @@ type SidebarModel struct {
 	trackedGroup  string // group header name fallback
 
 	metrics *session.SessionMetrics
+
+	breathingFrame int    // animation frame for breathing status dots
+	spinnerView    string // spinner view string passed from app for loading state
 }
 
 // NewSidebar creates a SidebarModel with the given dimensions.
@@ -118,6 +121,17 @@ func (m *SidebarModel) SetSessions(sessions []*session.Session) {
 func (m *SidebarModel) SetMetrics(metrics *session.SessionMetrics) {
 	m.metrics = metrics
 	m.syncViewport() // re-render to show/hide sparkline immediately
+}
+
+// SetBreathingFrame updates the breathing animation frame and re-renders.
+func (m *SidebarModel) SetBreathingFrame(frame int) {
+	m.breathingFrame = frame
+	m.syncViewport() // re-render to update dot brightness
+}
+
+// SetSpinnerView sets the spinner view string for the loading state.
+func (m *SidebarModel) SetSpinnerView(view string) {
+	m.spinnerView = view
 }
 
 // ActiveCount returns the cached count of non-closed sessions.
@@ -549,6 +563,9 @@ func (m SidebarModel) View() string {
 		if m.searchActive {
 			emptyText = "No matches found"
 			hintText = "Try a different search query"
+		} else if m.spinnerView != "" {
+			emptyText = m.spinnerView + " Loading sessions..."
+			hintText = ""
 		} else {
 			emptyText = "No sessions found"
 			hintText = "Press n to create one"
@@ -666,7 +683,7 @@ func (m SidebarModel) renderSessionItem(s *session.Session, isCursor bool) []str
 		if isConfirmingKill {
 			selBg = styles.ColorBgHover
 		}
-		iconStyled := statusIconWithBg(s.Status, selBg)
+		iconStyled := statusIconWithBg(s.Status, selBg, m.breathingFrame)
 		nameStyled := lipgloss.NewStyle().Foreground(styles.ColorBlue).Background(selBg).Bold(true).Render(displayName)
 		timeStyled := lipgloss.NewStyle().Foreground(styles.ColorGray).Background(selBg).Render(relTime)
 
@@ -752,7 +769,7 @@ func (m SidebarModel) renderSessionItem(s *session.Session, isCursor bool) []str
 	}
 
 	// Normal item.
-	icon := statusIcon(s.Status)
+	icon := statusIcon(s.Status, m.breathingFrame)
 	nameStyled := styles.SidebarProjectName.Render(displayName)
 	timeStyled := styles.SidebarTime.Render(relTime)
 
@@ -771,12 +788,21 @@ func (m SidebarModel) renderSessionItem(s *session.Session, isCursor bool) []str
 }
 
 // statusIconProps returns the foreground color and character for a status.
-func statusIconProps(s session.SessionStatus) (lipgloss.Color, string) {
+// The frame parameter drives the breathing animation for active/waiting dots.
+func statusIconProps(s session.SessionStatus, frame int) (lipgloss.Color, string) {
 	switch s {
 	case session.StatusActive:
-		return styles.ColorGreen, styles.IconActive
+		// Breathing: toggle every 2 frames (800ms cycle)
+		if frame%4 < 2 {
+			return styles.ColorGreen, styles.IconActive
+		}
+		return styles.ColorBorder, styles.IconActive
 	case session.StatusWaiting:
-		return styles.ColorAmber, styles.IconWaiting
+		// Slower breathing: toggle every 3 frames (1200ms cycle)
+		if frame%6 < 3 {
+			return styles.ColorAmber, styles.IconWaiting
+		}
+		return styles.ColorGray, styles.IconWaiting
 	case session.StatusIdle:
 		return styles.ColorGray, styles.IconIdle
 	case session.StatusClosed:
@@ -786,15 +812,15 @@ func statusIconProps(s session.SessionStatus) (lipgloss.Color, string) {
 	}
 }
 
-func statusIcon(s session.SessionStatus) string {
-	fg, ch := statusIconProps(s)
+func statusIcon(s session.SessionStatus, frame int) string {
+	fg, ch := statusIconProps(s, frame)
 	return lipgloss.NewStyle().Foreground(fg).Render(ch)
 }
 
 // statusIconWithBg renders a status icon with an explicit background color,
 // preventing ANSI reset bleeding when composed inside a styled container.
-func statusIconWithBg(s session.SessionStatus, bg lipgloss.Color) string {
-	fg, ch := statusIconProps(s)
+func statusIconWithBg(s session.SessionStatus, bg lipgloss.Color, frame int) string {
+	fg, ch := statusIconProps(s, frame)
 	return lipgloss.NewStyle().Foreground(fg).Background(bg).Render(ch)
 }
 

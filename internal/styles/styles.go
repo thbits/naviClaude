@@ -135,6 +135,14 @@ var StatusIconIdle = lipgloss.NewStyle().
 var StatusIconClosed = lipgloss.NewStyle().
 	Foreground(ColorDim)
 
+// Dim variants for breathing animation.
+
+var StatusIconActiveDim = lipgloss.NewStyle().
+	Foreground(ColorBorder) // dim version of green -- uses border color for subtle fade
+
+var StatusIconWaitingDim = lipgloss.NewStyle().
+	Foreground(ColorGray) // dim version of amber -- uses gray for subtle fade
+
 // SidebarWaitingFlash is applied during the active->waiting transition flash.
 var SidebarWaitingFlash = lipgloss.NewStyle().
 	Foreground(ColorBg).
@@ -532,6 +540,8 @@ func ApplyTheme(p Palette) {
 	StatusIconWaiting = lipgloss.NewStyle().Foreground(ColorAmber)
 	StatusIconIdle = lipgloss.NewStyle().Foreground(ColorGray)
 	StatusIconClosed = lipgloss.NewStyle().Foreground(ColorDim)
+	StatusIconActiveDim = lipgloss.NewStyle().Foreground(ColorBorder)
+	StatusIconWaitingDim = lipgloss.NewStyle().Foreground(ColorGray)
 
 	SidebarWaitingFlash = lipgloss.NewStyle().
 		Foreground(ColorBg).

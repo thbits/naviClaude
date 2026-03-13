@@ -349,7 +349,7 @@ func formatUptime(d time.Duration) string {
 }
 
 func (m PreviewModel) statusBadge(status session.SessionStatus) string {
-	fg, icon := statusIconProps(status)
+	fg, icon := statusIconProps(status, 0)
 	if icon == " " {
 		return ""
 	}
