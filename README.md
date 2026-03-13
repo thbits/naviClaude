@@ -58,11 +58,12 @@ naviclaude
 |---|---|
 | `j` / `k` | Navigate sessions |
 | `Enter` / `Tab` | Focus session (passthrough mode) |
-| `Tab` / `Ctrl+]` | Exit passthrough mode |
+| `Tab` / `Shift+Tab` / `Ctrl+]` | Exit passthrough mode |
 | `f` | Jump to pane |
 | `Ctrl+F` | Jump to pane (from passthrough) |
 | `/` | Search |
-| `n` | New session |
+| `n` | New session (same tmux session) |
+| `N` | New tmux session (prompts for name) |
 | `K` | Kill session |
 | `d` | Detail popup |
 | `s` | Statistics popup |
@@ -86,6 +87,7 @@ keys:
   focus: "enter"
   jump: "f"
   new_session: "n"
+  new_tmux_session: "N"
   kill_session: "K"
   detail: "d"
   stats: "s"
@@ -101,6 +103,8 @@ process_names: ["claude"]
 collapse_after_hours: 8
 active_window_secs: 5
 theme: "tokyo-night"
+claude_command: "claude"
+# new_session_dir: "~/projects"
 ```
 
 | Option | Default | Description |
@@ -115,6 +119,8 @@ theme: "tokyo-night"
 | `collapse_after_hours` | `8` | Auto-collapse groups idle longer than N hours (0 to disable) |
 | `active_window_secs` | `5` | Seconds after last activity to consider a session active |
 | `theme` | `tokyo-night` | Color theme name |
+| `claude_command` | `claude` | Command to start Claude (sent via send-keys, supports aliases) |
+| `new_session_dir` | `~` | Working directory for new tmux sessions created with `N` |
 
 ## Themes
 
