@@ -21,7 +21,7 @@ TUI for managing Claude Code sessions across tmux.
 
 ## Requirements
 
-- [tmux](https://github.com/tmux/tmux)
+- [tmux](https://github.com/tmux/tmux/wiki) -- naviClaude must be run inside a tmux session (`brew install tmux`)
 - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) (`claude`)
 
 ## Installation
