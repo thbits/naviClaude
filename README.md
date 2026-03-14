@@ -1,6 +1,8 @@
 # naviClaude
 
-TUI for managing Claude Code sessions across tmux.
+TUI for managing Claude Code sessions across tmux sessions.
+
+![naviClaude](assets/naviclaude.png)
 
 ## Features
 
