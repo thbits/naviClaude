@@ -260,7 +260,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.resizeComponents()
-		return m, nil
+		// Resize all managed tmux sessions so their panes match the new terminal size.
+		return m, m.resizeTmuxSessionsCmd()
 
 	// -- Tickers -------------------------------------------------------------
 	case tickPreviewMsg:
@@ -1481,6 +1482,30 @@ func (m *Model) resizeComponents() {
 	m.captureEngine.SetMaxWidth(previewWidth - 2) // -2 for left padding
 }
 
+// resizeTmuxSessionsCmd asynchronously resizes all managed tmux sessions so
+// their panes match the current terminal dimensions. This prevents stale 80x24
+// sizing when the naviClaude window is resized.
+func (m Model) resizeTmuxSessionsCmd() tea.Cmd {
+	// Collect unique tmux session names from active sessions.
+	seen := make(map[string]bool)
+	var names []string
+	for _, s := range m.sessions {
+		if s.TmuxSession != "" && s.TmuxSession != m.currentTmuxSession && !seen[s.TmuxSession] {
+			seen[s.TmuxSession] = true
+			names = append(names, s.TmuxSession)
+		}
+	}
+	if len(names) == 0 {
+		return nil
+	}
+	tc := m.tmuxClient
+	return func() tea.Msg {
+		for _, name := range names {
+			tc.ResizeToClient(name)
+		}
+		return nil
+	}
+}
 
 func (m Model) renderTitleBar() string {
 	left := styles.TitleBarName.Render(" naviClaude")
