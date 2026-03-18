@@ -260,7 +260,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.resizeComponents()
-		// Resize all managed tmux sessions so their panes match the new terminal size.
 		return m, m.resizeTmuxSessionsCmd()
 
 	// -- Tickers -------------------------------------------------------------
