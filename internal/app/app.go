@@ -104,7 +104,8 @@ type Model struct {
 	detail      ui.DetailModel
 	statsModel  ui.StatsModel
 	themePicker ui.ThemePickerModel
-	nameInput   ui.NameInputModel
+	nameInput    ui.NameInputModel
+	renameInput  ui.NameInputModel
 
 	// Backend services
 	tmuxClient     *tmux.Client
@@ -126,11 +127,17 @@ type Model struct {
 	confirmSession   *session.Session   // session pending kill confirmation
 	pendingNewTarget    string // tmux target of a just-created session; kept until detected
 	pendingNewTmuxCWD   string // CWD for the tmux session being named
+	renameSessionID     string // session ID being renamed
 	previewTarget       string // tmux target currently shown in the preview panel
+	resizedWinTarget    string // window target we resized for preview
+	origWinW            int    // width to restore the previewed window to when navigating away
 
 	// Metrics for currently selected session
 	currentMetrics   *session.SessionMetrics
 	metricsSessionID string // session ID the metrics belong to
+
+	// Session aliases (user-defined display names)
+	aliasStore *session.AliasStore
 
 	// Stats cache
 	statsCache *stats.Cache
@@ -146,6 +153,7 @@ type Model struct {
 	closedSessionHours float64
 	processNames       []string
 	currentTmuxSession string        // the tmux session naviClaude is running in
+	currentTmuxWin     string        // "session:window" target of naviClaude's window
 	isPopup            bool          // true when running inside tmux display-popup
 	refreshInterval    time.Duration // preview capture tick interval
 }
@@ -175,7 +183,8 @@ func New(version string) Model {
 		detail:      ui.NewDetail(),
 		statsModel:  ui.NewStats(),
 		themePicker: ui.NewThemePicker(cfg.Theme),
-		nameInput:   ui.NewNameInput(),
+		nameInput:    ui.NewNameInput(),
+		renameInput:  ui.NewRenameInput(),
 
 		// Backend
 		tmuxClient:     tc,
@@ -185,6 +194,9 @@ func New(version string) Model {
 		captureEngine:  preview.NewCaptureEngine(tc),
 		passthrough:    preview.NewPassthrough(tc),
 		statusDetector: preview.NewStatusDetector(),
+
+		// Session aliases
+		aliasStore: session.NewAliasStore(""),
 
 		// Stats cache
 		statsCache: stats.NewCache(),
@@ -197,6 +209,7 @@ func New(version string) Model {
 		closedSessionHours: cfg.ClosedSessionHours,
 		processNames:       cfg.ProcessNames,
 		currentTmuxSession: detectCurrentTmuxSession(),
+		currentTmuxWin:     detectCurrentTmuxWindow(),
 		isPopup:            os.Getenv("TMUX_POPUP") != "",
 		refreshInterval:    refreshInterval,
 	}
@@ -207,8 +220,10 @@ func New(version string) Model {
 	s.Style = lipgloss.NewStyle().Foreground(styles.ColorBlue)
 	m.spinner = s
 
-	// Wire auto-collapse threshold.
+	// Wire auto-collapse threshold and sort orders.
 	m.sidebar.SetCollapseAfterHours(cfg.CollapseAfterHours)
+	m.sidebar.SetGroupSortOrder(cfg.GroupSortOrder)
+	m.sidebar.SetSessionSortOrder(cfg.SessionSortOrder)
 
 	// Wire dynamic key labels into help and status bar.
 	helpBindings := keys.HelpBindings()
@@ -260,7 +275,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.resizeComponents()
-		return m, m.resizeTmuxSessionsCmd()
+		// Re-resize the currently previewed pane's width at the new dimensions.
+		if m.resizedWinTarget != "" {
+			m.origWinW = msg.Width
+			paneW, _ := m.previewPaneDimensions()
+			m.tmuxClient.ResizeWindow(m.resizedWinTarget, paneW, 0)
+		}
+		return m, nil
 
 	// -- Tickers -------------------------------------------------------------
 	case tickPreviewMsg:
@@ -538,6 +559,15 @@ func (m Model) View() string {
 		}
 		m.sidebar.SetSize(sidebarWidth-1, remainingHeight)
 		sidebarView = lipgloss.JoinVertical(lipgloss.Left, inputView, m.sidebar.View())
+	} else if m.renameInput.IsActive() {
+		inputView := m.renameInput.View()
+		inputHeight := lipgloss.Height(inputView)
+		remainingHeight := contentHeight - inputHeight
+		if remainingHeight < 1 {
+			remainingHeight = 1
+		}
+		m.sidebar.SetSize(sidebarWidth-1, remainingHeight)
+		sidebarView = lipgloss.JoinVertical(lipgloss.Left, inputView, m.sidebar.View())
 	} else {
 		m.sidebar.SetSize(sidebarWidth-1, contentHeight)
 		sidebarView = m.sidebar.View()
@@ -612,6 +642,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// Global quit — but in passthrough mode Ctrl+C is forwarded to the pane.
 	if key == KeyCtrlC && m.mode != ModePassthrough {
+		m.restorePreviewedPane()
 		return m, tea.Quit
 	}
 
@@ -639,6 +670,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleThemePickerKey(msg)
 	case ModeNameInput:
 		return m.handleNameInputKey(msg)
+	case ModeRenameSession:
+		return m.handleRenameSessionKey(msg)
 	}
 	return m, nil
 }
@@ -648,6 +681,7 @@ func (m Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch key {
 	case m.keys.Quit:
+		m.restorePreviewedPane()
 		return m, tea.Quit
 
 	case m.keys.Help:
@@ -697,6 +731,9 @@ func (m Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case m.keys.KillSession:
 		return m.killSelected()
+
+	case m.keys.RenameSession:
+		return m.startRenameSession()
 
 	case m.keys.NewSession:
 		return m.createNewSession()
@@ -756,6 +793,8 @@ func (m Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				cmds = append(cmds, m.loadClosedPreviewCmd(sel))
 			}
 		} else if groupName := m.sidebar.SelectedGroupName(); groupName != "" {
+			// Navigated to a group header -- restore any resized pane.
+			m.selectPreviewSession(nil)
 			// Show group summary when hovering on a group header.
 			m.preview.SetGroupSummary(groupName, m.sidebar.GroupSessions(groupName))
 		}
@@ -892,6 +931,68 @@ func (m Model) handleNameInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 }
 
+func (m Model) startRenameSession() (tea.Model, tea.Cmd) {
+	sess := m.sidebar.SelectedSession()
+	if sess == nil {
+		return m, nil
+	}
+	m.renameSessionID = sess.ID
+	m.mode = ModeRenameSession
+	m.renameInput.SetSize(m.sidebarWidth())
+	// Pre-fill with current display name.
+	current := sess.DisplayName
+	if current == "" {
+		current = sess.Slug
+	}
+	cmd := m.renameInput.ActivateWithValue(current)
+	m.statusbar.SetMode(ModeRenameSession.String())
+	return m, cmd
+}
+
+func (m Model) handleRenameSessionKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	key := msg.String()
+
+	switch key {
+	case "esc":
+		m.renameInput.Deactivate()
+		m.renameSessionID = ""
+		m.mode = ModeList
+		m.statusbar.SetMode(ModeList.String())
+		return m, nil
+
+	case "enter":
+		name := m.renameInput.Value()
+		m.renameInput.Deactivate()
+		m.mode = ModeList
+		m.statusbar.SetMode(ModeList.String())
+
+		if m.renameSessionID != "" {
+			if err := m.aliasStore.Set(m.renameSessionID, name); err != nil {
+				m.statusbar.SetError("rename failed: " + err.Error())
+			}
+			// Apply to current sessions immediately.
+			for _, s := range m.sessions {
+				if s.ID == m.renameSessionID {
+					s.DisplayName = name
+				}
+			}
+			for _, s := range m.allSessions {
+				if s.ID == m.renameSessionID {
+					s.DisplayName = name
+				}
+			}
+			m.sidebar.SetSessions(m.sessions)
+		}
+		m.renameSessionID = ""
+		return m, nil
+
+	default:
+		var cmd tea.Cmd
+		m.renameInput, cmd = m.renameInput.Update(msg)
+		return m, cmd
+	}
+}
+
 func (m Model) handleContextMenuKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
 
@@ -995,6 +1096,7 @@ func (m Model) jumpToPane() (tea.Model, tea.Cmd) {
 	if sess == nil || sess.TmuxTarget == "" {
 		return m, nil
 	}
+	m.restorePreviewedPane()
 	// Switch tmux client to the session's pane.
 	_ = m.tmuxClient.SwitchClient(sess.TmuxTarget)
 	_ = m.tmuxClient.SelectPane(sess.TmuxTarget)
@@ -1318,6 +1420,15 @@ func (m *Model) applySessionRefresh(msg sessionRefreshMsg) {
 	combined := make([]*session.Session, 0, len(msg.active)+len(msg.closed))
 	combined = append(combined, msg.active...)
 	combined = append(combined, msg.closed...)
+
+	// Apply user-defined display name aliases.
+	aliases := m.aliasStore.All()
+	for _, s := range combined {
+		if name, ok := aliases[s.ID]; ok {
+			s.DisplayName = name
+		}
+	}
+
 	m.sessions = combined
 
 	// If kill confirmation is pending and the target session is gone, cancel it.
@@ -1346,6 +1457,12 @@ func (m *Model) applySessionRefresh(msg sessionRefreshMsg) {
 	allCombined := make([]*session.Session, 0, len(msg.active)+len(msg.all))
 	allCombined = append(allCombined, msg.active...)
 	allCombined = append(allCombined, msg.all...)
+	// Apply aliases to all sessions too (msg.all may have sessions not in combined).
+	for _, s := range allCombined {
+		if name, ok := aliases[s.ID]; ok {
+			s.DisplayName = name
+		}
+	}
 	m.allSessions = allCombined
 	m.search.SetSessions(allCombined)
 
@@ -1363,18 +1480,74 @@ func (m *Model) applySessionRefresh(msg sessionRefreshMsg) {
 
 // selectPreviewSession updates the preview header for the given session and
 // clears stale content when the selection changes to a different pane target.
+// It resizes the new pane's window to match the preview viewport and restores
+// the previous pane's window to the full terminal size when navigating away.
 func (m *Model) selectPreviewSession(s *session.Session) {
 	target := ""
 	if s != nil {
 		target = s.TmuxTarget
 	}
+
 	if target != m.previewTarget {
+		// Restore the previous window's width.
+		if m.resizedWinTarget != "" && m.origWinW > 0 {
+			m.tmuxClient.ResizeWindow(m.resizedWinTarget, m.origWinW, 0)
+			m.resizedWinTarget = ""
+		}
+
 		m.previewTarget = target
 		m.preview.SetContent("")
 		m.preview.ResetScroll()
+
+		// For subprocesses, show a styled informational message.
+		if s != nil && s.Subprocess {
+			parent := s.SubprocessParent
+			if parent == "" {
+				parent = "another program"
+			}
+			dim := lipgloss.NewStyle().Foreground(styles.ColorGray)
+			accent := lipgloss.NewStyle().Foreground(styles.ColorBlue)
+			hint := lipgloss.NewStyle().Foreground(styles.ColorAmber)
+			m.preview.SetContent(fmt.Sprintf(
+				"\n\n%s\n\n%s\n%s\n\n%s",
+				dim.Italic(true).Render("  Preview unavailable"),
+				dim.Render("  Claude is running inside "+accent.Render(parent)+dim.Render(".")),
+				dim.Render("  The tmux pane belongs to "+accent.Render(parent)+dim.Render(", not Claude.")),
+				hint.Render("  Press "+accent.Render(m.keys.Jump)+" to jump to the pane"),
+			))
+		}
+
+		// Resize the new pane's window to the preview viewport size.
+		// Skip subprocesses (pane belongs to parent app) and naviClaude's own window.
+		naviWinTarget := m.currentTmuxWin
+		if s != nil && s.TmuxTarget != "" && !s.Subprocess && tmux.WindowTarget(s.TmuxTarget) != naviWinTarget {
+			winTarget := tmux.WindowTarget(s.TmuxTarget)
+			// Save the original width so we can restore it when navigating away.
+			// Only resize width -- changing height disrupts TUI layout (cursor
+			// positioning, prompt duplication) in apps like Claude Code.
+			if w, _, err := m.tmuxClient.WindowSize(winTarget); err == nil {
+				m.origWinW = w
+			} else {
+				m.origWinW = m.width
+			}
+			m.resizedWinTarget = winTarget
+			paneW, _ := m.previewPaneDimensions()
+			m.tmuxClient.ResizeWindow(winTarget, paneW, 0)
+		}
 	}
+
 	if s != nil {
 		m.preview.SetSession(s)
+	}
+}
+
+// restorePreviewedPane restores the currently previewed pane's window to its
+// original size. Called on quit and when leaving naviClaude.
+func (m *Model) restorePreviewedPane() {
+	if m.resizedWinTarget != "" && m.origWinW > 0 {
+		m.tmuxClient.ResizeWindow(m.resizedWinTarget, m.origWinW, 0)
+		m.resizedWinTarget = ""
+		m.origWinW = 0
 	}
 }
 
@@ -1391,6 +1564,10 @@ func (m Model) capturePreviewCmd() tea.Cmd {
 	if sess.Status == session.StatusClosed {
 		// No pane to capture for a closed session. Don't overwrite
 		// any conversation history that was loaded via loadClosedPreviewCmd.
+		return nil
+	}
+
+	if sess.Subprocess {
 		return nil
 	}
 
@@ -1481,29 +1658,24 @@ func (m *Model) resizeComponents() {
 	m.captureEngine.SetMaxWidth(previewWidth - 2) // -2 for left padding
 }
 
-// resizeTmuxSessionsCmd asynchronously resizes all managed tmux sessions so
-// their panes match the current terminal dimensions. This prevents stale 80x24
-// sizing when the naviClaude window is resized.
-func (m Model) resizeTmuxSessionsCmd() tea.Cmd {
-	// Collect unique tmux session names from active sessions.
-	seen := make(map[string]bool)
-	var names []string
-	for _, s := range m.sessions {
-		if s.TmuxSession != "" && s.TmuxSession != m.currentTmuxSession && !seen[s.TmuxSession] {
-			seen[s.TmuxSession] = true
-			names = append(names, s.TmuxSession)
-		}
+// previewPaneDimensions returns the width and height that managed tmux panes
+// should be resized to so their content fits the preview viewport exactly.
+func (m Model) previewPaneDimensions() (int, int) {
+	sidebarWidth := m.sidebarWidth()
+	previewWidth := m.width - sidebarWidth
+	paneW := previewWidth - 2 // preview left/right padding
+	if paneW < 1 {
+		paneW = 1
 	}
-	if len(names) == 0 {
-		return nil
+
+	titleHeight := lipgloss.Height(m.renderTitleBar())
+	statusHeight := lipgloss.Height(m.statusbar.View())
+	contentHeight := m.height - titleHeight - statusHeight
+	paneH := contentHeight - 2 // preview header + border-bottom
+	if paneH < 1 {
+		paneH = 1
 	}
-	tc := m.tmuxClient
-	return func() tea.Msg {
-		for _, name := range names {
-			tc.ResizeToClient(name)
-		}
-		return nil
-	}
+	return paneW, paneH
 }
 
 func (m Model) renderTitleBar() string {
@@ -1624,6 +1796,16 @@ func tickSession() tea.Cmd {
 // ---------------------------------------------------------------------------
 // Utilities
 // ---------------------------------------------------------------------------
+
+// detectCurrentTmuxWindow returns the "session:window" target of the window
+// that naviClaude is running in, computed once at startup.
+func detectCurrentTmuxWindow() string {
+	out, err := exec.Command("tmux", "display-message", "-p", "#{session_name}:#{window_index}").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
 
 // detectCurrentTmuxSession returns the name of the tmux session that
 // naviClaude is running inside, or an empty string if it cannot be determined.

@@ -43,6 +43,9 @@ func NewPreview(width, height int) PreviewModel {
 func (m *PreviewModel) SetContent(content string) {
 	m.content = content
 	if m.viewport.Width > 0 {
+		// Truncate lines exceeding viewport width (safety net for stale
+		// scrollback). The tmux pane is resized to match the viewport so
+		// apps re-render at the correct width via SIGWINCH.
 		lines := strings.Split(content, "\n")
 		for i, line := range lines {
 			if ansi.StringWidth(line) > m.viewport.Width {

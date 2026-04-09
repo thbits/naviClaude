@@ -65,7 +65,7 @@ func (c *Client) ListPanes() ([]PaneInfo, error) {
 
 // CapturePaneOutput captures the full scrollback + visible contents of a pane,
 // preserving ANSI color sequences. target is a tmux target string such as
-// "session:1.0". The -S - flag captures from the start of the scrollback buffer.
+// "session:1.0".
 func (c *Client) CapturePaneOutput(target string) (string, error) {
 	out, err := exec.Command("tmux", "capture-pane", "-e", "-p", "-S", "-", "-t", target).Output()
 	if err != nil {
@@ -73,6 +73,7 @@ func (c *Client) CapturePaneOutput(target string) (string, error) {
 	}
 	return string(out), nil
 }
+
 
 // KillPane kills the specified tmux pane (and its process).
 func (c *Client) KillPane(target string) error {
@@ -204,10 +205,83 @@ func (c *Client) ResizeToClient(sessionName string) error {
 	if err != nil {
 		return err
 	}
-	// Resize the session's window.
-	target := sessionName + ":"
-	exec.Command("tmux", "resize-window", "-t", target, "-x", strconv.Itoa(w), "-y", strconv.Itoa(h)).Run()
+	return c.ResizeSession(sessionName, w, h)
+}
+
+// ResizeSession resizes all windows in a session to the given dimensions.
+func (c *Client) ResizeSession(sessionName string, w, h int) error {
+	if w < 1 {
+		w = 1
+	}
+	if h < 1 {
+		h = 1
+	}
+
+	// List all windows in the session so we can resize each one.
+	out, err := exec.Command("tmux", "list-windows", "-t", sessionName, "-F", "#{window_index}").Output()
+	if err != nil {
+		// Fallback: try resizing just the session target.
+		exec.Command("tmux", "resize-window", "-t", sessionName+":", "-x", strconv.Itoa(w), "-y", strconv.Itoa(h)).Run()
+		return nil
+	}
+
+	ws := strconv.Itoa(w)
+	hs := strconv.Itoa(h)
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line == "" {
+			continue
+		}
+		target := sessionName + ":" + line
+		exec.Command("tmux", "resize-window", "-t", target, "-x", ws, "-y", hs).Run()
+	}
 	return nil
+}
+
+// WindowSize returns the current width and height of a tmux window.
+func (c *Client) WindowSize(target string) (int, int, error) {
+	out, err := exec.Command("tmux", "display-message", "-t", target, "-p", "#{window_width} #{window_height}").Output()
+	if err != nil {
+		return 0, 0, err
+	}
+	parts := strings.Fields(strings.TrimSpace(string(out)))
+	if len(parts) != 2 {
+		return 0, 0, fmt.Errorf("unexpected output: %q", string(out))
+	}
+	w, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return 0, 0, err
+	}
+	h, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return 0, 0, err
+	}
+	return w, h, nil
+}
+
+// ResizeWindow resizes a single tmux window. Pass 0 for w or h to leave
+// that dimension unchanged.
+func (c *Client) ResizeWindow(target string, w, h int) error {
+	args := []string{"resize-window", "-t", target}
+	if w > 0 {
+		args = append(args, "-x", strconv.Itoa(w))
+	}
+	if h > 0 {
+		args = append(args, "-y", strconv.Itoa(h))
+	}
+	if len(args) <= 3 {
+		return nil // nothing to resize
+	}
+	exec.Command("tmux", args...).Run()
+	return nil
+}
+
+// WindowTarget extracts the "session:window" portion from a pane target
+// like "session:1.0", stripping the ".pane" suffix.
+func WindowTarget(paneTarget string) string {
+	if dot := strings.LastIndex(paneTarget, "."); dot != -1 {
+		return paneTarget[:dot]
+	}
+	return paneTarget
 }
 
 // NewWindowOptions holds parameters for tmux new-window.
