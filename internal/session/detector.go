@@ -89,6 +89,29 @@ func (t *ProcessTree) Stats(pid int) (cpu float64, memMB float64) {
 }
 
 
+// parentAppName checks the immediate parent of pid. If it's a non-shell
+// program (e.g. "nvim"), returns its name -- meaning Claude is running as
+// a subprocess. Returns "" if the parent is a shell or tmux (normal case).
+func (t *ProcessTree) parentAppName(pid int) string {
+	ppid, ok := t.ppid[pid]
+	if !ok || ppid <= 1 {
+		return ""
+	}
+	name := strings.TrimPrefix(strings.ToLower(t.names[ppid]), "-") // -zsh → zsh
+	if isShellOrTmux(name) {
+		return ""
+	}
+	return t.names[ppid]
+}
+
+func isShellOrTmux(name string) bool {
+	switch name {
+	case "zsh", "bash", "sh", "fish", "dash", "ksh", "csh", "tcsh", "nu", "login":
+		return true
+	}
+	return strings.HasPrefix(name, "tmux")
+}
+
 // isAncestorOf reports whether ancestorPID is an ancestor of descendantPID
 // using the pre-built process tree.
 func (t *ProcessTree) isAncestorOf(ancestorPID, descendantPID int) bool {
@@ -321,8 +344,23 @@ func (d *Detector) buildSession(pane tmux.PaneInfo, claudePID int, tree *Process
 		PID:          claudePID,
 	}
 
-	// Try to extract session ID from the Claude process command line.
-	s.ID = extractSessionID(claudePID, pane.CurrentPath)
+	// Read session metadata from ~/.claude/sessions/{pid}.json (authoritative
+	// source for running processes) and extract session ID + user-set name.
+	meta := readSessionMetadata(claudePID)
+	if meta.SessionID != "" {
+		s.ID = meta.SessionID
+	} else {
+		s.ID = extractSessionIDFallback(claudePID, pane.CurrentPath)
+	}
+	if meta.Name != "" {
+		s.DisplayName = meta.Name
+	}
+
+	// Detect if Claude is running as a subprocess (e.g. inside neovim).
+	if parentApp := tree.parentAppName(claudePID); parentApp != "" {
+		s.Subprocess = true
+		s.SubprocessParent = parentApp
+	}
 
 	// Populate CPU and memory from the bulk process tree (no per-session ps call).
 	s.CPU, s.Memory = tree.Stats(claudePID)
@@ -357,12 +395,10 @@ func sessionFileModTime(sessionID, cwd string) time.Time {
 	return info.ModTime()
 }
 
-// extractSessionID attempts to determine the session ID for a running Claude
-// process. It first checks the command line for --resume <sessionId>, then
-// falls back to finding the most recently modified .jsonl file in the matching
-// project directory.
-func extractSessionID(pid int, cwd string) string {
-	// Try command line first: "claude --resume <uuid>"
+// extractSessionIDFallback attempts to determine the session ID when the
+// ~/.claude/sessions/{pid}.json metadata file is not available.
+func extractSessionIDFallback(pid int, cwd string) string {
+	// Try command line: "claude --resume <uuid>"
 	cmdLine := fullCommandLine(pid)
 	if id := parseResumeFlag(cmdLine); id != "" {
 		return id
@@ -370,6 +406,30 @@ func extractSessionID(pid int, cwd string) string {
 
 	// Fall back to most recently modified .jsonl in the project dir.
 	return findLatestSessionFile(cwd)
+}
+
+// sessionMetadata holds fields from ~/.claude/sessions/{pid}.json.
+type sessionMetadata struct {
+	SessionID string `json:"sessionId"`
+	Name      string `json:"name"`
+}
+
+// readSessionMetadata reads the full metadata from ~/.claude/sessions/{pid}.json.
+func readSessionMetadata(pid int) sessionMetadata {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return sessionMetadata{}
+	}
+	path := filepath.Join(home, ".claude", "sessions", strconv.Itoa(pid)+".json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return sessionMetadata{}
+	}
+	var meta sessionMetadata
+	if err := json.Unmarshal(data, &meta); err != nil {
+		return sessionMetadata{}
+	}
+	return meta
 }
 
 // fullCommandLine returns the full command line of a process.
@@ -402,7 +462,7 @@ func findLatestSessionFile(cwd string) string {
 	}
 
 	// The path slug is the CWD with "/" replaced by "-".
-	slug := strings.ReplaceAll(cwd, "/", "-")
+	slug := cwdSlug(cwd)
 	projectDir := filepath.Join(home, ".claude", "projects", slug)
 
 	entries, err := os.ReadDir(projectDir)

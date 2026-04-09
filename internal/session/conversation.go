@@ -6,8 +6,19 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
+
+// nonAlphanumRe matches any character that is not a letter, digit, or dash.
+var nonAlphanumRe = regexp.MustCompile(`[^a-zA-Z0-9-]`)
+
+// cwdSlug converts a CWD path into the directory slug used by Claude Code
+// under ~/.claude/projects/. Claude Code replaces all non-alphanumeric
+// characters (except dashes) with dashes.
+func cwdSlug(cwd string) string {
+	return nonAlphanumRe.ReplaceAllString(cwd, "-")
+}
 
 // ConversationEntry is a single turn in the conversation.
 type ConversationEntry struct {
@@ -127,7 +138,7 @@ func SessionFilePath(sessionID, cwd string) string {
 	if err != nil {
 		return ""
 	}
-	slug := strings.ReplaceAll(cwd, "/", "-")
+	slug := cwdSlug(cwd)
 	return filepath.Join(home, ".claude", "projects", slug, sessionID+".jsonl")
 }
 
