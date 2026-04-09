@@ -11,6 +11,7 @@ type KeyMap struct {
 	NewSession     string
 	NewTmuxSession string
 	KillSession    string
+	RenameSession  string
 	Detail         string
 	Stats          string
 	Help           string
@@ -26,6 +27,7 @@ func DefaultKeyMap() KeyMap {
 		NewSession:     "n",
 		NewTmuxSession: "N",
 		KillSession:    "K",
+		RenameSession:  "r",
 		Detail:         "d",
 		Stats:          "s",
 		Help:           "?",
@@ -57,6 +59,9 @@ func KeyMapFromConfig(kb config.KeyBindings) KeyMap {
 	if kb.KillSession != "" {
 		km.KillSession = kb.KillSession
 	}
+	if kb.RenameSession != "" {
+		km.RenameSession = kb.RenameSession
+	}
 	if kb.Detail != "" {
 		km.Detail = kb.Detail
 	}
@@ -86,6 +91,7 @@ func (km KeyMap) HelpBindings() []HelpBinding {
 		{km.NewSession, "New session"},
 		{km.NewTmuxSession, "New tmux session"},
 		{km.KillSession, "Kill session"},
+		{km.RenameSession, "Rename session"},
 		{km.Detail, "Detail"},
 		{km.Stats, "Stats"},
 		{KeyThemePicker, "Theme picker"},
@@ -103,6 +109,7 @@ func (km KeyMap) StatusHints() []HelpBinding {
 		{km.NewSession, "new"},
 		{km.NewTmuxSession, "new tmux session"},
 		{km.KillSession, "kill"},
+		{km.RenameSession, "rename"},
 		{km.Detail, "detail"},
 		{km.Stats, "stats"},
 		{km.Help, "help"},

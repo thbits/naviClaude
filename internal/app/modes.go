@@ -33,6 +33,9 @@ const (
 
 	// ModeNameInput shows an inline text input for naming a new tmux session.
 	ModeNameInput
+
+	// ModeRenameSession shows an inline text input for renaming a session.
+	ModeRenameSession
 )
 
 // String returns a short label suitable for the status bar.
@@ -56,6 +59,8 @@ func (m Mode) String() string {
 		return "themepicker"
 	case ModeNameInput:
 		return "name input"
+	case ModeRenameSession:
+		return "rename"
 	default:
 		return "unknown"
 	}

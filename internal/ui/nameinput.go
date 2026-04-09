@@ -14,7 +14,7 @@ type NameInputModel struct {
 	width  int
 }
 
-// NewNameInput creates a NameInputModel.
+// NewNameInput creates a NameInputModel for naming new tmux sessions.
 func NewNameInput() NameInputModel {
 	ti := textinput.New()
 	ti.Prompt = "Session name: "
@@ -25,10 +25,30 @@ func NewNameInput() NameInputModel {
 	return NameInputModel{input: ti}
 }
 
+// NewRenameInput creates a NameInputModel for renaming sessions.
+func NewRenameInput() NameInputModel {
+	ti := textinput.New()
+	ti.Prompt = "Rename: "
+	ti.PromptStyle = styles.SearchPrompt
+	ti.TextStyle = lipgloss.NewStyle().Foreground(styles.ColorFg)
+	ti.Placeholder = "new name (empty to clear)"
+	ti.CharLimit = 64
+	return NameInputModel{input: ti}
+}
+
 // Activate shows the input and focuses it.
 func (m *NameInputModel) Activate() tea.Cmd {
 	m.active = true
 	m.input.SetValue("")
+	m.input.Focus()
+	return textinput.Blink
+}
+
+// ActivateWithValue shows the input pre-filled with a value.
+func (m *NameInputModel) ActivateWithValue(val string) tea.Cmd {
+	m.active = true
+	m.input.SetValue(val)
+	m.input.CursorEnd()
 	m.input.Focus()
 	return textinput.Blink
 }
