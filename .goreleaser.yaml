@@ -23,7 +23,7 @@ builds:
 
 archives:
   - id: naviclaude
-    format: tar.gz
+    formats: [tar.gz]
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     files:
       - README*
