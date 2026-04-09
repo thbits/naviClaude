@@ -2,6 +2,9 @@
 
 TUI for managing Claude Code sessions across tmux sessions.
 
+A "bring your own tmux" alternative to tools like [cmux](https://github.com/manaflow-ai/cmux) --
+layers on top of your existing tmux setup instead of replacing it.
+
 ![naviClaude](assets/naviclaude.png)
 
 ## Features
@@ -71,6 +74,7 @@ naviclaude
 | `n` | New session (same tmux session) |
 | `N` | New tmux session (prompts for name) |
 | `K` | Kill session |
+| `r` | Rename session |
 | `d` | Detail popup |
 | `s` | Statistics popup |
 | `T` | Theme picker |
@@ -95,13 +99,16 @@ keys:
   new_session: "n"
   new_tmux_session: "N"
   kill_session: "K"
+  rename_session: "r"
   detail: "d"
   stats: "s"
   help: "?"
 
 sidebar_width: 30
 refresh_interval: "200ms"
-closed_session_hours: 6
+closed_session_hours: 8
+group_sort_order: "name"
+session_sort_order: "name"
 popup_width: 85
 popup_height: 85
 resume_in_current_session: true
@@ -117,7 +124,9 @@ claude_command: "claude"
 |---|---|---|
 | `sidebar_width` | `30` | Width of the session list panel |
 | `refresh_interval` | `200ms` | How often to refresh session data |
-| `closed_session_hours` | `6` | Show closed sessions from the last N hours |
+| `closed_session_hours` | `8` | Show closed sessions from the last N hours |
+| `group_sort_order` | `name` | Sort tmux session groups: `name` (alphabetical) or `activity` |
+| `session_sort_order` | `name` | Sort sessions within groups: `name` (alphabetical) or `activity` |
 | `popup_width` | `85` | Popup width (percentage of terminal) |
 | `popup_height` | `85` | Popup height (percentage of terminal) |
 | `resume_in_current_session` | `true` | Resume sessions in the current tmux pane |
