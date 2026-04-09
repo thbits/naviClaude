@@ -45,6 +45,8 @@ type SidebarModel struct {
 	cursorLineCount   int     // actual number of lines the cursor item occupies
 	activeCount       int     // cached count of non-closed sessions
 	collapseAfterHrs  float64 // auto-collapse groups idle longer than this (hours)
+	groupSortOrder    string  // "name" or "activity"
+	sessionSortOrder  string  // "name" or "activity"
 
 	// Tracked selection: persists across data refreshes and is only updated
 	// by explicit user navigation (j/k, search select, SetCursor, SelectByID).
@@ -74,6 +76,16 @@ func NewSidebar(width, height int) SidebarModel {
 // SetCollapseAfterHours sets the threshold for auto-collapsing stale groups.
 func (m *SidebarModel) SetCollapseAfterHours(hours float64) {
 	m.collapseAfterHrs = hours
+}
+
+// SetGroupSortOrder sets the sort order for tmux session groups ("name" or "activity").
+func (m *SidebarModel) SetGroupSortOrder(order string) {
+	m.groupSortOrder = order
+}
+
+// SetSessionSortOrder sets the sort order for sessions within groups ("name" or "activity").
+func (m *SidebarModel) SetSessionSortOrder(order string) {
+	m.sessionSortOrder = order
 }
 
 // ExpandAll sets search mode: all groups expand and stay expanded across
@@ -155,9 +167,8 @@ func (m *SidebarModel) rebuildGroups() {
 		}
 	}
 
-	// Sort sessions within each group by LastActivity descending (most recent first).
-	// Use ID as a stable tie-breaker to prevent flicker between refreshes.
-	stableSort := func(sessions []*session.Session) {
+	// Sort sessions within each group.
+	activitySort := func(sessions []*session.Session) {
 		sort.Slice(sessions, func(i, j int) bool {
 			ti := sessions[i].LastActivity
 			tj := sessions[j].LastActivity
@@ -167,30 +178,54 @@ func (m *SidebarModel) rebuildGroups() {
 			return sessions[i].ID < sessions[j].ID
 		})
 	}
-	for _, sessions := range groupMap {
-		stableSort(sessions)
+	nameSort := func(sessions []*session.Session) {
+		sort.Slice(sessions, func(i, j int) bool {
+			ni := strings.ToLower(sessionTitle(sessions[i]))
+			nj := strings.ToLower(sessionTitle(sessions[j]))
+			if ni != nj {
+				return ni < nj
+			}
+			ti := sessions[i].LastActivity
+			tj := sessions[j].LastActivity
+			if !ti.Equal(tj) {
+				return ti.After(tj)
+			}
+			return sessions[i].ID < sessions[j].ID
+		})
 	}
-	stableSort(closedSessions)
 
-	// Sort group names by the most recent session activity (most active group first).
+	sortFn := nameSort
+	if m.sessionSortOrder == "activity" {
+		sortFn = activitySort
+	}
+	for _, sessions := range groupMap {
+		sortFn(sessions)
+	}
+	// Closed sessions always sort by activity (slug context is sparse).
+	activitySort(closedSessions)
+
+	// Sort group names.
 	var names []string
 	for name := range groupMap {
 		names = append(names, name)
 	}
-	sort.Slice(names, func(i, j int) bool {
-		gi := groupMap[names[i]]
-		gj := groupMap[names[j]]
-		if len(gi) == 0 || len(gj) == 0 {
-			return len(gi) > len(gj)
-		}
-		ti := gi[0].LastActivity
-		tj := gj[0].LastActivity
-		if !ti.Equal(tj) {
-			return ti.After(tj)
-		}
-		// Stable tie-breaker: alphabetical by group name.
-		return names[i] < names[j]
-	})
+	if m.groupSortOrder == "activity" {
+		sort.Slice(names, func(i, j int) bool {
+			gi := groupMap[names[i]]
+			gj := groupMap[names[j]]
+			if len(gi) == 0 || len(gj) == 0 {
+				return len(gi) > len(gj)
+			}
+			ti := gi[0].LastActivity
+			tj := gj[0].LastActivity
+			if !ti.Equal(tj) {
+				return ti.After(tj)
+			}
+			return names[i] < names[j]
+		})
+	} else {
+		sort.Strings(names)
+	}
 
 	m.groups = nil
 	for _, name := range names {
@@ -648,7 +683,7 @@ func (m SidebarModel) renderGroupHeader(name string, isCursor bool) string {
 func (m SidebarModel) renderSessionItem(s *session.Session, isCursor bool) []string {
 	relTime := relativeTime(time.Since(s.LastActivity))
 
-	displayName := shortPath(s.CWD, s.ProjectName)
+	displayName := sessionTitle(s)
 	if displayName == "" && len(s.ID) >= 8 {
 		displayName = s.ID[:8]
 	} else if displayName == "" {
@@ -824,9 +859,18 @@ func statusIconWithBg(s session.SessionStatus, bg lipgloss.Color, frame int) str
 	return lipgloss.NewStyle().Foreground(fg).Background(bg).Render(ch)
 }
 
-// shortPath returns a display name derived from the CWD.
-// Shows the last two path components (e.g. "git/opmed-charts") to hint
-// that this is a directory. Falls back to projectName if CWD is empty.
+// sessionTitle returns the best display name for a session:
+// user override > slug > shortPath fallback.
+func sessionTitle(s *session.Session) string {
+	if s.DisplayName != "" {
+		return s.DisplayName
+	}
+	if s.Slug != "" {
+		return s.Slug
+	}
+	return shortPath(s.CWD, s.ProjectName)
+}
+
 func shortPath(cwd, projectName string) string {
 	if cwd == "" {
 		return projectName

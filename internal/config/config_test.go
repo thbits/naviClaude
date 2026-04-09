@@ -16,7 +16,7 @@ func TestDefaultConfig(t *testing.T) {
 	}{
 		{"SidebarWidth", cfg.SidebarWidth, 30},
 		{"RefreshInterval", cfg.RefreshInterval, "200ms"},
-		{"ClosedSessionHours", cfg.ClosedSessionHours, 6.0},
+		{"ClosedSessionHours", cfg.ClosedSessionHours, 8.0},
 		{"PopupWidth", cfg.PopupWidth, 85},
 		{"PopupHeight", cfg.PopupHeight, 85},
 		{"ResumeInCurrent", cfg.ResumeInCurrent, true},
@@ -102,8 +102,8 @@ func TestLoadZeroValueDefaults(t *testing.T) {
 	if cfg.SidebarWidth != 30 {
 		t.Errorf("SidebarWidth = %d, want default 30", cfg.SidebarWidth)
 	}
-	if cfg.ClosedSessionHours != 6 {
-		t.Errorf("ClosedSessionHours = %v, want default 6", cfg.ClosedSessionHours)
+	if cfg.ClosedSessionHours != 8 {
+		t.Errorf("ClosedSessionHours = %v, want default 8", cfg.ClosedSessionHours)
 	}
 	if cfg.PopupWidth != 85 {
 		t.Errorf("PopupWidth = %d, want default 85", cfg.PopupWidth)

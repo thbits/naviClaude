@@ -23,6 +23,8 @@ type Config struct {
 	Theme              string      `yaml:"theme"`                 // color theme name (default "tokyo-night")
 	ClaudeCommand      string      `yaml:"claude_command"`        // command to start Claude in new sessions (default "claude")
 	NewSessionDir      string      `yaml:"new_session_dir"`       // working directory for new tmux sessions (default "~")
+	GroupSortOrder     string      `yaml:"group_sort_order"`      // "name" (alphabetical, default) or "activity"
+	SessionSortOrder   string      `yaml:"session_sort_order"`    // "name" (alphabetical, default) or "activity"
 }
 
 // KeyBindings maps user-facing actions to key names (tea.KeyMsg.String() format).
@@ -32,8 +34,9 @@ type KeyBindings struct {
 	Search      string `yaml:"search"`
 	NewSession      string `yaml:"new_session"`
 	NewTmuxSession  string `yaml:"new_tmux_session"`
-	KillSession string `yaml:"kill_session"`
-	Detail      string `yaml:"detail"`
+	KillSession    string `yaml:"kill_session"`
+	RenameSession  string `yaml:"rename_session"`
+	Detail         string `yaml:"detail"`
 	Stats       string `yaml:"stats"`
 	Help        string `yaml:"help"`
 	Quit        string `yaml:"quit"`
@@ -48,15 +51,16 @@ func DefaultConfig() Config {
 			Search:      "/",
 			NewSession:     "n",
 			NewTmuxSession: "N",
-			KillSession: "K",
-			Detail:      "d",
+			KillSession:    "K",
+			RenameSession:  "r",
+			Detail:         "d",
 			Stats:       "s",
 			Help:        "?",
 			Quit:        "q",
 		},
 		SidebarWidth:       30,
 		RefreshInterval:    "200ms",
-		ClosedSessionHours: 6,
+		ClosedSessionHours: 8,
 		PopupWidth:         85,
 		PopupHeight:        85,
 		ResumeInCurrent:    true,
@@ -65,6 +69,8 @@ func DefaultConfig() Config {
 		ActiveWindowSecs:   5,
 		Theme:              "tokyo-night",
 		ClaudeCommand:      "claude",
+		GroupSortOrder:     "name",
+		SessionSortOrder:   "name",
 	}
 }
 
@@ -125,7 +131,7 @@ func Load(path string) (Config, error) {
 		cfg.SidebarWidth = 30
 	}
 	if cfg.ClosedSessionHours == 0 {
-		cfg.ClosedSessionHours = 6
+		cfg.ClosedSessionHours = 8
 	}
 	if cfg.PopupWidth == 0 {
 		cfg.PopupWidth = 85
@@ -144,6 +150,12 @@ func Load(path string) (Config, error) {
 	}
 	if cfg.ClaudeCommand == "" {
 		cfg.ClaudeCommand = "claude"
+	}
+	if cfg.GroupSortOrder == "" {
+		cfg.GroupSortOrder = "name"
+	}
+	if cfg.SessionSortOrder == "" {
+		cfg.SessionSortOrder = "name"
 	}
 
 	return cfg, nil
