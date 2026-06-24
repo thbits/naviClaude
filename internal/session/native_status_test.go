@@ -75,6 +75,65 @@ func TestNativeStatusByIDFallback(t *testing.T) {
 	})
 }
 
+// writeNamedSessionFixture writes a ~/.claude/sessions/<pid>.json file that also
+// carries Claude's own session "name" field, under a fake HOME for tests.
+func writeNamedSessionFixture(t *testing.T, home string, pid int, sessionID, name, status string) {
+	t.Helper()
+	dir := filepath.Join(home, ".claude", "sessions")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"pid":` + strconv.Itoa(pid) + `,"sessionId":"` + sessionID +
+		`","name":"` + name + `","status":"` + status + `"}`
+	if err := os.WriteFile(filepath.Join(dir, strconv.Itoa(pid)+".json"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestReadSessionMetadataByID covers the sessionId-based recovery of the full
+// metadata (name + status) used when the picked PID does not own the <pid>.json
+// file -- the fix that keeps Claude's live session name from going stale on a
+// PID/launcher mismatch (and after /clear, /new).
+func TestReadSessionMetadataByID(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	// File keyed by PID 15319, but the picked PID will differ (a wrapper).
+	writeNamedSessionFixture(t, home, 15319, "uuid-named", "squash-merge-session-status", "busy")
+
+	t.Run("recovers name and status by sessionId", func(t *testing.T) {
+		m, ok := readSessionMetadataByID("uuid-named")
+		if !ok {
+			t.Fatal("readSessionMetadataByID(uuid-named) not found, want found")
+		}
+		if m.Name != "squash-merge-session-status" {
+			t.Errorf("Name = %q, want %q", m.Name, "squash-merge-session-status")
+		}
+		if m.Status != "busy" {
+			t.Errorf("Status = %q, want %q", m.Status, "busy")
+		}
+	})
+
+	t.Run("unknown sessionId returns not found", func(t *testing.T) {
+		if _, ok := readSessionMetadataByID("uuid-missing"); ok {
+			t.Error("readSessionMetadataByID(uuid-missing) = found, want not found")
+		}
+	})
+
+	t.Run("empty sessionId returns not found", func(t *testing.T) {
+		if _, ok := readSessionMetadataByID(""); ok {
+			t.Error("readSessionMetadataByID(\"\") = found, want not found")
+		}
+	})
+
+	t.Run("readSessionStatusByID still delegates correctly", func(t *testing.T) {
+		got, ok := readSessionStatusByID("uuid-named")
+		if !ok || got != "busy" {
+			t.Errorf("readSessionStatusByID(uuid-named) = (%q,%v), want (busy,true)", got, ok)
+		}
+	})
+}
+
 func TestMapNativeStatus(t *testing.T) {
 	tests := []struct {
 		name   string

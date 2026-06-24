@@ -342,26 +342,33 @@ func (d *Detector) buildSession(pane tmux.PaneInfo, claudePID int, tree *Process
 		PID:          claudePID,
 	}
 
-	// Read session metadata from ~/.claude/sessions/{pid}.json (authoritative
-	// source for running processes) and extract session ID + user-set name.
+	// Read session metadata from ~/.claude/sessions/{pid}.json (the authoritative
+	// source for running processes): session ID, Claude's own session name, and
+	// live status. The per-PID file is the fast path.
 	meta := readSessionMetadata(claudePID)
 	if meta.SessionID != "" {
 		s.ID = meta.SessionID
 	} else {
+		// No per-PID file -- typically because the PID naviClaude picked
+		// (comm=="claude") is a launcher/wrapper, not the PID Claude wrote its
+		// <pid>.json under. Resolve the sessionId from other signals, then recover
+		// name + status from the file whose sessionId matches, so they stay as
+		// reliable as the sessionId itself. (Previously only status had this
+		// fallback; the name could go stale on a PID mismatch, and a /clear or
+		// /new name change could be missed.)
 		s.ID = extractSessionIDFallback(claudePID, pane.CurrentPath)
+		if byID, ok := readSessionMetadataByID(s.ID); ok {
+			meta.Name = byID.Name
+			meta.Status = byID.Status
+		}
 	}
 	if meta.Name != "" {
 		s.DisplayName = meta.Name
 	}
-	// Claude Code's own status (busy|waiting|idle|shell), when present -- the
-	// authoritative signal for resolveStatus. The per-PID file is the fast path;
-	// when the picked PID has no status (launcher/wrapper PID mismatch) fall back
-	// to matching by sessionId. Empty on Claude versions without the status field.
-	if meta.Status != "" {
-		s.nativeStatus = meta.Status
-	} else {
-		s.nativeStatus, _ = readSessionStatusByID(s.ID)
-	}
+	// Claude Code's own status (busy|waiting|idle|shell), authoritative for
+	// resolveStatus when present. Empty on Claude versions without the status
+	// field, in which case resolveStatus falls back to signal-based detection.
+	s.nativeStatus = meta.Status
 
 	// Detect if Claude is running as a subprocess (e.g. inside neovim).
 	if parentApp := tree.parentAppName(claudePID); parentApp != "" {
@@ -464,38 +471,50 @@ func mapNativeStatus(status string) (SessionStatus, bool) {
 	}
 }
 
-// readSessionStatusByID scans ~/.claude/sessions and returns the status string
-// of the metadata file whose sessionId matches. This is robust to the PID
-// naviClaude picks (via the comm=="claude" process-tree walk) not being the PID
-// Claude wrote its <pid>.json under -- the CLI layers a launcher/wrapper process
-// (e.g. comm "2.1.190") so the file may belong to a different node in the tree.
-// The sessionId, by contrast, naviClaude resolves reliably. Returns ("", false)
-// when no matching file is found.
-func readSessionStatusByID(sessionID string) (string, bool) {
+// readSessionMetadataByID scans ~/.claude/sessions and returns the full metadata
+// of the file whose sessionId matches. This is robust to the PID naviClaude
+// picks (via the comm=="claude" process-tree walk) not being the PID Claude
+// wrote its <pid>.json under -- the CLI layers a launcher/wrapper process (e.g.
+// comm "2.1.190") so the file may belong to a different node in the tree. The
+// sessionId, by contrast, naviClaude resolves reliably. Returns (zero, false)
+// when sessionID is empty or no matching file is found.
+func readSessionMetadataByID(sessionID string) (sessionMetadata, bool) {
 	if sessionID == "" {
-		return "", false
+		return sessionMetadata{}, false
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return "", false
+		return sessionMetadata{}, false
 	}
-	entries, err := os.ReadDir(filepath.Join(home, ".claude", "sessions"))
+	dir := filepath.Join(home, ".claude", "sessions")
+	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return "", false
+		return sessionMetadata{}, false
 	}
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
 			continue
 		}
-		data, err := os.ReadFile(filepath.Join(home, ".claude", "sessions", e.Name()))
+		data, err := os.ReadFile(filepath.Join(dir, e.Name()))
 		if err != nil {
 			continue
 		}
 		if m := parseSessionMetadata(data); m.SessionID == sessionID {
-			return m.Status, true
+			return m, true
 		}
 	}
-	return "", false
+	return sessionMetadata{}, false
+}
+
+// readSessionStatusByID returns just the native status of the metadata file
+// whose sessionId matches, or ("", false) when none is found. Thin wrapper over
+// readSessionMetadataByID for the status-only callers.
+func readSessionStatusByID(sessionID string) (string, bool) {
+	m, ok := readSessionMetadataByID(sessionID)
+	if !ok {
+		return "", false
+	}
+	return m.Status, true
 }
 
 // nativeStatusString returns Claude Code's own status for a session, preferring
