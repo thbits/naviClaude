@@ -87,6 +87,18 @@ func (m *Manager) CreateNewTmuxSession(cwd, claudeCmd, sessionName string) (tmux
 		sessionName = windowName
 	}
 
+	// If a tmux session with this name already exists, open Claude in a new
+	// window within it instead of failing with tmux's "duplicate session"
+	// error. This makes "N" reuse an existing session by name rather than only
+	// ever creating a brand new one.
+	if m.tmuxClient.HasSession(sessionName) {
+		target, err = m.CreateNewWithTarget(cwd, sessionName, claudeCmd)
+		if err != nil {
+			return "", "", err
+		}
+		return sessionName, target, nil
+	}
+
 	target, err = m.tmuxClient.NewSessionPrint(tmux.NewSessionOptions{
 		Name:       sessionName,
 		WindowName: windowName,
@@ -131,20 +143,41 @@ func (m *Manager) CreateNew(cwd string, targetTmuxSession string) error {
 	})
 }
 
-// CreateNewWithTarget is like CreateNew but returns the tmux target
-// (e.g. "session:3.0") of the newly created pane.
-func (m *Manager) CreateNewWithTarget(cwd string, targetTmuxSession string) (string, error) {
+// CreateNewWithTarget opens a new tmux window in targetTmuxSession, changes to
+// cwd, starts Claude using claudeCmd, and returns the new pane's tmux target
+// (e.g. "session:3.0"). claudeCmd defaults to "claude" when empty.
+//
+// The command is typed into the pane's shell via send-keys rather than passed to
+// new-window, so the user's interactive shell config -- aliases (e.g. a "cc"
+// alias), functions, and PATH -- is respected, matching how CreateNewTmuxSession
+// (the "N" key) launches Claude. This also makes Claude run as a child of the
+// pane's shell, which the detector recognizes: a window command instead execs
+// Claude as the pane's own process, whose tmux pane_current_command is the
+// version string (e.g. "2.1.191"), not "claude".
+func (m *Manager) CreateNewWithTarget(cwd, targetTmuxSession, claudeCmd string) (string, error) {
 	if cwd == "" {
 		cwd = "."
+	}
+	if claudeCmd == "" {
+		claudeCmd = "claude"
 	}
 	name := filepath.Base(cwd)
 	if name == "" || name == "." {
 		name = "claude"
 	}
-	cmd := fmt.Sprintf("cd %q && claude", cwd)
-	return m.tmuxClient.NewWindowPrint(tmux.NewWindowOptions{
-		Target:  targetTmuxSession + ":",
-		Name:    name,
-		Command: cmd,
+	target, err := m.tmuxClient.NewWindowPrint(tmux.NewWindowOptions{
+		Target: targetTmuxSession + ":",
+		Name:   name,
 	})
+	if err != nil {
+		return "", fmt.Errorf("create window: %w", err)
+	}
+	cmd := fmt.Sprintf("cd %q && %s", cwd, claudeCmd)
+	if err := m.tmuxClient.SendKeys(target, cmd); err != nil {
+		return "", fmt.Errorf("send claude command: %w", err)
+	}
+	if err := m.tmuxClient.SendKeys(target, "Enter"); err != nil {
+		return "", fmt.Errorf("send enter: %w", err)
+	}
+	return target, nil
 }

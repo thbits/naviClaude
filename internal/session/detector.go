@@ -316,8 +316,15 @@ func stripANSIBasic(s string) string {
 // sessionFromPane checks whether a pane is running a Claude process (directly
 // or as a descendant), and if so returns a Session for it.
 func (d *Detector) sessionFromPane(pane tmux.PaneInfo, tree *ProcessTree) *Session {
-	// First check the pane's direct current command.
-	if d.matchesProcessName(pane.CurrentCommand) {
+	// First check whether the pane's own process is Claude. tmux's
+	// pane_current_command is the fast signal, but newer Claude versions set
+	// their process title to the version string (e.g. "2.1.191"), which tmux
+	// reports instead of "claude" -- so also match the pane PID's real executable
+	// basename from the ps-built tree. This matters when Claude is exec'd as the
+	// pane's own process (e.g. a window started with `sh -c "cd x && claude"`,
+	// where the shell execs claude as the final command), so it is the pane PID
+	// itself rather than a descendant the walk below would find.
+	if d.matchesProcessName(pane.CurrentCommand) || d.matchesProcessName(tree.names[pane.PID]) {
 		return d.buildSession(pane, pane.PID, tree)
 	}
 

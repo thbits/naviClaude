@@ -1198,8 +1198,9 @@ func (m Model) createNewSession() (tea.Model, tea.Cmd) {
 	}
 
 	manager := m.manager
+	claudeCmd := m.cfg.ClaudeCommand
 	return m, func() tea.Msg {
-		target, err := manager.CreateNewWithTarget(cwd, tmuxSess)
+		target, err := manager.CreateNewWithTarget(cwd, tmuxSess, claudeCmd)
 		if err != nil {
 			return newSessionMsg{err: err}
 		}

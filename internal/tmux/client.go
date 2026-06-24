@@ -197,6 +197,16 @@ func (c *Client) NewSessionPrint(opts NewSessionOptions) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
+// HasSession reports whether a tmux session with exactly the given name exists.
+// The "=" target prefix forces an exact-name match, so "dev" does not match an
+// existing "dev-tools". Returns false for an empty name.
+func (c *Client) HasSession(name string) bool {
+	if name == "" {
+		return false
+	}
+	return exec.Command("tmux", "has-session", "-t", "="+name).Run() == nil
+}
+
 // ResizeToClient resizes all windows in a session to match the current client
 // dimensions. This is needed for detached sessions which default to 80x24.
 func (c *Client) ResizeToClient(sessionName string) error {

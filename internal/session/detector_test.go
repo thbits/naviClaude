@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/thbits/naviClaude/internal/tmux"
 )
 
 func TestClassifyModel(t *testing.T) {
@@ -206,10 +208,10 @@ func TestProcessTreeIsAncestorOf(t *testing.T) {
 	}
 
 	tests := []struct {
-		name      string
-		ancestor  int
-		desc      int
-		want      bool
+		name     string
+		ancestor int
+		desc     int
+		want     bool
 	}{
 		{"direct parent", 20, 30, true},
 		{"grandparent", 10, 30, true},
@@ -277,6 +279,57 @@ func TestProcessTreeFindMatchingDescendant(t *testing.T) {
 		got := tree.findMatchingDescendant(10, matchClaude, 1)
 		if got != 30 {
 			t.Errorf("got PID %d, want 30", got)
+		}
+	})
+}
+
+// TestSessionFromPaneVersionTitle covers detection of a Claude process that is
+// the pane's OWN process (exec'd directly, e.g. a window started with
+// `sh -c "cd x && claude"`, where the shell execs claude as the final command).
+// Newer Claude versions set their process title to the version string (e.g.
+// "2.1.191"), which tmux reports as pane_current_command instead of "claude".
+// Since claude is the pane PID rather than a descendant, detection must fall
+// back to the pane PID's real executable name from the ps-built process tree.
+func TestSessionFromPaneVersionTitle(t *testing.T) {
+	d := NewDetector(nil, nil, 0, 0) // defaults: process name "claude"
+
+	const panePID = 56273
+	tree := &ProcessTree{
+		children: make(map[int][]int),
+		names:    map[int]string{panePID: "claude"}, // ps comm reports the real executable
+		ppid:     map[int]int{panePID: 1},
+		cpu:      map[int]float64{panePID: 0},
+		rss:      map[int]float64{panePID: 0},
+	}
+
+	t.Run("detects claude when tmux reports the version title", func(t *testing.T) {
+		pane := tmux.PaneInfo{
+			SessionName:    "work",
+			Target:         "work:3.1",
+			CurrentCommand: "2.1.191", // tmux reports Claude's version title, not "claude"
+			PID:            panePID,
+			CurrentPath:    "/tmp",
+		}
+		s := d.sessionFromPane(pane, tree)
+		if s == nil {
+			t.Fatal("sessionFromPane returned nil; want a session (claude is the pane's own process)")
+		}
+		if s.PID != panePID {
+			t.Errorf("session PID = %d, want %d", s.PID, panePID)
+		}
+	})
+
+	t.Run("plain shell pane is still ignored", func(t *testing.T) {
+		shellTree := &ProcessTree{
+			children: make(map[int][]int),
+			names:    map[int]string{100: "zsh"},
+			ppid:     map[int]int{100: 1},
+			cpu:      map[int]float64{100: 0},
+			rss:      map[int]float64{100: 0},
+		}
+		pane := tmux.PaneInfo{Target: "work:4.1", CurrentCommand: "zsh", PID: 100, CurrentPath: "/tmp"}
+		if s := d.sessionFromPane(pane, shellTree); s != nil {
+			t.Errorf("sessionFromPane = %+v, want nil for a plain shell pane", s)
 		}
 	})
 }
