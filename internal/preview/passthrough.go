@@ -30,13 +30,33 @@ func (p *Passthrough) SendKey(target string, msg tea.KeyMsg) error {
 // translateKey converts a Bubble Tea KeyMsg into a tmux send-keys argument.
 // Printable rune sequences are sent as literal strings. Special keys are
 // translated to tmux named key strings.
+//
+// The Alt modifier is, at the byte level, an ESC prefix in front of the key
+// (Meta). tmux reproduces this with its "M-" key prefix: e.g. "M-Enter" emits
+// ESC CR, exactly what the terminal sends for Alt+Enter pressed directly. So an
+// Alt-modified key is forwarded with the "M-" prefix; without it, Alt+Enter
+// would arrive as a bare Enter and submit the Claude prompt instead of
+// inserting a newline.
 func translateKey(msg tea.KeyMsg) string {
+	base := baseKey(msg)
+	if base == "" {
+		return ""
+	}
+	if msg.Alt {
+		return "M-" + base
+	}
+	return base
+}
+
+// baseKey returns the unmodified tmux key string for a KeyMsg, ignoring the
+// Alt modifier (which translateKey applies as an "M-" prefix).
+func baseKey(msg tea.KeyMsg) string {
 	switch msg.Type {
 	case tea.KeyRunes:
 		return string(msg.Runes)
 
 	case tea.KeySpace:
-		return " "
+		return "Space"
 
 	case tea.KeyEnter:
 		return "Enter"
