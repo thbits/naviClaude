@@ -32,13 +32,19 @@ func (e *CaptureEngine) Capture(target string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	// capture-pane omits the cursor line at the bottom of the pane, making
-	// the output 1 line shorter than the actual pane height. TrimSuffix
-	// removes the trailing newline so Split doesn't add a spurious element,
-	// then we append an empty line to restore the correct total line count.
 	raw = strings.TrimSuffix(raw, "\n")
 	lines := strings.Split(raw, "\n")
-	lines = append(lines, "")
+
+	// Drop trailing blank lines. capture-pane -S - returns the full pane grid,
+	// so a pane taller than its current content yields many trailing blank
+	// lines -- most notably Claude Code's trust/permission prompts, which render
+	// at the top of the pane and leave the rest empty. The preview viewport
+	// auto-scrolls to the bottom to follow live output; without trimming, those
+	// blanks push the prompt off the top and the preview looks empty. For a
+	// normal bottom-anchored session this is a no-op (its content already ends
+	// at the bottom). When the whole pane is blank this collapses to nothing, so
+	// the caller surfaces its "waiting for output" placeholder.
+	lines = trimTrailingBlankLines(lines)
 
 	if e.maxWidth > 0 {
 		// Truncate lines that exceed the preview viewport width. This is
@@ -53,4 +59,15 @@ func (e *CaptureEngine) Capture(target string) (string, error) {
 		}
 	}
 	return strings.Join(lines, "\n"), nil
+}
+
+// trimTrailingBlankLines returns lines with trailing blank lines removed. A line
+// is blank when it holds nothing but whitespace and ANSI escape sequences.
+// Interior blank lines are preserved.
+func trimTrailingBlankLines(lines []string) []string {
+	end := len(lines)
+	for end > 0 && strings.TrimSpace(ansi.Strip(lines[end-1])) == "" {
+		end--
+	}
+	return lines[:end]
 }
