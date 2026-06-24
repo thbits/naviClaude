@@ -13,6 +13,12 @@ import (
 	"github.com/thbits/naviClaude/internal/styles"
 )
 
+// cacheExpiryThreshold is how long a live session can sit idle before Claude's
+// prompt cache is assumed to have expired. Past this point, resuming the
+// session re-processes its whole context as uncached input tokens, so the next
+// message costs far more than a cached resume would.
+const cacheExpiryThreshold = time.Hour
+
 // PreviewModel is the right panel that shows captured terminal content for the
 // selected session.
 type PreviewModel struct {
@@ -211,6 +217,13 @@ func (m PreviewModel) renderHeader() string {
 	}
 	leftParts = append(leftParts, statusBadge)
 
+	// Cache-expiry warning, right next to the status badge so it can't be
+	// missed when scanning many sessions. A session idle past the prompt-cache
+	// TTL re-processes its whole context on the next message / on resume.
+	if cacheExpired(s, time.Now()) {
+		leftParts = append(leftParts, styles.PreviewHeaderAlert.Render("cache expired"))
+	}
+
 	// Tmux target in gray (e.g. "infra:1.2").
 	if s.TmuxTarget != "" {
 		leftParts = append(leftParts, styles.PreviewHeaderLabel.Render(s.TmuxTarget))
@@ -259,6 +272,17 @@ func (m PreviewModel) renderHeader() string {
 		headerStyle = styles.PreviewHeaderFocused
 	}
 	return headerStyle.Width(maxWidth).Render(headerLine)
+}
+
+// cacheExpired reports whether a session has been idle long enough that
+// Claude's prompt cache will have expired. Closed sessions warn too: resuming
+// one re-sends the whole conversation, so a cold cache still means a costly
+// re-process. Sessions with no known last-activity time never warn.
+func cacheExpired(s *session.Session, now time.Time) bool {
+	if s == nil || s.LastActivity.IsZero() {
+		return false
+	}
+	return now.Sub(s.LastActivity) >= cacheExpiryThreshold
 }
 
 // SetGroupSummary renders a summary view for a tmux session group.

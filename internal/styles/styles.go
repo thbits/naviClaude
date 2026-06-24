@@ -195,6 +195,11 @@ var PreviewHeaderValue = lipgloss.NewStyle().
 var PreviewHeaderBranch = lipgloss.NewStyle().
 	Foreground(ColorGreen)
 
+// PreviewHeaderAlert is a red warning badge in the header (e.g. "cache expired").
+var PreviewHeaderAlert = lipgloss.NewStyle().
+	Foreground(ColorRed).
+	Bold(true)
+
 // PreviewPassthroughBadge is the "PASSTHROUGH" indicator.
 var PreviewPassthroughBadge = lipgloss.NewStyle().
 	Foreground(ColorGreen).
@@ -571,6 +576,7 @@ func ApplyTheme(p Palette) {
 	PreviewHeaderLabel = lipgloss.NewStyle().Foreground(ColorGray)
 	PreviewHeaderValue = lipgloss.NewStyle().Foreground(ColorGray)
 	PreviewHeaderBranch = lipgloss.NewStyle().Foreground(ColorGreen)
+	PreviewHeaderAlert = lipgloss.NewStyle().Foreground(ColorRed).Bold(true)
 	PreviewPassthroughBadge = lipgloss.NewStyle().Foreground(ColorGreen).Bold(true)
 	StatusBadgeActive = lipgloss.NewStyle().Foreground(ColorGreen).Bold(true)
 	StatusBadgeWaiting = lipgloss.NewStyle().Foreground(ColorAmber).Bold(true)
