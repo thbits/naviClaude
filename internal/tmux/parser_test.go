@@ -12,8 +12,8 @@ func TestParsePanes(t *testing.T) {
 		wantFirst PaneInfo
 	}{
 		{
-			name: "single valid line",
-			raw:  "main:0.0 zsh 12345 /home/user/project",
+			name:      "single valid line",
+			raw:       "main:0.0 zsh 12345 /home/user/project",
 			wantCount: 1,
 			wantFirst: PaneInfo{
 				SessionName:    "main",
@@ -209,6 +209,54 @@ func TestParsePaneLine(t *testing.T) {
 			}
 			if !tt.wantError && err != nil {
 				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestParseCursorInfo(t *testing.T) {
+	tests := []struct {
+		name      string
+		raw       string
+		want      CursorInfo
+		wantError bool
+	}{
+		{
+			name: "visible cursor",
+			raw:  "2 64 68 1\n",
+			want: CursorInfo{X: 2, Y: 64, PaneHeight: 68, Visible: true},
+		},
+		{
+			name: "hidden cursor",
+			raw:  "0 0 24 0",
+			want: CursorInfo{X: 0, Y: 0, PaneHeight: 24, Visible: false},
+		},
+		{
+			name:      "too few fields",
+			raw:       "2 64 68",
+			wantError: true,
+		},
+		{
+			name:      "non-numeric field",
+			raw:       "x 64 68 1",
+			wantError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseCursorInfo(tt.raw)
+			if tt.wantError {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("parseCursorInfo(%q) = %+v, want %+v", tt.raw, got, tt.want)
 			}
 		})
 	}

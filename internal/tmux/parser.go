@@ -81,6 +81,45 @@ func parsePaneLine(line string) (PaneInfo, error) {
 	}, nil
 }
 
+// CursorInfo holds a pane's cursor state parsed from a tmux display-message
+// format string.
+type CursorInfo struct {
+	X          int  // cursor column (0-based)
+	Y          int  // cursor row within the visible pane (0-based, top = 0)
+	PaneHeight int  // number of visible rows in the pane
+	Visible    bool // cursor_flag: whether the cursor is currently shown
+}
+
+// parseCursorInfo parses the raw output of:
+//
+//	tmux display-message -p '#{cursor_x} #{cursor_y} #{pane_height} #{cursor_flag}'
+//
+// The four fields are space-separated integers; cursor_flag is 1 when the
+// cursor is visible.
+func parseCursorInfo(raw string) (CursorInfo, error) {
+	fields := strings.Fields(strings.TrimSpace(raw))
+	if len(fields) < 4 {
+		return CursorInfo{}, fmt.Errorf("expected 4 cursor fields, got %q", raw)
+	}
+	x, err := strconv.Atoi(fields[0])
+	if err != nil {
+		return CursorInfo{}, fmt.Errorf("parse cursor_x %q: %w", fields[0], err)
+	}
+	y, err := strconv.Atoi(fields[1])
+	if err != nil {
+		return CursorInfo{}, fmt.Errorf("parse cursor_y %q: %w", fields[1], err)
+	}
+	h, err := strconv.Atoi(fields[2])
+	if err != nil {
+		return CursorInfo{}, fmt.Errorf("parse pane_height %q: %w", fields[2], err)
+	}
+	flag, err := strconv.Atoi(fields[3])
+	if err != nil {
+		return CursorInfo{}, fmt.Errorf("parse cursor_flag %q: %w", fields[3], err)
+	}
+	return CursorInfo{X: x, Y: y, PaneHeight: h, Visible: flag != 0}, nil
+}
+
 // parseTarget splits a tmux target string of the form "session:window.pane"
 // into its components.
 func parseTarget(target string) (session string, windowIndex, paneIndex int, err error) {
