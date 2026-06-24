@@ -35,9 +35,11 @@ const (
 
 // Capture returns the raw pane content including ANSI escape sequences for the
 // given tmux target (e.g. "session:1.0"). Lines are truncated to maxWidth if
-// set, and the pane's cursor is overlaid as a reverse-video block so the
-// preview shows where input lands (capture-pane omits the cursor).
-func (e *CaptureEngine) Capture(target string) (string, error) {
+// set. When showCursor is true the pane's cursor is overlaid as a reverse-video
+// block so the preview shows where input lands (capture-pane omits the cursor);
+// callers pass false for unfocused panes (e.g. while browsing the menu) so the
+// block doesn't imply the pane is receiving input.
+func (e *CaptureEngine) Capture(target string, showCursor bool) (string, error) {
 	raw, err := e.tmuxClient.CapturePaneOutput(target)
 	if err != nil {
 		return "", err
@@ -78,7 +80,9 @@ func (e *CaptureEngine) Capture(target string) (string, error) {
 		}
 	}
 
-	lines = e.overlayCursor(target, lines, rawCount)
+	if showCursor {
+		lines = e.overlayCursor(target, lines, rawCount)
+	}
 
 	return strings.Join(lines, "\n"), nil
 }

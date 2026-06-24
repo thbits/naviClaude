@@ -1579,9 +1579,13 @@ func (m Model) capturePreviewCmd() tea.Cmd {
 	sessionID := sess.ID
 	captureEngine := m.captureEngine
 	statusDetector := m.statusDetector
+	// Only overlay the pane cursor when the preview is focused (passthrough);
+	// while browsing the menu the pane isn't receiving input, so a cursor block
+	// would be misleading.
+	showCursor := m.mode == ModePassthrough
 
 	return func() tea.Msg {
-		content, err := captureEngine.Capture(target)
+		content, err := captureEngine.Capture(target, showCursor)
 		if err != nil {
 			return previewCaptureMsg{err: err, target: target}
 		}
