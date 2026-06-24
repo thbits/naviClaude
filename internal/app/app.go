@@ -106,6 +106,7 @@ type Model struct {
 	themePicker ui.ThemePickerModel
 	nameInput   ui.NameInputModel
 	renameInput ui.NameInputModel
+	dirPicker   ui.DirPickerModel
 
 	// Backend services
 	tmuxClient     *tmux.Client
@@ -127,6 +128,8 @@ type Model struct {
 	confirmSession    *session.Session   // session pending kill confirmation
 	pendingNewTarget  string             // tmux target of a just-created session; kept until detected
 	pendingNewTmuxCWD string             // CWD for the tmux session being named
+	pendingDirAction  dirAction          // which flow opened the directory picker
+	pendingDirTmux    string             // target tmux session for the new-Claude (n) flow
 	renameSessionID   string             // session ID being renamed
 	previewTarget     string             // tmux target currently shown in the preview panel
 	resizedWinTarget  string             // window target we resized for preview
@@ -185,6 +188,7 @@ func New(version string) Model {
 		themePicker: ui.NewThemePicker(cfg.Theme),
 		nameInput:   ui.NewNameInput(),
 		renameInput: ui.NewRenameInput(),
+		dirPicker:   ui.NewDirPicker(),
 
 		// Backend
 		tmuxClient:     tc,
@@ -610,6 +614,10 @@ func (m Model) View() string {
 		screen = ui.PlaceOverlay(screen, m.themePicker.View())
 	}
 
+	if m.dirPicker.IsVisible() {
+		screen = ui.PlaceOverlay(screen, m.dirPicker.View())
+	}
+
 	if m.detail.IsVisible() {
 		screen = ui.PlaceOverlay(screen, m.detail.View())
 	}
@@ -675,6 +683,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleNameInputKey(msg)
 	case ModeRenameSession:
 		return m.handleRenameSessionKey(msg)
+	case ModeDirPicker:
+		return m.handleDirPickerKey(msg)
 	}
 	return m, nil
 }
@@ -1197,6 +1207,27 @@ func (m Model) createNewSession() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// Open the directory picker; the Claude window is created once a directory
+	// is chosen (Enter). The current dir is preselected, so Enter keeps the
+	// previous behavior of opening in the highlighted session's directory.
+	base := cwd
+	if base == "" {
+		if home, err := os.UserHomeDir(); err == nil {
+			base = home
+		}
+	}
+	m.pendingDirAction = dirActionNewClaude
+	m.pendingDirTmux = tmuxSess
+	return m.openDirPicker(base, "New Claude session directory")
+}
+
+// createClaudeSessionIn launches a new Claude window in tmuxSess rooted at cwd.
+func (m Model) createClaudeSessionIn(cwd, tmuxSess string) (tea.Model, tea.Cmd) {
+	if tmuxSess == "" {
+		m.err = fmt.Errorf("new session: cannot determine target tmux session")
+		m.statusbar.SetError("cannot determine target tmux session")
+		return m, nil
+	}
 	manager := m.manager
 	claudeCmd := m.cfg.ClaudeCommand
 	return m, func() tea.Msg {
@@ -1213,25 +1244,116 @@ func (m Model) createNewSession() (tea.Model, tea.Cmd) {
 }
 
 func (m Model) createNewTmuxSession() (tea.Model, tea.Cmd) {
-	// Use configured directory, or fall back to home dir.
+	// Use the configured directory (or home) as the picker's starting base; the
+	// picker handles ~ expansion. After a directory is chosen the flow continues
+	// into the session-name input (see confirmDirSelection).
 	cwd := m.cfg.NewSessionDir
 	if cwd == "" {
 		cwd, _ = os.UserHomeDir()
 	}
-	// Expand ~ prefix.
-	if strings.HasPrefix(cwd, "~/") {
-		if home, err := os.UserHomeDir(); err == nil {
-			cwd = filepath.Join(home, cwd[2:])
+	m.pendingDirAction = dirActionNewTmux
+	return m.openDirPicker(cwd, "New tmux session directory")
+}
+
+// openDirPicker activates the directory-picker overlay rooted at base.
+func (m Model) openDirPicker(base, title string) (tea.Model, tea.Cmd) {
+	m.mode = ModeDirPicker
+	m.dirPicker.SetSize(m.width, m.height)
+	m.dirPicker.SetTitle(title)
+	m.dirPicker.Show(base, m.sessionDirs())
+	m.statusbar.SetMode(ModeDirPicker.String())
+	return m, m.dirPicker.Init()
+}
+
+// sessionDirs returns the de-duplicated working directories of known sessions,
+// used to seed the directory picker's candidate list.
+func (m Model) sessionDirs() []string {
+	seen := make(map[string]bool)
+	var dirs []string
+	for _, s := range m.sessions {
+		if s.CWD != "" && !seen[s.CWD] {
+			seen[s.CWD] = true
+			dirs = append(dirs, s.CWD)
 		}
-	} else if cwd == "~" {
-		cwd, _ = os.UserHomeDir()
 	}
-	m.pendingNewTmuxCWD = cwd
-	m.mode = ModeNameInput
-	m.nameInput.SetSize(m.sidebarWidth())
-	cmd := m.nameInput.Activate()
-	m.statusbar.SetMode(ModeNameInput.String())
-	return m, cmd
+	return dirs
+}
+
+// handleDirPickerKey drives the directory picker: typing filters, arrows/Tab
+// navigate, Enter selects, Esc cancels.
+func (m Model) handleDirPickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.dirPicker.Hide()
+		m.pendingDirAction = dirActionNone
+		m.pendingDirTmux = ""
+		m.mode = ModeList
+		m.statusbar.SetMode(ModeList.String())
+		return m, nil
+
+	case "up", "ctrl+p":
+		m.dirPicker.MoveUp()
+		return m, nil
+
+	case "down", "ctrl+n":
+		m.dirPicker.MoveDown()
+		return m, nil
+
+	case "right", "tab":
+		m.dirPicker.Descend()
+		return m, nil
+
+	case "left":
+		m.dirPicker.Parent()
+		return m, nil
+
+	case "enter":
+		dir := m.dirPicker.Selected()
+		m.dirPicker.Hide()
+		return m.confirmDirSelection(dir)
+
+	default:
+		var cmd tea.Cmd
+		m.dirPicker, cmd = m.dirPicker.Update(msg)
+		return m, cmd
+	}
+}
+
+// confirmDirSelection dispatches the chosen directory to the flow that opened
+// the picker: create a Claude window (n), or continue to the name input for a
+// new tmux session (N).
+func (m Model) confirmDirSelection(dir string) (tea.Model, tea.Cmd) {
+	action := m.pendingDirAction
+	m.pendingDirAction = dirActionNone
+
+	if dir == "" {
+		m.pendingDirTmux = ""
+		m.mode = ModeList
+		m.statusbar.SetMode(ModeList.String())
+		return m, nil
+	}
+
+	switch action {
+	case dirActionNewClaude:
+		tmuxSess := m.pendingDirTmux
+		m.pendingDirTmux = ""
+		m.mode = ModeList
+		m.statusbar.SetMode(ModeList.String())
+		return m.createClaudeSessionIn(dir, tmuxSess)
+
+	case dirActionNewTmux:
+		m.pendingNewTmuxCWD = dir
+		m.mode = ModeNameInput
+		m.nameInput.SetSize(m.sidebarWidth())
+		cmd := m.nameInput.Activate()
+		m.statusbar.SetMode(ModeNameInput.String())
+		return m, cmd
+
+	default:
+		m.mode = ModeList
+		m.statusbar.SetMode(ModeList.String())
+		return m, nil
+	}
 }
 
 func (m Model) confirmNewTmuxSession(name string) (tea.Model, tea.Cmd) {
@@ -1668,6 +1790,7 @@ func (m *Model) resizeComponents() {
 	m.detail.SetSize(m.width, m.height)
 	m.statsModel.SetSize(m.width, m.height)
 	m.themePicker.SetSize(m.width, m.height)
+	m.dirPicker.SetSize(m.width, m.height)
 	m.contextMenu.SetTermSize(m.width, m.height)
 	// Truncate captured pane lines to the preview viewport width to prevent
 	// overflow when the source pane is wider than the popup.

@@ -36,6 +36,20 @@ const (
 
 	// ModeRenameSession shows an inline text input for renaming a session.
 	ModeRenameSession
+
+	// ModeDirPicker shows the directory picker overlay used when creating a new
+	// Claude (n) or tmux (N) session.
+	ModeDirPicker
+)
+
+// dirAction records which session-creation flow opened the directory picker, so
+// the app knows what to do once a directory is selected.
+type dirAction int
+
+const (
+	dirActionNone dirAction = iota
+	dirActionNewClaude
+	dirActionNewTmux
 )
 
 // String returns a short label suitable for the status bar.
@@ -61,6 +75,8 @@ func (m Mode) String() string {
 		return "name input"
 	case ModeRenameSession:
 		return "rename"
+	case ModeDirPicker:
+		return "dir picker"
 	default:
 		return "unknown"
 	}
