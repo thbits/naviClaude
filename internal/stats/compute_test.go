@@ -350,3 +350,71 @@ func TestScanProjectCounts(t *testing.T) {
 		}
 	})
 }
+
+func TestScanProjectCountsNaming(t *testing.T) {
+	t.Run("derives name from cwd, not the lossy slug", func(t *testing.T) {
+		// AWS-region dir whose last path component is "us-east-1": the old
+		// slug heuristic (split on "-", take last token) collapses to "1".
+		dir := t.TempDir()
+		proj := filepath.Join(dir, "projects", "-Users-tomhalo-git-opmed-tf-opmed-deployment-ng-prod-us-east-1")
+		os.MkdirAll(proj, 0o755)
+		line := `{"cwd":"/Users/tomhalo/git/opmed-tf/opmed-deployment-ng/prod/us-east-1","type":"user"}`
+		os.WriteFile(filepath.Join(proj, "a.jsonl"), []byte(line+"\n"), 0o644)
+
+		counts := scanProjectCounts(dir, "all")
+		if len(counts) != 1 {
+			t.Fatalf("got %d counts, want 1", len(counts))
+		}
+		if counts[0].Name != "prod/us-east-1" {
+			t.Errorf("name = %q, want %q", counts[0].Name, "prod/us-east-1")
+		}
+	})
+
+	t.Run("finds cwd on a later jsonl line", func(t *testing.T) {
+		// The first line is often a meta record with no cwd.
+		dir := t.TempDir()
+		proj := filepath.Join(dir, "projects", "b-myproj")
+		os.MkdirAll(proj, 0o755)
+		content := "{\"type\":\"meta\",\"sessionId\":\"x\"}\n" +
+			"{\"cwd\":\"/home/tom/work/myproj\",\"type\":\"user\"}\n"
+		os.WriteFile(filepath.Join(proj, "a.jsonl"), []byte(content), 0o644)
+
+		counts := scanProjectCounts(dir, "all")
+		if len(counts) != 1 {
+			t.Fatalf("got %d counts, want 1", len(counts))
+		}
+		if counts[0].Name != "work/myproj" {
+			t.Errorf("name = %q, want %q", counts[0].Name, "work/myproj")
+		}
+	})
+
+	t.Run("uses single component when cwd is shallow", func(t *testing.T) {
+		dir := t.TempDir()
+		proj := filepath.Join(dir, "projects", "-root")
+		os.MkdirAll(proj, 0o755)
+		os.WriteFile(filepath.Join(proj, "a.jsonl"), []byte(`{"cwd":"/root"}`+"\n"), 0o644)
+
+		counts := scanProjectCounts(dir, "all")
+		if len(counts) != 1 {
+			t.Fatalf("got %d counts, want 1", len(counts))
+		}
+		if counts[0].Name != "root" {
+			t.Errorf("name = %q, want %q", counts[0].Name, "root")
+		}
+	})
+
+	t.Run("falls back to slug heuristic when no cwd present", func(t *testing.T) {
+		dir := t.TempDir()
+		proj := filepath.Join(dir, "projects", "Users-tom-myapp")
+		os.MkdirAll(proj, 0o755)
+		os.WriteFile(filepath.Join(proj, "a.jsonl"), []byte("{}\n"), 0o644)
+
+		counts := scanProjectCounts(dir, "all")
+		if len(counts) != 1 {
+			t.Fatalf("got %d counts, want 1", len(counts))
+		}
+		if counts[0].Name != "myapp" {
+			t.Errorf("name = %q, want %q", counts[0].Name, "myapp")
+		}
+	})
+}

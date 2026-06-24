@@ -1,6 +1,7 @@
 package stats
 
 import (
+	"bufio"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -349,14 +350,21 @@ func scanProjectCounts(claudeDir string, filter string) []ProjectCount {
 			continue
 		}
 
-		// Convert slug back to a readable name: take the last path component.
-		name := e.Name()
-		parts := strings.Split(name, "-")
-		if len(parts) > 1 {
-			name = parts[len(parts)-1]
-		}
+		// Prefer the real working directory recorded in the session files.
+		// The directory slug is lossy -- Claude maps every "/" in the path to
+		// "-", which is indistinguishable from "-" characters already in the
+		// path -- so splitting it mangles names like "dev/us-east-1" into "1".
+		name := projectNameFromCwd(readProjectCwd(files))
 		if name == "" {
+			// Fall back to the slug heuristic: take the last path component.
 			name = e.Name()
+			parts := strings.Split(name, "-")
+			if len(parts) > 1 {
+				name = parts[len(parts)-1]
+			}
+			if name == "" {
+				name = e.Name()
+			}
 		}
 
 		counts = append(counts, ProjectCount{Name: name, Count: count})
@@ -371,4 +379,64 @@ func scanProjectCounts(claudeDir string, filter string) []ProjectCount {
 		counts = counts[:10]
 	}
 	return counts
+}
+
+// projectNameFromCwd builds a readable project name from a working-directory
+// path: the last up to two path components, joined with "/". Showing two
+// components disambiguates projects whose final component is shared, such as
+// AWS region dirs (dev/us-east-1 vs prod/us-east-1). Returns "" for an empty
+// path so callers can fall back to the directory slug.
+func projectNameFromCwd(cwd string) string {
+	var clean []string
+	for _, p := range strings.Split(cwd, "/") {
+		if p != "" {
+			clean = append(clean, p)
+		}
+	}
+	switch len(clean) {
+	case 0:
+		return ""
+	case 1:
+		return clean[0]
+	default:
+		return clean[len(clean)-2] + "/" + clean[len(clean)-1]
+	}
+}
+
+// readProjectCwd returns the working directory recorded in a project's session
+// files, or "" if none record one. Sessions in a project all share the same
+// cwd, so the first file that carries one is sufficient.
+func readProjectCwd(files []string) string {
+	for _, f := range files {
+		if cwd := cwdFromFile(f); cwd != "" {
+			return cwd
+		}
+	}
+	return ""
+}
+
+// cwdFromFile scans a single .jsonl session file for the first record carrying
+// a "cwd" field. The opening record is often metadata without a cwd, so it
+// reads subsequent lines until one is found.
+func cwdFromFile(path string) string {
+	fh, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer fh.Close()
+
+	scanner := bufio.NewScanner(fh)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1<<20)
+	for scanner.Scan() {
+		var rec struct {
+			Cwd string `json:"cwd"`
+		}
+		if err := json.Unmarshal(scanner.Bytes(), &rec); err != nil {
+			continue
+		}
+		if rec.Cwd != "" {
+			return rec.Cwd
+		}
+	}
+	return ""
 }

@@ -131,6 +131,21 @@ func (m StatsModel) View() string {
 		lines = append(lines, styles.DetailLabel.Render("Top Projects"))
 		maxCount := s.ProjectCounts[0].Count
 		maxBarWidth := 30
+
+		// Size the name column to the longest name so two-component paths
+		// (e.g. "opmed-deployment-ng/dev") aren't clipped, capped so the
+		// popup can't grow unbounded.
+		const maxNameWidth = 28
+		nameWidth := 0
+		for _, p := range s.ProjectCounts {
+			if len(p.Name) > nameWidth {
+				nameWidth = len(p.Name)
+			}
+		}
+		if nameWidth > maxNameWidth {
+			nameWidth = maxNameWidth
+		}
+
 		for _, p := range s.ProjectCounts {
 			barWidth := 1
 			if maxCount > 0 {
@@ -140,9 +155,9 @@ func (m StatsModel) View() string {
 				}
 			}
 			bar := strings.Repeat("\u2588", barWidth)
-			name := fmt.Sprintf("%-12s", truncate(p.Name, 12))
+			name := fmt.Sprintf("%-*s ", nameWidth, truncate(p.Name, nameWidth))
 			countStr := fmt.Sprintf(" %d", p.Count)
-			lines = append(lines, "  "+styles.DetailLabel.Render(name)+" "+styles.StatsBar.Render(bar)+styles.DetailValue.Render(countStr))
+			lines = append(lines, "  "+styles.DetailLabel.Render(name)+styles.StatsBar.Render(bar)+styles.DetailValue.Render(countStr))
 		}
 		lines = append(lines, "")
 	}
