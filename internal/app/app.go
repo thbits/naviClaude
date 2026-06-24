@@ -104,8 +104,8 @@ type Model struct {
 	detail      ui.DetailModel
 	statsModel  ui.StatsModel
 	themePicker ui.ThemePickerModel
-	nameInput    ui.NameInputModel
-	renameInput  ui.NameInputModel
+	nameInput   ui.NameInputModel
+	renameInput ui.NameInputModel
 
 	// Backend services
 	tmuxClient     *tmux.Client
@@ -117,20 +117,20 @@ type Model struct {
 	statusDetector *preview.StatusDetector
 
 	// Application state
-	mode           Mode
-	width, height  int
-	sessions       []*session.Session // active + recently-closed (for sidebar)
-	allSessions    []*session.Session // all sessions (for search)
-	activeSessions []*session.Session // just the active sessions (for progressive merge)
-	err              error              // last error, shown briefly
-	confirmKill      bool               // waiting for kill confirmation
-	confirmSession   *session.Session   // session pending kill confirmation
-	pendingNewTarget    string // tmux target of a just-created session; kept until detected
-	pendingNewTmuxCWD   string // CWD for the tmux session being named
-	renameSessionID     string // session ID being renamed
-	previewTarget       string // tmux target currently shown in the preview panel
-	resizedWinTarget    string // window target we resized for preview
-	origWinW            int    // width to restore the previewed window to when navigating away
+	mode              Mode
+	width, height     int
+	sessions          []*session.Session // active + recently-closed (for sidebar)
+	allSessions       []*session.Session // all sessions (for search)
+	activeSessions    []*session.Session // just the active sessions (for progressive merge)
+	err               error              // last error, shown briefly
+	confirmKill       bool               // waiting for kill confirmation
+	confirmSession    *session.Session   // session pending kill confirmation
+	pendingNewTarget  string             // tmux target of a just-created session; kept until detected
+	pendingNewTmuxCWD string             // CWD for the tmux session being named
+	renameSessionID   string             // session ID being renamed
+	previewTarget     string             // tmux target currently shown in the preview panel
+	resizedWinTarget  string             // window target we resized for preview
+	origWinW          int                // width to restore the previewed window to when navigating away
 
 	// Metrics for currently selected session
 	currentMetrics   *session.SessionMetrics
@@ -183,12 +183,12 @@ func New(version string) Model {
 		detail:      ui.NewDetail(),
 		statsModel:  ui.NewStats(),
 		themePicker: ui.NewThemePicker(cfg.Theme),
-		nameInput:    ui.NewNameInput(),
-		renameInput:  ui.NewRenameInput(),
+		nameInput:   ui.NewNameInput(),
+		renameInput: ui.NewRenameInput(),
 
 		// Backend
 		tmuxClient:     tc,
-		detector:       session.NewDetector(tc, cfg.ProcessNames, cfg.ActiveWindowSecs),
+		detector:       session.NewDetector(tc, cfg.ProcessNames, cfg.ActiveWindowSecs, cfg.CPUActiveThreshold),
 		historyScanner: hs,
 		manager:        session.NewManager(tc),
 		captureEngine:  preview.NewCaptureEngine(tc),
@@ -416,15 +416,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			// Pane may have disappeared; not fatal.
 			m.preview.SetContent(fmt.Sprintf("  Capture failed: %s", msg.err))
-		} else if strings.TrimSpace(msg.content) == "" {
-			// Empty pane content (session still loading or idle blank screen).
-			m.preview.SetContent("  Waiting for session output...")
 		} else {
-			m.preview.SetContent(msg.content)
-			// Only apply Waiting status from preview detection.
-			// Active status is authoritative from the session detector;
-			// applying Active from captures causes flickering due to
-			// spinners, status bars, and cursor blink.
+			if strings.TrimSpace(msg.content) == "" {
+				// Empty pane content (session still loading or idle blank screen).
+				m.preview.SetContent("  Waiting for session output...")
+			} else {
+				m.preview.SetContent(msg.content)
+			}
+			// Only apply Waiting status from the preview path. Active/Idle are
+			// authoritative from the session detector; applying Active from
+			// captures causes flickering due to spinners and cursor blink. Apply
+			// Waiting regardless of content emptiness so a native "waiting" status
+			// is surfaced immediately even before the pane renders the prompt.
 			if msg.status == session.StatusWaiting {
 				m.updateSessionStatus(msg.target, msg.status)
 			}
@@ -1572,6 +1575,8 @@ func (m Model) capturePreviewCmd() tea.Cmd {
 	}
 
 	target := sess.TmuxTarget
+	pid := sess.PID
+	sessionID := sess.ID
 	captureEngine := m.captureEngine
 	statusDetector := m.statusDetector
 
@@ -1581,7 +1586,13 @@ func (m Model) capturePreviewCmd() tea.Cmd {
 			return previewCaptureMsg{err: err, target: target}
 		}
 
-		status := statusDetector.DetectFromContent(target, content)
+		// Claude Code's own native status is authoritative when available; fall
+		// back to screen-content classification only when it is not, so the fast
+		// preview path never overrides a reliable native status with a guess.
+		status, ok := session.NativeStatus(pid, sessionID)
+		if !ok {
+			status = statusDetector.DetectFromContent(target, content)
+		}
 
 		return previewCaptureMsg{
 			content: content,

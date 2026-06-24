@@ -18,45 +18,46 @@ type Config struct {
 	PopupHeight        int         `yaml:"popup_height"`
 	ResumeInCurrent    bool        `yaml:"resume_in_current_session"`
 	ProcessNames       []string    `yaml:"process_names"`
-	CollapseAfterHours float64     `yaml:"collapse_after_hours"`  // auto-collapse groups idle longer than this (0 = disabled)
-	ActiveWindowSecs   int         `yaml:"active_window_secs"`    // seconds after last .jsonl write to keep session "active" (default 5)
-	Theme              string      `yaml:"theme"`                 // color theme name (default "tokyo-night")
-	ClaudeCommand      string      `yaml:"claude_command"`        // command to start Claude in new sessions (default "claude")
-	NewSessionDir      string      `yaml:"new_session_dir"`       // working directory for new tmux sessions (default "~")
-	GroupSortOrder     string      `yaml:"group_sort_order"`      // "name" (alphabetical, default) or "activity"
-	SessionSortOrder   string      `yaml:"session_sort_order"`    // "name" (alphabetical, default) or "activity"
+	CollapseAfterHours float64     `yaml:"collapse_after_hours"` // auto-collapse groups idle longer than this (0 = disabled)
+	ActiveWindowSecs   int         `yaml:"active_window_secs"`   // seconds after last .jsonl write to keep session "active" (default 5)
+	CPUActiveThreshold float64     `yaml:"cpu_active_threshold"` // process-subtree CPU% above which a session counts as working (default 5)
+	Theme              string      `yaml:"theme"`                // color theme name (default "tokyo-night")
+	ClaudeCommand      string      `yaml:"claude_command"`       // command to start Claude in new sessions (default "claude")
+	NewSessionDir      string      `yaml:"new_session_dir"`      // working directory for new tmux sessions (default "~")
+	GroupSortOrder     string      `yaml:"group_sort_order"`     // "name" (alphabetical, default) or "activity"
+	SessionSortOrder   string      `yaml:"session_sort_order"`   // "name" (alphabetical, default) or "activity"
 }
 
 // KeyBindings maps user-facing actions to key names (tea.KeyMsg.String() format).
 type KeyBindings struct {
-	Focus       string `yaml:"focus"`
-	Jump        string `yaml:"jump"`
-	Search      string `yaml:"search"`
-	NewSession      string `yaml:"new_session"`
-	NewTmuxSession  string `yaml:"new_tmux_session"`
+	Focus          string `yaml:"focus"`
+	Jump           string `yaml:"jump"`
+	Search         string `yaml:"search"`
+	NewSession     string `yaml:"new_session"`
+	NewTmuxSession string `yaml:"new_tmux_session"`
 	KillSession    string `yaml:"kill_session"`
 	RenameSession  string `yaml:"rename_session"`
 	Detail         string `yaml:"detail"`
-	Stats       string `yaml:"stats"`
-	Help        string `yaml:"help"`
-	Quit        string `yaml:"quit"`
+	Stats          string `yaml:"stats"`
+	Help           string `yaml:"help"`
+	Quit           string `yaml:"quit"`
 }
 
 // DefaultConfig returns the default configuration matching Phase 1 behavior.
 func DefaultConfig() Config {
 	return Config{
 		Keys: KeyBindings{
-			Focus:       "enter",
-			Jump:        "f",
-			Search:      "/",
+			Focus:          "enter",
+			Jump:           "f",
+			Search:         "/",
 			NewSession:     "n",
 			NewTmuxSession: "N",
 			KillSession:    "K",
 			RenameSession:  "r",
 			Detail:         "d",
-			Stats:       "s",
-			Help:        "?",
-			Quit:        "q",
+			Stats:          "s",
+			Help:           "?",
+			Quit:           "q",
 		},
 		SidebarWidth:       30,
 		RefreshInterval:    "200ms",
@@ -67,6 +68,7 @@ func DefaultConfig() Config {
 		ProcessNames:       []string{"claude"},
 		CollapseAfterHours: 8,
 		ActiveWindowSecs:   5,
+		CPUActiveThreshold: 5.0,
 		Theme:              "tokyo-night",
 		ClaudeCommand:      "claude",
 		GroupSortOrder:     "name",
@@ -144,6 +146,9 @@ func Load(path string) (Config, error) {
 	}
 	if cfg.ActiveWindowSecs == 0 {
 		cfg.ActiveWindowSecs = 5
+	}
+	if cfg.CPUActiveThreshold == 0 {
+		cfg.CPUActiveThreshold = 5.0
 	}
 	if cfg.Theme == "" {
 		cfg.Theme = "tokyo-night"

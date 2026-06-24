@@ -95,4 +95,11 @@ type Session struct {
 
 	// SubprocessParent is the name of the parent program (e.g. "nvim").
 	SubprocessParent string
+
+	// nativeStatus is Claude Code's own status string from
+	// ~/.claude/sessions/<pid>.json (busy|waiting|idle|shell), captured in
+	// buildSession. Empty for Claude versions that predate the status field;
+	// resolveStatus then falls back to signal-based detection. Package-private:
+	// an implementation detail of status resolution, not part of the UI model.
+	nativeStatus string
 }

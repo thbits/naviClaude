@@ -22,6 +22,7 @@ func TestDefaultConfig(t *testing.T) {
 		{"ResumeInCurrent", cfg.ResumeInCurrent, true},
 		{"CollapseAfterHours", cfg.CollapseAfterHours, 8.0},
 		{"ActiveWindowSecs", cfg.ActiveWindowSecs, 5},
+		{"CPUActiveThreshold", cfg.CPUActiveThreshold, 5.0},
 		{"Theme", cfg.Theme, "tokyo-night"},
 		{"Keys.Focus", cfg.Keys.Focus, "enter"},
 		{"Keys.Quit", cfg.Keys.Quit, "q"},

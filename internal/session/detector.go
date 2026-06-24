@@ -88,7 +88,6 @@ func (t *ProcessTree) Stats(pid int) (cpu float64, memMB float64) {
 	return t.cpu[pid], t.rss[pid] / 1024.0
 }
 
-
 // parentAppName checks the immediate parent of pid. If it's a non-shell
 // program (e.g. "nvim"), returns its name -- meaning Claude is running as
 // a subprocess. Returns "" if the parent is a shell or tmux (normal case).
@@ -153,25 +152,35 @@ func (t *ProcessTree) findMatchingDescendant(rootPID int, matchFunc func(string)
 type Detector struct {
 	tmuxClient   *tmux.Client
 	processNames []string
-	activeWindow time.Duration    // how recently .jsonl must be written to count as active
+	activeWindow time.Duration     // how recently .jsonl must be written to count as active
+	cpuThreshold float64           // subtree CPU% above which a session counts as working
+	tracker      *StatusTracker    // resolves final status with priority + hysteresis
 	modelCache   map[string]string // sessionID -> model (cached, never changes mid-session)
 }
 
 // NewDetector creates a Detector that uses the given tmux client and matches
 // pane processes against processNames. If processNames is nil or empty, the
 // DefaultProcessNames list is used. activeWindowSecs controls how many seconds
-// after the last .jsonl write a session is considered active (0 = use default 5s).
-func NewDetector(client *tmux.Client, processNames []string, activeWindowSecs int) *Detector {
+// after the last .jsonl write a session is considered active (0 = use default
+// 5s); cpuThreshold is the subtree CPU% above which a session counts as working
+// (<= 0 = use default 5).
+func NewDetector(client *tmux.Client, processNames []string, activeWindowSecs int, cpuThreshold float64) *Detector {
 	if len(processNames) == 0 {
 		processNames = DefaultProcessNames
 	}
 	if activeWindowSecs <= 0 {
 		activeWindowSecs = 5
 	}
+	if cpuThreshold <= 0 {
+		cpuThreshold = 5.0
+	}
+	activeWindow := time.Duration(activeWindowSecs) * time.Second
 	return &Detector{
 		tmuxClient:   client,
 		processNames: processNames,
-		activeWindow: time.Duration(activeWindowSecs) * time.Second,
+		activeWindow: activeWindow,
+		cpuThreshold: cpuThreshold,
+		tracker:      NewStatusTracker(activeWindow),
 		modelCache:   make(map[string]string),
 	}
 }
@@ -220,56 +229,45 @@ func (d *Detector) Detect() ([]*Session, error) {
 		if s == nil {
 			continue
 		}
-		// Prompt detection runs regardless of active/idle status -- a waiting
-		// prompt always takes priority.
-		if content, err := d.tmuxClient.CapturePaneOutput(s.TmuxTarget); err == nil {
-			if isWaitingForInput(content) {
-				s.Status = StatusWaiting
-			}
-		}
+		s.Status = d.resolveStatus(s, tree)
 		sessions = append(sessions, s)
 	}
 	return sessions, nil
 }
 
-// isWaitingForInput checks if the pane content shows a Claude Code interactive
-// prompt. We do NOT look for the ❯ (U+276F) character because it is always
-// visible in every Claude session as part of the standard TUI layout (the input
-// prompt sits between separator lines and is always rendered, even when Claude
-// just finished responding).
-//
-// Instead we detect specific interactive UI patterns:
-//   - Confirmation prompts: [Y/n], [y/N], Allow?
-//   - Interactive selections: "Enter to select", "Enter to confirm"
-//   - Interrupted sessions: "What should Claude do instead?"
-//   - Permission prompts with action hints
-func isWaitingForInput(content string) bool {
-	lines := lastNNonEmptyLines(content, 6)
-	for _, line := range lines {
-		lower := strings.ToLower(line)
+// resolveStatus determines a session's status. Claude Code's own native status
+// (from ~/.claude/sessions/<pid>.json) is authoritative when available: it
+// already distinguishes working/waiting/idle and is debounced by the CLI, so no
+// signal blending or hysteresis is applied. Only when no native status exists
+// (older Claude versions, or a missing file) does it fall back to combining the
+// three legacy signals -- content classification, process subtree CPU, and
+// transcript freshness -- via the tracker's priority (Waiting > Working > Idle)
+// and hysteresis.
+func (d *Detector) resolveStatus(s *Session, tree *ProcessTree) SessionStatus {
+	if status, ok := mapNativeStatus(s.nativeStatus); ok {
+		return status
+	}
 
-		// Confirmation prompts: [Y/n] or [y/N]
-		if strings.Contains(lower, "[y/n]") || strings.Contains(lower, "[n/y]") {
-			return true
-		}
-
-		// Permission request
-		if strings.Contains(line, "Allow?") {
-			return true
-		}
-
-		// Interactive selection menus (onboarding, trust dialog, etc.)
-		if strings.Contains(lower, "enter to select") ||
-			strings.Contains(lower, "enter to confirm") {
-			return true
-		}
-
-		// Interrupted session waiting for new direction
-		if strings.Contains(line, "What should Claude do instead?") {
-			return true
+	// Fallback: signal-based detection for Claude versions without a status field.
+	// Content signal: skip subprocess panes (the pane belongs to the parent app,
+	// not Claude, so its content must not be classified as a Claude prompt).
+	signal := SignalNone
+	if s.TmuxTarget != "" && !s.Subprocess {
+		if content, err := d.tmuxClient.CapturePaneOutput(s.TmuxTarget); err == nil {
+			signal = ClassifyPaneContent(content)
 		}
 	}
-	return false
+
+	cpuActive := tree.SubtreeCPU(s.PID) >= d.cpuThreshold
+
+	transcriptActive := false
+	if s.ID != "" {
+		if mt := sessionFileModTime(s.ID, s.CWD); !mt.IsZero() {
+			transcriptActive = time.Since(mt) <= d.activeWindow
+		}
+	}
+
+	return d.tracker.Resolve(s.TmuxTarget, signal, cpuActive, transcriptActive, time.Now())
 }
 
 // lastNNonEmptyLines returns up to n non-empty lines from the end of the string
@@ -355,6 +353,15 @@ func (d *Detector) buildSession(pane tmux.PaneInfo, claudePID int, tree *Process
 	if meta.Name != "" {
 		s.DisplayName = meta.Name
 	}
+	// Claude Code's own status (busy|waiting|idle|shell), when present -- the
+	// authoritative signal for resolveStatus. The per-PID file is the fast path;
+	// when the picked PID has no status (launcher/wrapper PID mismatch) fall back
+	// to matching by sessionId. Empty on Claude versions without the status field.
+	if meta.Status != "" {
+		s.nativeStatus = meta.Status
+	} else {
+		s.nativeStatus, _ = readSessionStatusByID(s.ID)
+	}
 
 	// Detect if Claude is running as a subprocess (e.g. inside neovim).
 	if parentApp := tree.parentAppName(claudePID); parentApp != "" {
@@ -365,17 +372,13 @@ func (d *Detector) buildSession(pane tmux.PaneInfo, claudePID int, tree *Process
 	// Populate CPU and memory from the bulk process tree (no per-session ps call).
 	s.CPU, s.Memory = tree.Stats(claudePID)
 
-	// Determine status from .jsonl mod time:
-	//   Active  -- the .jsonl file was written within the last 5s,
-	//              meaning Claude was recently generating or running tools
-	//   Idle    -- process running but the file hasn't been written recently
+	// Record the model and the transcript's last-write time (used for the UI's
+	// relative-time display and as one of the inputs to resolveStatus). The
+	// final status is decided in Detect via the StatusTracker, not here.
 	if s.ID != "" {
 		s.Model = d.cachedModel(s.ID, pane.CurrentPath)
 		if modTime := sessionFileModTime(s.ID, pane.CurrentPath); !modTime.IsZero() {
 			s.LastActivity = modTime
-			if time.Since(modTime) <= d.activeWindow {
-				s.Status = StatusActive
-			}
 		}
 	}
 
@@ -408,10 +411,13 @@ func extractSessionIDFallback(pid int, cwd string) string {
 	return findLatestSessionFile(cwd)
 }
 
-// sessionMetadata holds fields from ~/.claude/sessions/{pid}.json.
+// sessionMetadata holds fields from ~/.claude/sessions/{pid}.json. Claude Code
+// writes this file per running process and keeps Status live (Claude >= 2.1).
 type sessionMetadata struct {
-	SessionID string `json:"sessionId"`
-	Name      string `json:"name"`
+	SessionID       string `json:"sessionId"`
+	Name            string `json:"name"`
+	Status          string `json:"status"`          // busy|waiting|idle|shell
+	StatusUpdatedAt int64  `json:"statusUpdatedAt"` // epoch ms
 }
 
 // readSessionMetadata reads the full metadata from ~/.claude/sessions/{pid}.json.
@@ -425,11 +431,93 @@ func readSessionMetadata(pid int) sessionMetadata {
 	if err != nil {
 		return sessionMetadata{}
 	}
+	return parseSessionMetadata(data)
+}
+
+// parseSessionMetadata unmarshals session-metadata JSON, returning the zero
+// struct (not an error) on malformed input. Split from readSessionMetadata so
+// the parse + field handling can be unit-tested without touching the filesystem.
+func parseSessionMetadata(data []byte) sessionMetadata {
 	var meta sessionMetadata
 	if err := json.Unmarshal(data, &meta); err != nil {
 		return sessionMetadata{}
 	}
 	return meta
+}
+
+// mapNativeStatus maps Claude Code's own session status string (from the
+// ~/.claude/sessions/<pid>.json "status" field) to a SessionStatus. The bool is
+// false when the status is empty or unrecognized -- e.g. a Claude Code version
+// predating the status field -- signalling the caller to fall back to
+// signal-based detection. "shell" (idle with a foreground shell command open) is
+// folded into idle.
+func mapNativeStatus(status string) (SessionStatus, bool) {
+	switch status {
+	case "busy":
+		return StatusActive, true
+	case "waiting":
+		return StatusWaiting, true
+	case "idle", "shell":
+		return StatusIdle, true
+	default:
+		return StatusIdle, false
+	}
+}
+
+// readSessionStatusByID scans ~/.claude/sessions and returns the status string
+// of the metadata file whose sessionId matches. This is robust to the PID
+// naviClaude picks (via the comm=="claude" process-tree walk) not being the PID
+// Claude wrote its <pid>.json under -- the CLI layers a launcher/wrapper process
+// (e.g. comm "2.1.190") so the file may belong to a different node in the tree.
+// The sessionId, by contrast, naviClaude resolves reliably. Returns ("", false)
+// when no matching file is found.
+func readSessionStatusByID(sessionID string) (string, bool) {
+	if sessionID == "" {
+		return "", false
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", false
+	}
+	entries, err := os.ReadDir(filepath.Join(home, ".claude", "sessions"))
+	if err != nil {
+		return "", false
+	}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(home, ".claude", "sessions", e.Name()))
+		if err != nil {
+			continue
+		}
+		if m := parseSessionMetadata(data); m.SessionID == sessionID {
+			return m.Status, true
+		}
+	}
+	return "", false
+}
+
+// nativeStatusString returns Claude Code's own status for a session, preferring
+// the fast per-PID file read and falling back to a sessionId scan when the
+// picked PID has no usable status (PID/launcher mismatch). Empty string means no
+// native status is available (older Claude, or no matching file).
+func nativeStatusString(pid int, sessionID string) string {
+	if s := readSessionMetadata(pid).Status; s != "" {
+		return s
+	}
+	s, _ := readSessionStatusByID(sessionID)
+	return s
+}
+
+// NativeStatus reads Claude Code's own status for a session and maps it to a
+// SessionStatus. It tries the per-PID file first, then a sessionId scan. The
+// bool is false when no usable native status is available (file missing, or a
+// Claude version that does not write the status field), in which case callers
+// should fall back to signal-based detection. This is the single source of truth
+// shared by the detector loop and the preview path.
+func NativeStatus(pid int, sessionID string) (SessionStatus, bool) {
+	return mapNativeStatus(nativeStatusString(pid, sessionID))
 }
 
 // fullCommandLine returns the full command line of a process.
@@ -514,7 +602,6 @@ func (d *Detector) matchesProcessName(name string) bool {
 	}
 	return false
 }
-
 
 // extractModelFromSessionFile reads the first few assistant messages from the
 // session's .jsonl file to extract the model field. This allows active sessions

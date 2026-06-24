@@ -115,6 +115,7 @@ resume_in_current_session: true
 process_names: ["claude"]
 collapse_after_hours: 8
 active_window_secs: 5
+cpu_active_threshold: 5
 theme: "tokyo-night"
 claude_command: "claude"
 # new_session_dir: "~/projects"
@@ -132,7 +133,8 @@ claude_command: "claude"
 | `resume_in_current_session` | `true` | Resume sessions in the current tmux pane |
 | `process_names` | `["claude"]` | Process names to detect as Claude sessions |
 | `collapse_after_hours` | `8` | Auto-collapse groups idle longer than N hours (0 to disable) |
-| `active_window_secs` | `5` | Seconds after last activity to consider a session active |
+| `active_window_secs` | `5` | Seconds after last transcript write to keep a session "working" (fallback signal) |
+| `cpu_active_threshold` | `5` | Process-subtree CPU% above which a session counts as "working" |
 | `theme` | `tokyo-night` | Color theme name |
 | `claude_command` | `claude` | Command to start Claude (sent via send-keys, supports aliases) |
 | `new_session_dir` | `~` | Working directory for new tmux sessions created with `N` |

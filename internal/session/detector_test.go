@@ -75,74 +75,6 @@ func TestParseResumeFlag(t *testing.T) {
 	}
 }
 
-func TestIsWaitingForInput(t *testing.T) {
-	tests := []struct {
-		name    string
-		content string
-		want    bool
-	}{
-		{
-			name:    "confirmation prompt Y/n",
-			content: "Do you want to proceed? [Y/n]",
-			want:    true,
-		},
-		{
-			name:    "confirmation prompt y/N",
-			content: "Continue? [y/N]",
-			want:    true,
-		},
-		{
-			name:    "allow prompt",
-			content: "Allow?",
-			want:    true,
-		},
-		{
-			name:    "enter to select",
-			content: "Use arrow keys to navigate\nEnter to select",
-			want:    true,
-		},
-		{
-			name:    "enter to confirm",
-			content: "press Enter to confirm",
-			want:    true,
-		},
-		{
-			name:    "interrupted session",
-			content: "What should Claude do instead?",
-			want:    true,
-		},
-		{
-			name:    "normal output not waiting",
-			content: "Building project...\nCompiling main.go\nDone.",
-			want:    false,
-		},
-		{
-			name:    "empty content",
-			content: "",
-			want:    false,
-		},
-		{
-			name:    "case insensitive y/n",
-			content: "Overwrite? [y/n]",
-			want:    true,
-		},
-		{
-			name:    "n/y variant",
-			content: "Delete files? [n/y]",
-			want:    true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := isWaitingForInput(tt.content)
-			if got != tt.want {
-				t.Errorf("isWaitingForInput() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
 func TestLastNNonEmptyLines(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -351,7 +283,7 @@ func TestProcessTreeFindMatchingDescendant(t *testing.T) {
 
 func TestNewDetector(t *testing.T) {
 	t.Run("defaults process names", func(t *testing.T) {
-		d := NewDetector(nil, nil, 0)
+		d := NewDetector(nil, nil, 0, 0)
 		if len(d.processNames) == 0 {
 			t.Fatal("expected default process names")
 		}
@@ -361,24 +293,41 @@ func TestNewDetector(t *testing.T) {
 	})
 
 	t.Run("defaults active window", func(t *testing.T) {
-		d := NewDetector(nil, nil, 0)
+		d := NewDetector(nil, nil, 0, 0)
 		if d.activeWindow != 5*time.Second {
 			t.Errorf("activeWindow = %v, want 5s", d.activeWindow)
 		}
 	})
 
+	t.Run("defaults cpu threshold", func(t *testing.T) {
+		d := NewDetector(nil, nil, 0, 0)
+		if d.cpuThreshold != 5.0 {
+			t.Errorf("cpuThreshold = %v, want 5.0", d.cpuThreshold)
+		}
+	})
+
+	t.Run("initializes status tracker", func(t *testing.T) {
+		d := NewDetector(nil, nil, 0, 0)
+		if d.tracker == nil {
+			t.Error("expected non-nil status tracker")
+		}
+	})
+
 	t.Run("custom values", func(t *testing.T) {
-		d := NewDetector(nil, []string{"custom-claude"}, 10)
+		d := NewDetector(nil, []string{"custom-claude"}, 10, 25.0)
 		if d.processNames[0] != "custom-claude" {
 			t.Errorf("processNames[0] = %q, want %q", d.processNames[0], "custom-claude")
 		}
 		if d.activeWindow != 10*time.Second {
 			t.Errorf("activeWindow = %v, want 10s", d.activeWindow)
 		}
+		if d.cpuThreshold != 25.0 {
+			t.Errorf("cpuThreshold = %v, want 25.0", d.cpuThreshold)
+		}
 	})
 
 	t.Run("negative active window uses default", func(t *testing.T) {
-		d := NewDetector(nil, nil, -1)
+		d := NewDetector(nil, nil, -1, 0)
 		if d.activeWindow != 5*time.Second {
 			t.Errorf("activeWindow = %v, want 5s", d.activeWindow)
 		}
@@ -386,7 +335,7 @@ func TestNewDetector(t *testing.T) {
 }
 
 func TestMatchesProcessName(t *testing.T) {
-	d := NewDetector(nil, []string{"claude", "claude-code"}, 5)
+	d := NewDetector(nil, []string{"claude", "claude-code"}, 5, 5.0)
 
 	tests := []struct {
 		name  string
