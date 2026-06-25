@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -96,18 +97,19 @@ func breathingTickCmd() tea.Cmd {
 // and backend services.
 type Model struct {
 	// UI components
-	sidebar     ui.SidebarModel
-	preview     ui.PreviewModel
-	statusbar   ui.StatusBarModel
-	search      ui.SearchModel
-	help        ui.HelpModel
-	contextMenu ui.ContextMenuModel
-	detail      ui.DetailModel
-	statsModel  ui.StatsModel
-	themePicker ui.ThemePickerModel
-	nameInput   ui.NameInputModel
-	renameInput ui.NameInputModel
-	dirPicker   ui.DirPickerModel
+	sidebar      ui.SidebarModel
+	preview      ui.PreviewModel
+	statusbar    ui.StatusBarModel
+	search       ui.SearchModel
+	help         ui.HelpModel
+	contextMenu  ui.ContextMenuModel
+	detail       ui.DetailModel
+	statsModel   ui.StatsModel
+	themePicker  ui.ThemePickerModel
+	nameInput    ui.NameInputModel
+	renameInput  ui.NameInputModel
+	dirPicker    ui.DirPickerModel
+	resumePicker ui.SessionPickerModel
 
 	// Backend services
 	tmuxClient     *tmux.Client
@@ -119,22 +121,23 @@ type Model struct {
 	statusDetector *preview.StatusDetector
 
 	// Application state
-	mode              Mode
-	width, height     int
-	sessions          []*session.Session // active + recently-closed (for sidebar)
-	allSessions       []*session.Session // all sessions (for search)
-	activeSessions    []*session.Session // just the active sessions (for progressive merge)
-	err               error              // last error, shown briefly
-	confirmKill       bool               // waiting for kill confirmation
-	confirmSession    *session.Session   // session pending kill confirmation
-	pendingNewTarget  string             // tmux target of a just-created session; kept until detected
-	pendingNewTmuxCWD string             // CWD for the tmux session being named
-	pendingDirAction  dirAction          // which flow opened the directory picker
-	pendingDirTmux    string             // target tmux session for the new-Claude (n) flow
-	renameSessionID   string             // session ID being renamed
-	previewTarget     string             // tmux target currently shown in the preview panel
-	resizedWinTarget  string             // window target we resized for preview
-	origWinW          int                // width to restore the previewed window to when navigating away
+	mode                 Mode
+	width, height        int
+	sessions             []*session.Session // active + recently-closed (for sidebar)
+	allSessions          []*session.Session // all sessions (for search)
+	activeSessions       []*session.Session // just the active sessions (for progressive merge)
+	err                  error              // last error, shown briefly
+	confirmKill          bool               // waiting for kill confirmation
+	confirmSession       *session.Session   // session pending kill confirmation
+	pendingNewTarget     string             // tmux target of a just-created session; kept until detected
+	pendingNewTmuxCWD    string             // CWD for the tmux session being named
+	pendingDirAction     dirAction          // which flow opened the directory picker
+	pendingDirTmux       string             // target tmux session for the new-Claude (n) flow
+	renameSessionID      string             // session ID being renamed
+	pendingResumeSession *session.Session   // closed session awaiting a resume-target choice
+	previewTarget        string             // tmux target currently shown in the preview panel
+	resizedWinTarget     string             // window target we resized for preview
+	origWinW             int                // width to restore the previewed window to when navigating away
 
 	// Metrics for currently selected session
 	currentMetrics   *session.SessionMetrics
@@ -178,18 +181,19 @@ func New(version string) Model {
 
 	m := Model{
 		// UI
-		sidebar:     ui.NewSidebar(30, 24),
-		preview:     ui.NewPreview(50, 24),
-		statusbar:   ui.NewStatusBar(80, version),
-		search:      ui.NewSearch(),
-		help:        ui.NewHelp(),
-		contextMenu: ui.NewContextMenu(),
-		detail:      ui.NewDetail(),
-		statsModel:  ui.NewStats(),
-		themePicker: ui.NewThemePicker(cfg.Theme),
-		nameInput:   ui.NewNameInput(),
-		renameInput: ui.NewRenameInput(),
-		dirPicker:   ui.NewDirPicker(),
+		sidebar:      ui.NewSidebar(30, 24),
+		preview:      ui.NewPreview(50, 24),
+		statusbar:    ui.NewStatusBar(80, version),
+		search:       ui.NewSearch(),
+		help:         ui.NewHelp(),
+		contextMenu:  ui.NewContextMenu(),
+		detail:       ui.NewDetail(),
+		statsModel:   ui.NewStats(),
+		themePicker:  ui.NewThemePicker(cfg.Theme),
+		nameInput:    ui.NewNameInput(),
+		renameInput:  ui.NewRenameInput(),
+		dirPicker:    ui.NewDirPicker(),
+		resumePicker: ui.NewSessionPicker(),
 
 		// Backend
 		tmuxClient:     tc,
@@ -542,6 +546,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
+	// Likewise forward unhandled messages (e.g. the text-input cursor blink) to
+	// the resume picker while it is open.
+	if m.resumePicker.IsVisible() {
+		var cmd tea.Cmd
+		m.resumePicker, cmd = m.resumePicker.Update(msg)
+		return m, cmd
+	}
+
 	return m, nil
 }
 
@@ -638,6 +650,10 @@ func (m Model) View() string {
 		screen = ui.PlaceOverlay(screen, m.dirPicker.View())
 	}
 
+	if m.resumePicker.IsVisible() {
+		screen = ui.PlaceOverlay(screen, m.resumePicker.View())
+	}
+
 	if m.detail.IsVisible() {
 		screen = ui.PlaceOverlay(screen, m.detail.View())
 	}
@@ -700,6 +716,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleRenameSessionKey(msg)
 	case ModeDirPicker:
 		return m.handleDirPickerKey(msg)
+	case ModeResumePicker:
+		return m.handleResumePickerKey(msg)
 	}
 	return m, nil
 }
@@ -739,7 +757,12 @@ func (m Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 		if sess.Status == session.StatusClosed {
-			// Show conversation history in the preview pane.
+			if key == KeyEnter {
+				// Enter resumes a closed session: open the target picker to
+				// choose which tmux session the resume opens in.
+				return m.openResumePicker(sess)
+			}
+			// Tab still shows the conversation history in the preview pane.
 			m.selectPreviewSession(sess)
 			return m, m.loadClosedPreviewCmd(sess)
 		}
@@ -1212,6 +1235,86 @@ func (m Model) resumeSession(sess *session.Session) (tea.Model, tea.Cmd) {
 	// detected. Don't enter passthrough yet -- the new pane needs to be
 	// discovered first.
 	return m, tea.Batch(m.resumeCmd(sess, target), m.refreshSessionsCmd())
+}
+
+// openResumePicker opens the resume-target picker for a closed session. It lists
+// the live tmux sessions (most-recently-active first) and pre-highlights the
+// session naviClaude is running in. The actual resume happens on Enter in
+// handleResumePickerKey.
+func (m Model) openResumePicker(sess *session.Session) (tea.Model, tea.Cmd) {
+	names := sessionNamesByRecency(m.tmuxClient.ListSessions())
+	m.pendingResumeSession = sess
+	m.resumePicker.SetSize(m.width, m.height)
+	m.resumePicker.Show(names, m.currentTmuxSession)
+	m.mode = ModeResumePicker
+	m.statusbar.SetMode(ModeResumePicker.String())
+	return m, m.resumePicker.Init()
+}
+
+// handleResumePickerKey drives the resume-target picker: typing filters,
+// arrows move, Enter resumes into the chosen (or typed-new) tmux session, Esc
+// cancels.
+func (m Model) handleResumePickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.resumePicker.Hide()
+		m.pendingResumeSession = nil
+		m.mode = ModeList
+		m.statusbar.SetMode(ModeList.String())
+		return m, nil
+
+	case "up", "ctrl+p":
+		m.resumePicker.MoveUp()
+		return m, nil
+
+	case "down", "ctrl+n":
+		m.resumePicker.MoveDown()
+		return m, nil
+
+	case "enter":
+		name, _ := m.resumePicker.Selected()
+		sess := m.pendingResumeSession
+		m.resumePicker.Hide()
+		m.pendingResumeSession = nil
+		m.mode = ModeList
+		m.statusbar.SetMode(ModeList.String())
+		if sess == nil || name == "" {
+			return m, nil
+		}
+		// Resume off the event loop, then refresh so the new pane is detected.
+		// Don't enter passthrough yet -- the new pane needs discovery first.
+		return m, tea.Batch(m.resumeInSessionCmd(sess, name), m.refreshSessionsCmd())
+
+	default:
+		var cmd tea.Cmd
+		m.resumePicker, cmd = m.resumePicker.Update(msg)
+		return m, cmd
+	}
+}
+
+// resumeInSessionCmd runs manager.ResumeInSession off the event loop, emitting
+// an errMsg on failure.
+func (m Model) resumeInSessionCmd(sess *session.Session, targetName string) tea.Cmd {
+	manager := m.manager
+	return func() tea.Msg {
+		if err := manager.ResumeInSession(sess, targetName); err != nil {
+			return errMsg{err: fmt.Errorf("resume: %w", err)}
+		}
+		return nil
+	}
+}
+
+// sessionNamesByRecency returns the tmux session names ordered by most-recent
+// activity first.
+func sessionNamesByRecency(infos []tmux.SessionInfo) []string {
+	sort.SliceStable(infos, func(i, j int) bool {
+		return infos[i].Activity > infos[j].Activity
+	})
+	names := make([]string, len(infos))
+	for i, s := range infos {
+		names[i] = s.Name
+	}
+	return names
 }
 
 func (m Model) createNewSession() (tea.Model, tea.Cmd) {
@@ -1850,6 +1953,7 @@ func (m *Model) resizeComponents() {
 	m.statsModel.SetSize(m.width, m.height)
 	m.themePicker.SetSize(m.width, m.height)
 	m.dirPicker.SetSize(m.width, m.height)
+	m.resumePicker.SetSize(m.width, m.height)
 	m.contextMenu.SetTermSize(m.width, m.height)
 	// The capture width is computed per-capture in capturePreviewCmd and passed
 	// to Capture, so there is no shared maxWidth field to set here. (Truncation

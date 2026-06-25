@@ -89,8 +89,8 @@ type HelpBinding struct {
 func (km KeyMap) HelpBindings() []HelpBinding {
 	return []HelpBinding{
 		{"j/k", "Navigate sessions"},
-		{"Enter/Tab", "Focus (passthrough)"},
-		{km.Jump, "Jump to pane"},
+		{"Enter/Tab", "Focus / resume closed"},
+		{km.Jump, "Jump / fast-resume closed"},
 		{"Ctrl+U/Ctrl+D", "Scroll preview"},
 		{km.Search, "Search"},
 		{km.NewSession, "New session"},
@@ -108,7 +108,7 @@ func (km KeyMap) HelpBindings() []HelpBinding {
 // StatusHints returns the list-mode status bar hints reflecting the current config.
 func (km KeyMap) StatusHints() []HelpBinding {
 	return []HelpBinding{
-		{"Enter", "focus"},
+		{"Enter", "focus/resume"},
 		{km.Jump, "jump"},
 		{km.Search, "search"},
 		{km.NewSession, "new"},

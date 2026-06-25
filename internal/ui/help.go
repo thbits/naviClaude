@@ -95,8 +95,8 @@ func (m HelpModel) View() string {
 		// Fallback defaults if SetKeyBindings was never called.
 		listBindings = []helpBinding{
 			{"j/k", "Navigate sessions"},
-			{"Enter/Tab", "Focus (passthrough)"},
-			{"f", "Jump to pane"},
+			{"Enter/Tab", "Focus / resume closed"},
+			{"f", "Jump / fast-resume closed"},
 			{"/", "Search"},
 			{"n", "New session"},
 			{"K", "Kill session"},

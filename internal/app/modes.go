@@ -40,6 +40,10 @@ const (
 	// ModeDirPicker shows the directory picker overlay used when creating a new
 	// Claude (n) or tmux (N) session.
 	ModeDirPicker
+
+	// ModeResumePicker shows the session picker overlay used when resuming a
+	// closed session: it chooses which tmux session the resume opens in.
+	ModeResumePicker
 )
 
 // dirAction records which session-creation flow opened the directory picker, so
@@ -77,6 +81,8 @@ func (m Mode) String() string {
 		return "rename"
 	case ModeDirPicker:
 		return "dir picker"
+	case ModeResumePicker:
+		return "resume picker"
 	default:
 		return "unknown"
 	}

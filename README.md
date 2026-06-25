@@ -16,7 +16,7 @@ layers on top of your existing tmux setup instead of replacing it.
 - **Breathing status dots** -- active sessions pulse green, waiting sessions pulse amber
 - **Passthrough mode** -- type directly into a session without leaving the TUI
 - **Fuzzy search** -- filter sessions by name
-- **Session management** -- create new sessions, kill existing ones, resume in the current pane
+- **Session management** -- create new sessions, kill existing ones, and resume closed sessions into any tmux session (or a brand-new one) via a target picker
 - **Detail popup** -- view session metadata (model, project, cost, token counts)
 - **Rich preview header** -- status badge, uptime, message count, CPU/memory
 - **Usage statistics** -- per-project breakdown with bar charts
@@ -66,9 +66,9 @@ naviclaude
 | Key | Action |
 |---|---|
 | `j` / `k` | Navigate sessions |
-| `Enter` / `Tab` | Focus session (passthrough mode) |
+| `Enter` / `Tab` | Focus an active session (passthrough mode). On a closed session, `Enter` opens the resume picker (`Tab` shows its history) |
 | `Tab` / `Shift+Tab` / `Ctrl+]` | Exit passthrough mode |
-| `f` | Jump to pane |
+| `f` | Jump to pane. On a closed session, fast-resume into the current tmux session |
 | `Ctrl+F` | Jump to pane (from passthrough) |
 | `/` | Search |
 | `n` | New session (same tmux session) |
