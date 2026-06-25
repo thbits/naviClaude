@@ -11,18 +11,11 @@ import (
 // escape sequences preserved.
 type CaptureEngine struct {
 	tmuxClient *tmux.Client
-	maxWidth   int
 }
 
 // NewCaptureEngine creates a CaptureEngine backed by the given tmux client.
 func NewCaptureEngine(client *tmux.Client) *CaptureEngine {
 	return &CaptureEngine{tmuxClient: client}
-}
-
-// SetMaxWidth sets the maximum line width for captured content. Lines wider
-// than this are truncated using ANSI-aware truncation to prevent layout overflow.
-func (e *CaptureEngine) SetMaxWidth(w int) {
-	e.maxWidth = w
 }
 
 // cursorReverseOn / cursorReverseOff toggle reverse video, which renders a
@@ -34,12 +27,14 @@ const (
 )
 
 // Capture returns the raw pane content including ANSI escape sequences for the
-// given tmux target (e.g. "session:1.0"). Lines are truncated to maxWidth if
-// set. When showCursor is true the pane's cursor is overlaid as a reverse-video
-// block so the preview shows where input lands (capture-pane omits the cursor);
-// callers pass false for unfocused panes (e.g. while browsing the menu) so the
-// block doesn't imply the pane is receiving input.
-func (e *CaptureEngine) Capture(target string, showCursor bool) (string, error) {
+// given tmux target (e.g. "session:1.0"). Lines are truncated to maxWidth when
+// it is > 0 (0 = unbounded). maxWidth is passed in by the caller rather than
+// held as engine state so the capture goroutine never races a concurrent
+// resize. When showCursor is true the pane's cursor is overlaid as a
+// reverse-video block so the preview shows where input lands (capture-pane omits
+// the cursor); callers pass false for unfocused panes (e.g. while browsing the
+// menu) so the block doesn't imply the pane is receiving input.
+func (e *CaptureEngine) Capture(target string, showCursor bool, maxWidth int) (string, error) {
 	raw, err := e.tmuxClient.CapturePaneOutput(target)
 	if err != nil {
 		return "", err
@@ -67,21 +62,21 @@ func (e *CaptureEngine) Capture(target string, showCursor bool) (string, error) 
 	// cursor row) are unchanged.
 	lines = trimTrailingBlankLines(lines)
 
-	if e.maxWidth > 0 {
+	if maxWidth > 0 {
 		// Truncate lines that exceed the preview viewport width. This is
 		// just a safety net for stale scrollback content. The primary
 		// mechanism is resizing the tmux pane to match the viewport so
 		// the app inside (Claude, neovim, etc.) re-renders at the correct
 		// width via SIGWINCH.
 		for i, line := range lines {
-			if ansi.StringWidth(line) > e.maxWidth {
-				lines[i] = ansi.Truncate(line, e.maxWidth, "")
+			if ansi.StringWidth(line) > maxWidth {
+				lines[i] = ansi.Truncate(line, maxWidth, "")
 			}
 		}
 	}
 
 	if showCursor {
-		lines = e.overlayCursor(target, lines, rawCount)
+		lines = e.overlayCursor(target, lines, rawCount, maxWidth)
 	}
 
 	return strings.Join(lines, "\n"), nil
@@ -91,13 +86,26 @@ func (e *CaptureEngine) Capture(target string, showCursor bool) (string, error) 
 // reverse-video block at that cell. rawCount is the untrimmed capture line
 // count, used to map the pane-relative cursor row to an index in lines. Any
 // error or a hidden cursor leaves the content unchanged.
-func (e *CaptureEngine) overlayCursor(target string, lines []string, rawCount int) []string {
+//
+// Note: the cursor position comes from a second tmux call (CursorPosition),
+// separate from CapturePaneOutput, so there is a small TOCTOU window in which
+// the pane can change between the two reads. The row is mapped as
+// rawCount - PaneHeight + Y against the *untrimmed* capture line count, which
+// keeps the mapping consistent with this capture even if the pane produced more
+// output meanwhile. If the cursor sat on a trailing blank line that
+// trimTrailingBlankLines removed, the mapped row lands at or past len(lines);
+// drawCursor then no-ops on that out-of-range row (the cursor block is silently
+// dropped for that frame). This is intentional and safe -- a missing cursor for
+// one frame is preferable to drawing it on the wrong (now-trimmed) row. Fixing
+// it properly would require a single atomic capture+cursor call from the tmux
+// client, which is out of scope here.
+func (e *CaptureEngine) overlayCursor(target string, lines []string, rawCount, maxWidth int) []string {
 	info, err := e.tmuxClient.CursorPosition(target)
 	if err != nil || !info.Visible || info.PaneHeight <= 0 {
 		return lines
 	}
 	row := rawCount - info.PaneHeight + info.Y
-	return drawCursor(lines, row, info.X, e.maxWidth)
+	return drawCursor(lines, row, info.X, maxWidth)
 }
 
 // drawCursor renders a reverse-video block at column x of lines[row], returning

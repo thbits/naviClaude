@@ -36,8 +36,8 @@ func TestGroupModelUsage(t *testing.T) {
 		{
 			name: "multiple models same family aggregated",
 			usage: map[string]modelUsageRaw{
-				"claude-sonnet-4-6":      {InputTokens: 100, OutputTokens: 200},
-				"claude-sonnet-4-5":      {InputTokens: 300, OutputTokens: 400},
+				"claude-sonnet-4-6": {InputTokens: 100, OutputTokens: 200},
+				"claude-sonnet-4-5": {InputTokens: 300, OutputTokens: 400},
 			},
 			wantCount: 1,
 			wantFirst: "sonnet",

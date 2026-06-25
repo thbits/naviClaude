@@ -16,8 +16,28 @@ var nonAlphanumRe = regexp.MustCompile(`[^a-zA-Z0-9-]`)
 // cwdSlug converts a CWD path into the directory slug used by Claude Code
 // under ~/.claude/projects/. Claude Code replaces all non-alphanumeric
 // characters (except dashes) with dashes.
+//
+// KNOWN AMBIGUITY: this mapping is non-injective. Distinct CWDs can collapse to
+// the same slug (e.g. "/a/b" and "/a-b" both become "-a-b"; "/a_b" and "/a/b"
+// both become "-a-b"). We intentionally do NOT change the output: it must match
+// Claude Code's own on-disk slug scheme so that SessionFilePath can locate the
+// .jsonl file under ~/.claude/projects/<slug>/. SessionFilePath relies on this
+// scheme staying byte-for-byte identical to Claude's; if Claude changes its
+// slugging, this must change in lockstep. Do not "improve" the encoding here.
 func cwdSlug(cwd string) string {
 	return nonAlphanumRe.ReplaceAllString(cwd, "-")
+}
+
+// claudeHomeDir returns the ~/.claude base directory, or an error if the user
+// home directory cannot be determined. Centralizes the UserHomeDir +
+// Join(".claude") computation so history.go and conversation.go agree on the
+// base path. (Named to avoid colliding with helpers in detector.go.)
+func claudeHomeDir() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".claude"), nil
 }
 
 // ConversationEntry is a single turn in the conversation.
@@ -27,7 +47,10 @@ type ConversationEntry struct {
 }
 
 // LoadConversation reads a session's .jsonl file and extracts the user/assistant
-// conversation turns as displayable text. Returns at most maxTurns entries.
+// conversation turns as displayable text. Returns at most maxTurns entries; when
+// the session has more than maxTurns text-bearing turns, the LAST maxTurns are
+// returned (the most recent activity), preserving chronological order
+// (oldest-to-newest) within that tail.
 func LoadConversation(sess *Session, maxTurns int) ([]ConversationEntry, error) {
 	sessionFile := sess.SessionFile
 	if sessionFile == "" {
@@ -78,13 +101,20 @@ func LoadConversation(sess *Session, maxTurns int) ([]ConversationEntry, error) 
 			Role: rec.Type,
 			Text: text,
 		})
-
-		if maxTurns > 0 && len(entries) >= maxTurns {
-			break
-		}
 	}
 
-	return entries, scanner.Err()
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+
+	// Keep only the LAST maxTurns text-bearing turns so long sessions still
+	// surface recent activity. Order is preserved (oldest-to-newest) within
+	// the returned tail.
+	if maxTurns > 0 && len(entries) > maxTurns {
+		entries = entries[len(entries)-maxTurns:]
+	}
+
+	return entries, nil
 }
 
 // extractMessageText pulls readable text from a message JSON payload.
@@ -134,12 +164,12 @@ func SessionFilePath(sessionID, cwd string) string {
 	if sessionID == "" || cwd == "" {
 		return ""
 	}
-	home, err := os.UserHomeDir()
+	base, err := claudeHomeDir()
 	if err != nil {
 		return ""
 	}
 	slug := cwdSlug(cwd)
-	return filepath.Join(home, ".claude", "projects", slug, sessionID+".jsonl")
+	return filepath.Join(base, "projects", slug, sessionID+".jsonl")
 }
 
 // deriveSessionFilePath is like SessionFilePath but also verifies the file

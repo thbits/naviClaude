@@ -25,6 +25,11 @@ type flatItem struct {
 	isGroup   bool
 	groupName string
 	session   *session.Session
+	// For group items: the group's position in m.groups and its session count,
+	// captured during rebuildFlatItems so renderGroupHeader needn't rescan
+	// m.groups every frame.
+	groupIdx   int
+	groupCount int
 }
 
 // SidebarModel is the left panel showing sessions grouped by tmux session name.
@@ -210,14 +215,17 @@ func (m *SidebarModel) rebuildGroups() {
 		names = append(names, name)
 	}
 	if m.groupSortOrder == "activity" {
+		// One total order: most-recent activity first, name as a stable
+		// tiebreaker. groupRecentActivity scans the whole group rather than
+		// trusting Sessions[0], which is only the most-recent entry under the
+		// activity session-sort (name-sort would put a stale session first).
+		recent := make(map[string]time.Time, len(groupMap))
+		for name, sessions := range groupMap {
+			recent[name] = groupRecentActivity(sessions)
+		}
 		sort.Slice(names, func(i, j int) bool {
-			gi := groupMap[names[i]]
-			gj := groupMap[names[j]]
-			if len(gi) == 0 || len(gj) == 0 {
-				return len(gi) > len(gj)
-			}
-			ti := gi[0].LastActivity
-			tj := gj[0].LastActivity
+			ti := recent[names[i]]
+			tj := recent[names[j]]
 			if !ti.Equal(tj) {
 				return ti.After(tj)
 			}
@@ -287,10 +295,12 @@ func (m *SidebarModel) rebuildGroups() {
 
 func (m *SidebarModel) rebuildFlatItems() {
 	m.flatItems = nil
-	for _, g := range m.groups {
+	for gi, g := range m.groups {
 		m.flatItems = append(m.flatItems, flatItem{
-			isGroup:   true,
-			groupName: g.Name,
+			isGroup:    true,
+			groupName:  g.Name,
+			groupIdx:   gi,
+			groupCount: len(g.Sessions),
 		})
 		if !m.collapsed[g.Name] {
 			for _, s := range g.Sessions {
@@ -350,8 +360,40 @@ func (m *SidebarModel) restoreCursor(id, tmuxTarget, groupName string) {
 			}
 		}
 	}
-	// Session not found. Keep the cursor index as-is.
+	// Session not found after the list changed. Clamp the old index into range,
+	// then nudge onto the nearest surviving session row so the cursor doesn't
+	// strand on a group header or an unrelated item.
 	m.clampCursor()
+	m.snapToNearestSession()
+}
+
+// snapToNearestSession moves the cursor off a group header onto the closest
+// session row, searching outward from the current index (preferring the next
+// row, then the previous). If no session row exists at all (only headers, or an
+// empty list) the cursor is left where clampCursor put it.
+func (m *SidebarModel) snapToNearestSession() {
+	n := len(m.flatItems)
+	if n == 0 {
+		return
+	}
+	if m.cursor < 0 || m.cursor >= n {
+		return
+	}
+	if !m.flatItems[m.cursor].isGroup {
+		return // already on a session row
+	}
+	for radius := 1; radius < n; radius++ {
+		if next := m.cursor + radius; next < n && !m.flatItems[next].isGroup {
+			m.cursor = next
+			m.syncViewport()
+			return
+		}
+		if prev := m.cursor - radius; prev >= 0 && !m.flatItems[prev].isGroup {
+			m.cursor = prev
+			m.syncViewport()
+			return
+		}
+	}
 }
 
 func (m *SidebarModel) clampCursor() {
@@ -383,7 +425,7 @@ func (m *SidebarModel) syncViewport() {
 			m.cursorLineStart = len(lines)
 		}
 		if item.isGroup {
-			rendered := m.renderGroupHeader(item.groupName, isCursor)
+			rendered := m.renderGroupHeader(item.groupName, item.groupCount, item.groupIdx, isCursor)
 			// Split on embedded newlines -- Width().Render() may wrap text.
 			lines = append(lines, strings.Split(rendered, "\n")...)
 		} else {
@@ -538,6 +580,10 @@ func (m SidebarModel) Update(msg tea.Msg) (SidebarModel, tea.Cmd) {
 					m.userToggled[item.groupName] = true // user explicitly toggled
 					m.rebuildFlatItems()
 					m.clampCursor()
+					// Re-anchor the tracked selection to wherever the cursor
+					// landed; otherwise the next data refresh re-runs
+					// restoreCursor against a stale target and jumps the cursor.
+					m.updateTracked()
 				}
 			}
 		case "G":
@@ -583,7 +629,7 @@ func (m *SidebarModel) scrollToCursor() {
 // View renders the sidebar.
 func (m SidebarModel) View() string {
 	// Render the "SESSIONS" header.
-	activeCount := m.countActive()
+	activeCount := m.ActiveCount()
 	title := styles.SidebarTitle.Render("SESSIONS")
 	countStr := styles.SidebarTitleCount.Render(fmt.Sprintf("%d active", activeCount))
 	gap := m.width - lipgloss.Width(title) - lipgloss.Width(countStr) - 2
@@ -617,34 +663,26 @@ func (m SidebarModel) View() string {
 	return lipgloss.JoinVertical(lipgloss.Left, header, m.vp.View())
 }
 
-// countActive returns the cached count of non-closed sessions.
-func (m SidebarModel) countActive() int {
-	return m.activeCount
-}
-
-// groupIndex returns the position of the named group (0-based), or -1 if not found.
-func (m SidebarModel) groupIndex(name string) int {
-	for i, g := range m.groups {
-		if g.Name == name {
-			return i
+// groupRecentActivity returns the most recent LastActivity across a group's
+// sessions. The zero Time is returned for an empty group, which sorts last
+// under the activity order (After is false for the zero value).
+func groupRecentActivity(sessions []*session.Session) time.Time {
+	var newest time.Time
+	for _, s := range sessions {
+		if s.LastActivity.After(newest) {
+			newest = s.LastActivity
 		}
 	}
-	return -1
+	return newest
 }
 
-func (m SidebarModel) renderGroupHeader(name string, isCursor bool) string {
+// renderGroupHeader renders a group header row. count is the group's session
+// count and idx its position in m.groups -- both passed in from the flatItems
+// walk so this avoids an O(groups) rescan on every frame.
+func (m SidebarModel) renderGroupHeader(name string, count, idx int, isCursor bool) string {
 	arrow := "\u25bc" // down-pointing triangle (expanded)
 	if m.collapsed[name] {
 		arrow = "\u25b6" // right-pointing triangle (collapsed)
-	}
-
-	// Count sessions in this group.
-	var count int
-	for _, g := range m.groups {
-		if g.Name == name {
-			count = len(g.Sessions)
-			break
-		}
 	}
 
 	if isCursor {
@@ -660,7 +698,7 @@ func (m SidebarModel) renderGroupHeader(name string, isCursor bool) string {
 		}
 		full := content + strings.Repeat(" ", gap) + countRendered
 		rendered := styles.SidebarItemSelected.Width(m.width - 1).Render(full)
-		if m.groupIndex(name) > 0 {
+		if idx > 0 {
 			return "\n" + rendered
 		}
 		return rendered
@@ -674,7 +712,7 @@ func (m SidebarModel) renderGroupHeader(name string, isCursor bool) string {
 		gap = 1
 	}
 	line := left + strings.Repeat(" ", gap) + right
-	if m.groupIndex(name) > 0 {
+	if idx > 0 {
 		return "\n" + line
 	}
 	return line
@@ -690,24 +728,21 @@ func (m SidebarModel) renderSessionItem(s *session.Session, isCursor bool) []str
 		displayName = "unknown"
 	}
 
-	// Truncate display name if needed.
+	// Truncate display name if needed. Rune/display-width aware so multibyte
+	// names are never split mid-rune; an ellipsis marks the cut.
 	maxNameWidth := m.width - 10
 	if maxNameWidth < 8 {
 		maxNameWidth = 8
 	}
-	if len(displayName) > maxNameWidth {
-		displayName = displayName[:maxNameWidth]
-	}
+	displayName = truncateDisplay(displayName, maxNameWidth)
 
-	// Truncate summary.
+	// Truncate summary the same way for consistency.
 	summary := s.Summary
 	maxSummary := m.width - 6
 	if maxSummary < 8 {
 		maxSummary = 8
 	}
-	if len(summary) > maxSummary {
-		summary = summary[:maxSummary-3] + "..."
-	}
+	summary = truncateDisplay(summary, maxSummary)
 
 	isConfirmingKill := m.ConfirmKillTarget != "" && s.TmuxTarget == m.ConfirmKillTarget
 

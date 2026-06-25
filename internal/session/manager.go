@@ -21,6 +21,19 @@ func NewManager(client *tmux.Client) *Manager {
 	return &Manager{tmuxClient: client}
 }
 
+// shellSingleQuote returns s wrapped so it is safe to embed in a POSIX shell
+// command as a single literal argument. Go's %q double-quotes, which still lets
+// the shell expand $, backticks, and backslash escapes inside the result -- a
+// directory path containing those would be misinterpreted (or used for command
+// injection). Single quotes suppress all shell expansion; the only character
+// that cannot appear inside single quotes is the single quote itself, which is
+// emitted as the standard close-escape-reopen sequence '\” (close quote,
+// backslash-escaped quote, reopen quote). Use this for filesystem paths only;
+// the user-configured claude command is intentionally left shell-evaluated.
+func shellSingleQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
 // Resume opens a new tmux window in targetTmuxSession and resumes the given
 // closed session using `claude --resume <sessionID>`.
 func (m *Manager) Resume(sess *Session, targetTmuxSession string) error {
@@ -45,7 +58,7 @@ func (m *Manager) resumeWithFlags(sess *Session, targetTmuxSession string, fork 
 	if name == "" {
 		name = "claude"
 	}
-	cmd := fmt.Sprintf("cd %q && claude --resume %q", cwd, sess.ID)
+	cmd := fmt.Sprintf("cd %s && claude --resume %q", shellSingleQuote(cwd), sess.ID)
 	if fork {
 		cmd += " --fork-session"
 	}
@@ -130,19 +143,6 @@ func (m *Manager) CreateNewTmuxSession(cwd, claudeCmd, sessionName string) (tmux
 	return tmuxSession, target, nil
 }
 
-// CreateNew opens a new tmux window in targetTmuxSession, changes to cwd, and
-// starts a fresh Claude Code session.
-func (m *Manager) CreateNew(cwd string, targetTmuxSession string) error {
-	if cwd == "" {
-		cwd = "."
-	}
-	cmd := fmt.Sprintf("cd %q && claude", cwd)
-	return m.tmuxClient.NewWindow(tmux.NewWindowOptions{
-		Target:  targetTmuxSession + ":",
-		Command: cmd,
-	})
-}
-
 // CreateNewWithTarget opens a new tmux window in targetTmuxSession, changes to
 // cwd, starts Claude using claudeCmd, and returns the new pane's tmux target
 // (e.g. "session:3.0"). claudeCmd defaults to "claude" when empty.
@@ -172,7 +172,7 @@ func (m *Manager) CreateNewWithTarget(cwd, targetTmuxSession, claudeCmd string) 
 	if err != nil {
 		return "", fmt.Errorf("create window: %w", err)
 	}
-	cmd := fmt.Sprintf("cd %q && %s", cwd, claudeCmd)
+	cmd := fmt.Sprintf("cd %s && %s", shellSingleQuote(cwd), claudeCmd)
 	if err := m.tmuxClient.SendKeys(target, cmd); err != nil {
 		return "", fmt.Errorf("send claude command: %w", err)
 	}

@@ -10,11 +10,11 @@ import (
 
 // SessionMetrics holds aggregate statistics extracted from a session's .jsonl file.
 type SessionMetrics struct {
-	MessageCount   int        // count of type=="user" || type=="assistant" records
-	StartTime      time.Time  // first non-zero timestamp in the file
-	TokensUsed     int        // sum of input_tokens + output_tokens from all assistant records
-	ContextLimit   int        // inferred from model: opus->1000000, sonnet->200000, haiku->200000, default->200000
-	RecentActivity [10]int    // message counts bucketed into 10 x 6-minute slots over the last hour
+	MessageCount   int       // count of type=="user" || type=="assistant" records
+	StartTime      time.Time // first non-zero timestamp in the file
+	TokensUsed     int       // context fill (input + cache_read + cache_creation + output) from the assistant record with the max timestamp
+	ContextLimit   int       // inferred from model: opus->1000000, sonnet->200000, haiku->200000, default->200000
+	RecentActivity [10]int   // message counts bucketed into 10 equal slots spanning the session's first-to-last message (adaptive window)
 }
 
 // metricsRecord captures the fields we need from each .jsonl line for metrics.
@@ -51,6 +51,15 @@ func LoadMetrics(filePath, model string) (*SessionMetrics, error) {
 	// Collect all message timestamps in first pass, count tokens along the way.
 	var msgTimes []time.Time
 
+	// Track the assistant record carrying the LATEST timestamp; its usage is
+	// the current context fill. File order is not guaranteed to be
+	// chronological, so we select by max timestamp rather than physical last.
+	var (
+		tokensTime     time.Time // timestamp of the chosen assistant record
+		tokensHaveTime bool      // whether the chosen record had a parseable timestamp
+		tokensSeen     bool      // whether any assistant usage record has been chosen yet
+	)
+
 	scanner := bufio.NewScanner(f)
 	buf := make([]byte, 0, 64*1024)
 	scanner.Buffer(buf, 4*1024*1024)
@@ -85,14 +94,35 @@ func LoadMetrics(filePath, model string) (*SessionMetrics, error) {
 			}
 		}
 
-		// Track the last assistant record's context usage (not cumulative).
-		// Current context fill = input + cache_read + cache_creation from
-		// the most recent request.
+		// Track the latest assistant record's context usage (not cumulative).
+		// Current context fill = input + cache_read + cache_creation + output
+		// from the most recent request, selected by MAX timestamp because file
+		// order is not guaranteed to be chronological.
 		if rec.Type == "assistant" && len(rec.Message) > 0 {
 			var usage metricsUsage
 			if err := json.Unmarshal(rec.Message, &usage); err == nil {
-				u := usage.Usage
-				m.TokensUsed = u.InputTokens + u.CacheReadInputTokens + u.CacheCreationInputTokens + u.OutputTokens
+				// Decide whether this record is "later" than the chosen one.
+				// A record with a parseable timestamp beats one without; among
+				// timestamped records the larger timestamp wins. Untimestamped
+				// records only win when nothing has been chosen yet (preserving
+				// behavior for files lacking timestamps).
+				newer := false
+				switch {
+				case !tokensSeen:
+					newer = true
+				case !recTime.IsZero() && (!tokensHaveTime || recTime.After(tokensTime)):
+					newer = true
+				case recTime.IsZero() && !tokensHaveTime:
+					// Both untimestamped: keep last-seen ordering as before.
+					newer = true
+				}
+				if newer {
+					u := usage.Usage
+					m.TokensUsed = u.InputTokens + u.CacheReadInputTokens + u.CacheCreationInputTokens + u.OutputTokens
+					tokensSeen = true
+					tokensTime = recTime
+					tokensHaveTime = !recTime.IsZero()
+				}
 			}
 		}
 	}

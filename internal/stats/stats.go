@@ -2,17 +2,17 @@ package stats
 
 // Stats holds computed statistics for display in the stats popup.
 type Stats struct {
-	TotalSessions    int
-	TotalMessages    int
-	ActiveCount      int
+	TotalSessions     int
+	TotalMessages     int
+	ActiveCount       int
 	AvgSessionsPerDay float64
-	ProjectCounts    []ProjectCount
-	WeeklyActivity   []DayActivity
-	HourlyActivity   [24]int // message count per hour, only populated for "today" filter
-	ModelUsage       []ModelUsageEntry
-	LongestSession   LongestInfo
-	PeakHour         int
-	Filter           string // "all", "week", "today"
+	ProjectCounts     []ProjectCount
+	WeeklyActivity    []DayActivity
+	HourlyActivity    [24]int // message count per hour, only populated for "today" filter
+	ModelUsage        []ModelUsageEntry
+	LongestSession    LongestInfo
+	PeakHour          int
+	Filter            string // "all", "week", "today"
 }
 
 // ProjectCount is a project name with its session count.

@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/thbits/naviClaude/internal/stats"
 	"github.com/thbits/naviClaude/internal/styles"
 )
@@ -13,6 +14,16 @@ const (
 	FilterAll   = 0
 	FilterWeek  = 1
 	FilterToday = 2
+)
+
+// Stats chart dimensions. Named so the layout math reads clearly; values are
+// chosen to fit comfortably inside the stats popup border.
+const (
+	statsBarWidth        = 30 // max width (cells) of the horizontal project/model bars
+	statsHourlyBarHeight = 4  // max height (rows) of the per-hour activity chart
+	statsWeeklyBarHeight = 6  // max height (rows) of the weekly activity chart
+	statsNameColMax      = 28 // cap on the project-name column width
+	statsModelLabelWidth = 8  // fixed width (cells) of the model-family label column
 )
 
 // StatsModel renders a centered popup with usage statistics.
@@ -130,20 +141,19 @@ func (m StatsModel) View() string {
 	if len(s.ProjectCounts) > 0 {
 		lines = append(lines, styles.DetailLabel.Render("Top Projects"))
 		maxCount := s.ProjectCounts[0].Count
-		maxBarWidth := 30
+		maxBarWidth := statsBarWidth
 
 		// Size the name column to the longest name so two-component paths
 		// (e.g. "opmed-deployment-ng/dev") aren't clipped, capped so the
-		// popup can't grow unbounded.
-		const maxNameWidth = 28
+		// popup can't grow unbounded. Width is measured in display cells.
 		nameWidth := 0
 		for _, p := range s.ProjectCounts {
-			if len(p.Name) > nameWidth {
-				nameWidth = len(p.Name)
+			if w := ansi.StringWidth(p.Name); w > nameWidth {
+				nameWidth = w
 			}
 		}
-		if nameWidth > maxNameWidth {
-			nameWidth = maxNameWidth
+		if nameWidth > statsNameColMax {
+			nameWidth = statsNameColMax
 		}
 
 		for _, p := range s.ProjectCounts {
@@ -155,7 +165,7 @@ func (m StatsModel) View() string {
 				}
 			}
 			bar := strings.Repeat("\u2588", barWidth)
-			name := fmt.Sprintf("%-*s ", nameWidth, truncate(p.Name, nameWidth))
+			name := fmt.Sprintf("%-*s ", nameWidth, truncateDisplay(p.Name, nameWidth))
 			countStr := fmt.Sprintf(" %d", p.Count)
 			lines = append(lines, "  "+styles.DetailLabel.Render(name)+styles.StatsBar.Render(bar)+styles.DetailValue.Render(countStr))
 		}
@@ -171,7 +181,7 @@ func (m StatsModel) View() string {
 				maxVal = v
 			}
 		}
-		maxBarHeight := 4
+		maxBarHeight := statsHourlyBarHeight
 		for row := maxBarHeight; row >= 1; row-- {
 			var rowStr strings.Builder
 			rowStr.WriteString("  ")
@@ -226,7 +236,7 @@ func (m StatsModel) View() string {
 				maxMsgs = d.MessageCount
 			}
 		}
-		maxBarHeight := 6
+		maxBarHeight := statsWeeklyBarHeight
 		barChar := "\u2588"
 		spaceChar := " "
 		sepChar := ""
@@ -294,7 +304,7 @@ func (m StatsModel) View() string {
 			if totalTokens > 0 {
 				pct = mu.Count * 100 / totalTokens
 			}
-			barWidth := mu.Count * 30 / maxInt(totalTokens, 1)
+			barWidth := mu.Count * statsBarWidth / maxInt(totalTokens, 1)
 			if barWidth < 1 && mu.Count > 0 {
 				barWidth = 1
 			}
@@ -303,7 +313,7 @@ func (m StatsModel) View() string {
 			if mu.Family == "opus" {
 				barStyle = styles.StatsBarAlt
 			}
-			label := fmt.Sprintf("%-8s", mu.Family)
+			label := fmt.Sprintf("%-*s", statsModelLabelWidth, mu.Family)
 			lines = append(lines, "  "+styles.DetailLabel.Render(label)+" "+barStyle.Render(bar)+" "+styles.DetailValue.Render(fmt.Sprintf("%d%%", pct)))
 		}
 		lines = append(lines, "")
@@ -347,13 +357,6 @@ func (m StatsModel) renderFilterBadge() string {
 		}
 	}
 	return strings.Join(parts, " ")
-}
-
-func truncate(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen-1] + "\u2026"
 }
 
 func formatMinutes(mins int) string {

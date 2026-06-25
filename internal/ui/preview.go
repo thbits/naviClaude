@@ -48,24 +48,30 @@ func NewPreview(width, height int) PreviewModel {
 // The scroll position is only preserved when the user has manually scrolled up.
 func (m *PreviewModel) SetContent(content string) {
 	m.content = content
-	if m.viewport.Width > 0 {
-		// Truncate lines exceeding viewport width (safety net for stale
-		// scrollback). The tmux pane is resized to match the viewport so
-		// apps re-render at the correct width via SIGWINCH.
-		lines := strings.Split(content, "\n")
-		for i, line := range lines {
-			if ansi.StringWidth(line) > m.viewport.Width {
-				lines[i] = ansi.Truncate(line, m.viewport.Width, "")
-			}
-		}
-		content = strings.Join(lines, "\n")
-	}
-	m.viewport.SetContent(content)
+	m.viewport.SetContent(m.truncateToWidth(content))
 	// Only auto-scroll to bottom if the user hasn't scrolled away.
 	// This lets users read history without being yanked back every 200ms.
 	if !m.userScrolled {
 		m.viewport.GotoBottom()
 	}
+}
+
+// truncateToWidth applies the per-line ANSI-aware width truncation used before
+// any content is handed to the viewport (a safety net for stale scrollback;
+// the tmux pane is resized to match so apps normally re-render at the correct
+// width via SIGWINCH). Shared by SetContent and SetSize so a resize doesn't
+// leave stale long lines overflowing the narrower viewport.
+func (m *PreviewModel) truncateToWidth(content string) string {
+	if m.viewport.Width <= 0 {
+		return content
+	}
+	lines := strings.Split(content, "\n")
+	for i, line := range lines {
+		if ansi.StringWidth(line) > m.viewport.Width {
+			lines[i] = ansi.Truncate(line, m.viewport.Width, "")
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 // SetSession updates the header metadata.
@@ -102,9 +108,10 @@ func (m *PreviewModel) SetSize(w, h int) {
 	m.viewport.Width = contentWidth
 	m.viewport.Height = contentHeight
 
-	// Re-wrap existing content to the new width so lines don't overflow.
+	// Re-truncate existing content to the new width so stale long lines don't
+	// overflow the narrower viewport (same width pass as SetContent).
 	if m.content != "" {
-		m.viewport.SetContent(m.content)
+		m.viewport.SetContent(m.truncateToWidth(m.content))
 	}
 }
 
@@ -118,10 +125,18 @@ func (m *PreviewModel) ScrollUp(n int) {
 // Resumes auto-scroll when the user reaches the bottom.
 func (m *PreviewModel) ScrollDown(n int) {
 	m.viewport.SetYOffset(m.viewport.YOffset + n)
-	contentLines := strings.Count(m.content, "\n")
-	if m.viewport.YOffset+m.viewport.Height >= contentLines {
+	if m.atBottom() {
 		m.userScrolled = false
 	}
+}
+
+// atBottom reports whether the viewport is scrolled to the last line of the
+// content. The total line count is strings.Count("\n")+1 (a string with k
+// newlines has k+1 lines); using the raw count undercounts by one and resumes
+// auto-follow a line early.
+func (m *PreviewModel) atBottom() bool {
+	totalLines := strings.Count(m.content, "\n") + 1
+	return m.viewport.YOffset+m.viewport.Height >= totalLines
 }
 
 // ResetScroll clears the user scroll flag (e.g. on session change).
@@ -151,9 +166,7 @@ func (m PreviewModel) Update(msg tea.Msg) (PreviewModel, tea.Cmd) {
 	// Track user scroll state after viewport processes the event.
 	switch msg.(type) {
 	case tea.MouseMsg:
-		contentLines := strings.Count(m.content, "\n")
-		atBottom := m.viewport.YOffset+m.viewport.Height >= contentLines
-		m.userScrolled = !atBottom
+		m.userScrolled = !m.atBottom()
 	}
 
 	return m, cmd
@@ -396,12 +409,4 @@ func formatUptime(d time.Duration) string {
 		return fmt.Sprintf("%dh", hours)
 	}
 	return fmt.Sprintf("%dh%dm", hours, mins)
-}
-
-func (m PreviewModel) statusBadge(status session.SessionStatus) string {
-	fg, icon := statusIconProps(status, 0)
-	if icon == " " {
-		return ""
-	}
-	return lipgloss.NewStyle().Foreground(fg).Render(fmt.Sprintf("%s %s", icon, status.String()))
 }

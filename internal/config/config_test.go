@@ -166,6 +166,121 @@ func TestLoadPartialOverride(t *testing.T) {
 	}
 }
 
+func TestLoadInvalidRefreshIntervalFallsBack(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+
+	os.WriteFile(path, []byte("refresh_interval: \"not-a-duration\"\n"), 0o644)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if cfg.RefreshInterval != DefaultConfig().RefreshInterval {
+		t.Errorf("RefreshInterval = %q, want default %q", cfg.RefreshInterval, DefaultConfig().RefreshInterval)
+	}
+
+	// A valid duration must be preserved.
+	os.WriteFile(path, []byte("refresh_interval: 1s\n"), 0o644)
+	cfg, err = Load(path)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if cfg.RefreshInterval != "1s" {
+		t.Errorf("RefreshInterval = %q, want %q", cfg.RefreshInterval, "1s")
+	}
+}
+
+func TestLoadInvalidSortOrderFallsBack(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+
+	os.WriteFile(path, []byte("group_sort_order: bogus\nsession_sort_order: nonsense\n"), 0o644)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if cfg.GroupSortOrder != "name" {
+		t.Errorf("GroupSortOrder = %q, want default %q", cfg.GroupSortOrder, "name")
+	}
+	if cfg.SessionSortOrder != "name" {
+		t.Errorf("SessionSortOrder = %q, want default %q", cfg.SessionSortOrder, "name")
+	}
+
+	// A valid enum value (activity) must be preserved.
+	os.WriteFile(path, []byte("group_sort_order: activity\nsession_sort_order: activity\n"), 0o644)
+	cfg, err = Load(path)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if cfg.GroupSortOrder != "activity" {
+		t.Errorf("GroupSortOrder = %q, want %q", cfg.GroupSortOrder, "activity")
+	}
+	if cfg.SessionSortOrder != "activity" {
+		t.Errorf("SessionSortOrder = %q, want %q", cfg.SessionSortOrder, "activity")
+	}
+}
+
+func TestLoadNegativeNumericsFallBack(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+
+	yaml := "sidebar_width: -10\npopup_width: -1\npopup_height: -5\nactive_window_secs: -3\ncpu_active_threshold: -2.0\nclosed_session_hours: -4\n"
+	os.WriteFile(path, []byte(yaml), 0o644)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	d := DefaultConfig()
+	if cfg.SidebarWidth != d.SidebarWidth {
+		t.Errorf("SidebarWidth = %d, want default %d", cfg.SidebarWidth, d.SidebarWidth)
+	}
+	if cfg.PopupWidth != d.PopupWidth {
+		t.Errorf("PopupWidth = %d, want default %d", cfg.PopupWidth, d.PopupWidth)
+	}
+	if cfg.PopupHeight != d.PopupHeight {
+		t.Errorf("PopupHeight = %d, want default %d", cfg.PopupHeight, d.PopupHeight)
+	}
+	if cfg.ActiveWindowSecs != d.ActiveWindowSecs {
+		t.Errorf("ActiveWindowSecs = %d, want default %d", cfg.ActiveWindowSecs, d.ActiveWindowSecs)
+	}
+	if cfg.CPUActiveThreshold != d.CPUActiveThreshold {
+		t.Errorf("CPUActiveThreshold = %v, want default %v", cfg.CPUActiveThreshold, d.CPUActiveThreshold)
+	}
+	if cfg.ClosedSessionHours != d.ClosedSessionHours {
+		t.Errorf("ClosedSessionHours = %v, want default %v", cfg.ClosedSessionHours, d.ClosedSessionHours)
+	}
+}
+
+func TestLoadCollapseAfterHoursZeroPreserved(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+
+	// 0 is a legitimate sentinel ("disabled") for CollapseAfterHours and must
+	// NOT be coerced to the default.
+	os.WriteFile(path, []byte("collapse_after_hours: 0\n"), 0o644)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if cfg.CollapseAfterHours != 0 {
+		t.Errorf("CollapseAfterHours = %v, want 0 (disabled) preserved", cfg.CollapseAfterHours)
+	}
+
+	// A negative value is invalid and falls back to the default.
+	os.WriteFile(path, []byte("collapse_after_hours: -1\n"), 0o644)
+	cfg, err = Load(path)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if cfg.CollapseAfterHours != DefaultConfig().CollapseAfterHours {
+		t.Errorf("CollapseAfterHours = %v, want default %v", cfg.CollapseAfterHours, DefaultConfig().CollapseAfterHours)
+	}
+}
+
 func TestSaveCreatesDirectories(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "sub", "dir", "config.yaml")

@@ -62,6 +62,16 @@ func PlaceOverlay(bg, fg string) string {
 		left := ansi.Truncate(bgLine, startX, "")
 		right := ansi.TruncateLeft(bgLine, startX+fgW, "")
 
+		// A double-width rune straddling the popup's LEFT edge is dropped whole
+		// by ansi.Truncate, so `left` comes back one column short and the popup
+		// (and everything after it) shifts one column left. Pad the orphaned
+		// half-cell with a space so the popup always begins exactly at column
+		// startX. For ASCII, left is already exactly startX wide and no padding
+		// is added, so ASCII output is byte-for-byte unchanged.
+		if pad := startX - ansi.StringWidth(left); pad > 0 {
+			left += strings.Repeat(" ", pad)
+		}
+
 		bgLines[bgRow] = left + fgLine + right
 	}
 

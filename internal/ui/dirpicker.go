@@ -38,6 +38,7 @@ type DirPickerModel struct {
 	width       int
 	height      int
 	title       string
+	homeDir     string // cached on Show so displayPath doesn't stat $HOME per row/frame
 
 	zoxideFn   func() []string       // frecent dirs; default queries zoxide
 	listDirsFn func(string) []string // subdirs of a base; default reads the FS
@@ -59,15 +60,28 @@ func NewDirPicker() DirPickerModel {
 	}
 }
 
-// Show opens the picker rooted at base, seeding candidates from base's
-// subdirectories, zoxide, and the given open-session directories. base is
-// preselected so a single Enter reproduces the caller's default.
-func (m *DirPickerModel) Show(base string, sessionDirs []string) {
+// dirCandidatesMsg carries the result of an async candidate lookup for a base
+// directory (the zoxide query + subdir listing run off the Update goroutine).
+type dirCandidatesMsg struct {
+	base       string
+	candidates []DirCandidate
+}
+
+// Show opens the picker rooted at base and returns a command that performs the
+// (potentially blocking) candidate lookup -- zoxide query and subdir listing --
+// off the Update goroutine. The pending base is set synchronously so the popup
+// renders immediately; candidates arrive via dirCandidatesMsg. base is
+// preselected once candidates load so a single Enter reproduces the caller's
+// default.
+func (m *DirPickerModel) Show(base string, sessionDirs []string) tea.Cmd {
 	m.visible = true
 	m.sessionDirs = sessionDirs
 	m.input.SetValue("")
 	m.input.Focus()
-	m.setBase(base)
+	if h, err := os.UserHomeDir(); err == nil {
+		m.homeDir = h
+	}
+	return m.setPendingBase(base)
 }
 
 // SetTitle overrides the popup title (e.g. to reflect the n vs N flow).
@@ -117,31 +131,64 @@ func (m *DirPickerModel) MoveDown() {
 	}
 }
 
-// Descend navigates into the highlighted directory, making it the new base.
-func (m *DirPickerModel) Descend() {
+// Descend navigates into the highlighted directory, making it the new base, and
+// returns the command that loads its candidates. Returns nil when nothing is
+// selected.
+func (m *DirPickerModel) Descend() tea.Cmd {
 	sel := m.Selected()
 	if sel == "" {
-		return
+		return nil
 	}
 	m.input.SetValue("")
-	m.setBase(sel)
+	return m.setPendingBase(sel)
 }
 
-// Parent navigates to the parent of the current base.
-func (m *DirPickerModel) Parent() {
+// Parent navigates to the parent of the current base and returns the command
+// that loads its candidates. Returns nil at the filesystem root.
+func (m *DirPickerModel) Parent() tea.Cmd {
 	parent := filepath.Dir(m.base)
 	if parent == "" || parent == m.base {
-		return
+		return nil
 	}
 	m.input.SetValue("")
-	m.setBase(parent)
+	return m.setPendingBase(parent)
 }
 
-// setBase recomputes the candidate pool for a new base directory.
-func (m *DirPickerModel) setBase(base string) {
+// setPendingBase records the new base synchronously (cheap) and clears the stale
+// candidate pool, then returns a command that performs the blocking lookups
+// (zoxide query + subdir listing) and emits a dirCandidatesMsg. The candidates
+// are applied later via applyCandidates so the Update goroutine never blocks on
+// these filesystem/exec calls.
+func (m *DirPickerModel) setPendingBase(base string) tea.Cmd {
 	m.base = absClean(base)
-	m.candidates = buildCandidates(m.base, m.listDirsFn(m.base), m.zoxideFn(), m.sessionDirs)
+	m.candidates = nil
+	m.filtered = nil
 	m.cursor = 0
+	return m.loadCandidatesCmd(m.base)
+}
+
+// loadCandidatesCmd returns a command performing the (blocking) zoxide and
+// subdir lookups for base, then building the candidate pool off the Update
+// goroutine. The injectable zoxideFn/listDirsFn are captured so tests stay
+// deterministic.
+func (m *DirPickerModel) loadCandidatesCmd(base string) tea.Cmd {
+	zoxideFn := m.zoxideFn
+	listDirsFn := m.listDirsFn
+	sessionDirs := m.sessionDirs
+	return func() tea.Msg {
+		cands := buildCandidates(base, listDirsFn(base), zoxideFn(), sessionDirs)
+		return dirCandidatesMsg{base: base, candidates: cands}
+	}
+}
+
+// applyCandidates installs candidates loaded for a base directory, ignoring
+// stale results whose base no longer matches the current one (the user may have
+// navigated again before the lookup finished). It re-runs the active filter.
+func (m *DirPickerModel) applyCandidates(msg dirCandidatesMsg) {
+	if !m.visible || msg.base != m.base {
+		return
+	}
+	m.candidates = msg.candidates
 	m.runFilter()
 }
 
@@ -158,9 +205,14 @@ func (m *DirPickerModel) runFilter() {
 // Init satisfies tea.Model.
 func (m DirPickerModel) Init() tea.Cmd { return textinput.Blink }
 
-// Update feeds text-input events (typing) and refilters. Navigation and
-// selection keys are handled by the app, which calls the methods above.
+// Update feeds text-input events (typing) and refilters, and applies async
+// candidate-load results. Navigation and selection keys are handled by the app,
+// which calls the methods above.
 func (m DirPickerModel) Update(msg tea.Msg) (DirPickerModel, tea.Cmd) {
+	if msg, ok := msg.(dirCandidatesMsg); ok {
+		m.applyCandidates(msg)
+		return m, nil
+	}
 	if !m.visible {
 		return m, nil
 	}
@@ -288,9 +340,16 @@ func defaultZoxideDirs() []string {
 // Rendering
 // ---------------------------------------------------------------------------
 
-// displayPath shortens a home-prefixed path to ~ for compactness.
-func displayPath(p string) string {
-	if h, err := os.UserHomeDir(); err == nil && h != "" {
+// displayPath shortens a home-prefixed path to ~ for compactness. It uses the
+// home directory cached on Show (m.homeDir) rather than calling os.UserHomeDir
+// per row per frame; it falls back to a live lookup if the cache is empty (e.g.
+// the picker was never opened via Show).
+func (m DirPickerModel) displayPath(p string) string {
+	h := m.homeDir
+	if h == "" {
+		h, _ = os.UserHomeDir()
+	}
+	if h != "" {
 		if p == h {
 			return "~"
 		}
@@ -315,10 +374,17 @@ func sourceMarker(source string) string {
 	}
 }
 
+// dirPickerChromeRows is the number of popup rows consumed by non-candidate
+// chrome, subtracted from the popup height to size the candidate scroll window.
+// Budget: border top+bottom (2) + padding top+bottom (2) + title (1) + base
+// line (1) + input (1) + two separators (2) = 9 rows.
+const dirPickerChromeRows = 9
+
 // visibleRows returns how many candidate rows fit, accounting for the title,
-// base line, input, separators, and footer.
+// base line, input, separators, border, padding, and footer (see
+// dirPickerChromeRows).
 func (m DirPickerModel) visibleRows() int {
-	rows := m.height - 9
+	rows := m.height - dirPickerChromeRows
 	if rows < 3 {
 		rows = 3
 	}
@@ -341,7 +407,7 @@ func (m DirPickerModel) View() string {
 
 	title := lipgloss.NewStyle().Foreground(styles.ColorPurple).Bold(true).Render(m.title)
 	baseLine := lipgloss.NewStyle().Foreground(styles.ColorGray).
-		Render("base: " + displayPath(m.base))
+		Render("base: " + m.displayPath(m.base))
 	sep := lipgloss.NewStyle().Foreground(styles.ColorGray).
 		Render(strings.Repeat("─", boxWidth))
 
@@ -367,7 +433,7 @@ func (m DirPickerModel) View() string {
 		for i := start; i < end; i++ {
 			c := m.filtered[i]
 			marker := lipgloss.NewStyle().Foreground(styles.ColorAmber).Render(sourceMarker(c.Source))
-			label := marker + " " + displayPath(c.Path)
+			label := marker + " " + m.displayPath(c.Path)
 			if i == m.cursor {
 				rows = append(rows, lipgloss.NewStyle().
 					Foreground(styles.ColorBlue).

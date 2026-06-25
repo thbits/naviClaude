@@ -88,8 +88,10 @@ func TestLoadMetrics(t *testing.T) {
 			t.Errorf("MessageCount = %d, want 4", m.MessageCount)
 		}
 
-		// TokensUsed reflects the LAST assistant record's context fill
-		// (input + output + cache), not cumulative. Last record: 200 + 75 = 275.
+		// TokensUsed reflects the context fill (input + output + cache) from the
+		// assistant record with the MAX timestamp, not cumulative. Here the
+		// records are in chronological file order, so the latest is the
+		// 10:04 record: 200 + 75 = 275.
 		wantTokens := 200 + 75
 		if m.TokensUsed != wantTokens {
 			t.Errorf("TokensUsed = %d, want %d", m.TokensUsed, wantTokens)

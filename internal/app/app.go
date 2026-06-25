@@ -49,10 +49,11 @@ type sessionRefreshMsg struct {
 
 // previewCaptureMsg carries the result of an async preview capture.
 type previewCaptureMsg struct {
-	content string
-	target  string
-	status  session.SessionStatus
-	err     error
+	content   string
+	target    string
+	sessionID string
+	status    session.SessionStatus
+	err       error
 }
 
 // closedPreviewMsg carries formatted conversation history for a closed session.
@@ -319,7 +320,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case detailDataMsg:
-		m.detail.SetData(msg.messageCount, msg.startTime)
+		// Only apply if the detail popup is still showing the same session the
+		// read was fired for; a slow read must not repaint after the user
+		// reopened the popup on a different session (mirrors metricsMsg).
+		if sel := m.sidebar.SelectedSession(); sel != nil && sel.ID == msg.sessionID {
+			m.detail.SetData(msg.messageCount, msg.startTime)
+		}
 		return m, nil
 
 	case statsComputeMsg:
@@ -413,8 +419,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case previewCaptureMsg:
 		// Discard stale results: if the user navigated away while the capture
-		// was in flight, the result belongs to a different session.
-		if sel := m.sidebar.SelectedSession(); sel == nil || sel.TmuxTarget != msg.target {
+		// was in flight, the result belongs to a different session. Require BOTH
+		// the tmux target AND the session ID to match the current selection -- a
+		// reused pane target alone is not enough, since a different session can
+		// reuse the same target after the old one closed.
+		if sel := m.sidebar.SelectedSession(); sel == nil || sel.TmuxTarget != msg.target || sel.ID != msg.sessionID {
 			return m, nil
 		}
 		if msg.err != nil {
@@ -522,6 +531,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleMouse(msg)
 	}
 
+	// Forward any message not handled above to the directory picker while it is
+	// open. The picker's async candidate-load result (dirCandidatesMsg) is an
+	// unexported ui-package type, so it can't be matched in the switch above;
+	// routing unhandled messages to the visible picker delivers it to
+	// dirPicker.Update, which applies the loaded candidates.
+	if m.dirPicker.IsVisible() {
+		var cmd tea.Cmd
+		m.dirPicker, cmd = m.dirPicker.Update(msg)
+		return m, cmd
+	}
+
 	return m, nil
 }
 
@@ -627,16 +647,11 @@ func (m Model) View() string {
 	}
 
 	if m.contextMenu.IsVisible() {
-		// The context menu positions itself via margin; overlay it.
+		// The context menu positions itself via MarginLeft/MarginTop; overlayString
+		// composites it onto the screen at that position. (A prior lipgloss.Place
+		// call here was dead -- its result was immediately overwritten by
+		// overlayString -- so it has been removed.)
 		menuView := m.contextMenu.View()
-		screen = lipgloss.Place(m.width, m.height, lipgloss.Left, lipgloss.Top,
-			screen,
-			lipgloss.WithWhitespaceChars(" "),
-		)
-		// Composite: render menu on top of screen at its position.
-		// Since the menu uses MarginLeft/MarginTop for positioning, we just
-		// join it over the screen. A simple approach: replace screen with an
-		// overlay.
 		screen = overlayString(screen, menuView, m.width, m.height)
 	}
 
@@ -794,12 +809,8 @@ func (m Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if sel := m.sidebar.SelectedSession(); sel != nil {
 			m.selectPreviewSession(sel)
 			// Fire metrics load if selection changed.
-			if sel.ID != m.metricsSessionID {
-				m.currentMetrics = nil
-				m.metricsSessionID = sel.ID
-				m.sidebar.SetMetrics(nil)
-				m.preview.SetMetrics(nil)
-				cmds = append(cmds, loadMetricsCmd(sel))
+			if cmd := m.reloadMetricsForSelection(sel); cmd != nil {
+				cmds = append(cmds, cmd)
 			}
 			// Auto-load conversation preview for closed sessions.
 			if sel.Status == session.StatusClosed {
@@ -901,14 +912,21 @@ func (m Model) handleSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "up", "ctrl+p", "down", "ctrl+n":
 		// Navigate the sidebar (filtered results).
 		var cmd tea.Cmd
+		var cmds []tea.Cmd
 		m.sidebar, cmd = m.sidebar.Update(msg)
+		cmds = append(cmds, cmd)
 		if sel := m.sidebar.SelectedSession(); sel != nil {
 			m.selectPreviewSession(sel)
+			// Reload metrics on selection change so they don't go stale while
+			// navigating search results (mirrors list-mode navigation).
+			if mc := m.reloadMetricsForSelection(sel); mc != nil {
+				cmds = append(cmds, mc)
+			}
 			if sel.Status == session.StatusClosed {
-				return m, tea.Batch(cmd, m.loadClosedPreviewCmd(sel))
+				cmds = append(cmds, m.loadClosedPreviewCmd(sel))
 			}
 		}
-		return m, cmd
+		return m, tea.Batch(cmds...)
 
 	default:
 		// All other keys go to the text input for filtering.
@@ -983,17 +1001,9 @@ func (m Model) handleRenameSessionKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if err := m.aliasStore.Set(m.renameSessionID, name); err != nil {
 				m.statusbar.SetError("rename failed: " + err.Error())
 			}
-			// Apply to current sessions immediately.
-			for _, s := range m.sessions {
-				if s.ID == m.renameSessionID {
-					s.DisplayName = name
-				}
-			}
-			for _, s := range m.allSessions {
-				if s.ID == m.renameSessionID {
-					s.DisplayName = name
-				}
-			}
+			// Apply the updated alias set to current sessions immediately.
+			m.applyAliases(m.sessions)
+			m.applyAliases(m.allSessions)
 			m.sidebar.SetSessions(m.sessions)
 		}
 		m.renameSessionID = ""
@@ -1132,23 +1142,61 @@ func (m Model) handleKillConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
 	switch key {
 	case "y", "Y":
+		var cmds []tea.Cmd
 		if m.confirmSession != nil {
-			if err := m.manager.Kill(m.confirmSession); err != nil {
-				m.err = fmt.Errorf("kill: %w", err)
-			}
-			// Remove the session from the list immediately for instant feedback.
+			// Run the actual kill in a Cmd so the tmux exec doesn't block the
+			// event loop. Keep the optimistic removeSession so feedback is
+			// instant regardless of the exec's latency.
+			cmds = append(cmds, m.killSessionCmd(m.confirmSession))
 			m.removeSession(m.confirmSession.TmuxTarget)
 		}
 		m.confirmKill = false
 		m.confirmSession = nil
 		m.sidebar.ConfirmKillTarget = ""
-		return m, m.refreshSessionsCmd()
+		cmds = append(cmds, m.refreshSessionsCmd())
+		return m, tea.Batch(cmds...)
 	default:
 		// Any other key cancels.
 		m.confirmKill = false
 		m.confirmSession = nil
 		m.sidebar.ConfirmKillTarget = ""
 		return m, nil
+	}
+}
+
+// killSessionCmd runs manager.Kill off the event loop, emitting an errMsg on
+// failure so a tmux exec never blocks Update.
+func (m Model) killSessionCmd(sess *session.Session) tea.Cmd {
+	manager := m.manager
+	return func() tea.Msg {
+		if err := manager.Kill(sess); err != nil {
+			return errMsg{err: fmt.Errorf("kill: %w", err)}
+		}
+		return nil
+	}
+}
+
+// forkResumeCmd runs manager.ForkResume off the event loop, emitting an errMsg
+// on failure.
+func (m Model) forkResumeCmd(sess *session.Session, target string) tea.Cmd {
+	manager := m.manager
+	return func() tea.Msg {
+		if err := manager.ForkResume(sess, target); err != nil {
+			return errMsg{err: fmt.Errorf("fork-resume: %w", err)}
+		}
+		return nil
+	}
+}
+
+// resumeCmd runs manager.Resume off the event loop, emitting an errMsg on
+// failure.
+func (m Model) resumeCmd(sess *session.Session, target string) tea.Cmd {
+	manager := m.manager
+	return func() tea.Msg {
+		if err := manager.Resume(sess, target); err != nil {
+			return errMsg{err: fmt.Errorf("resume: %w", err)}
+		}
+		return nil
 	}
 }
 
@@ -1159,13 +1207,11 @@ func (m Model) resumeSession(sess *session.Session) (tea.Model, tea.Cmd) {
 		m.statusbar.SetError("cannot determine current tmux session")
 		return m, nil
 	}
-	if err := m.manager.Resume(sess, target); err != nil {
-		m.err = fmt.Errorf("resume: %w", err)
-		return m, nil
-	}
-	// Trigger an immediate session refresh so the new pane is detected.
-	// Don't enter passthrough yet -- the new pane needs to be discovered first.
-	return m, m.refreshSessionsCmd()
+	// Run the resume exec in a Cmd so the tmux exec doesn't block the event
+	// loop, then trigger an immediate session refresh so the new pane is
+	// detected. Don't enter passthrough yet -- the new pane needs to be
+	// discovered first.
+	return m, tea.Batch(m.resumeCmd(sess, target), m.refreshSessionsCmd())
 }
 
 func (m Model) createNewSession() (tea.Model, tea.Cmd) {
@@ -1255,14 +1301,16 @@ func (m Model) createNewTmuxSession() (tea.Model, tea.Cmd) {
 	return m.openDirPicker(cwd, "New tmux session directory")
 }
 
-// openDirPicker activates the directory-picker overlay rooted at base.
+// openDirPicker activates the directory-picker overlay rooted at base. Show
+// returns a command that loads the candidate pool off the Update goroutine, so
+// the (possibly blocking) zoxide/subdir lookups don't freeze the UI.
 func (m Model) openDirPicker(base, title string) (tea.Model, tea.Cmd) {
 	m.mode = ModeDirPicker
 	m.dirPicker.SetSize(m.width, m.height)
 	m.dirPicker.SetTitle(title)
-	m.dirPicker.Show(base, m.sessionDirs())
+	loadCmd := m.dirPicker.Show(base, m.sessionDirs())
 	m.statusbar.SetMode(ModeDirPicker.String())
-	return m, m.dirPicker.Init()
+	return m, tea.Batch(m.dirPicker.Init(), loadCmd)
 }
 
 // sessionDirs returns the de-duplicated working directories of known sessions,
@@ -1300,12 +1348,10 @@ func (m Model) handleDirPickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "right", "tab":
-		m.dirPicker.Descend()
-		return m, nil
+		return m, m.dirPicker.Descend()
 
 	case "left":
-		m.dirPicker.Parent()
-		return m, nil
+		return m, m.dirPicker.Parent()
 
 	case "enter":
 		dir := m.dirPicker.Selected()
@@ -1378,6 +1424,10 @@ func (m Model) executeContextAction(action string, sess *session.Session) (tea.M
 	if sess == nil {
 		return m, nil
 	}
+	// Each case sets its own complete mode/statusbar target state so the result
+	// is correct regardless of the caller's pre-set mode (the context-menu key
+	// handler already reset to ModeList before dispatching here -- these cases
+	// must not depend on that ordering).
 	switch action {
 	case "focus":
 		if sess.Status == session.StatusClosed {
@@ -1389,28 +1439,35 @@ func (m Model) executeContextAction(action string, sess *session.Session) (tea.M
 		return m, nil
 
 	case "jump":
+		m.mode = ModeList
+		m.statusbar.SetMode(ModeList.String())
 		m.selectSessionInSidebar(sess)
 		return m.jumpToPane()
 
 	case "kill":
-		if err := m.manager.Kill(sess); err != nil {
-			m.err = fmt.Errorf("kill: %w", err)
-		}
-		return m, nil
+		// Mirror the keyboard kill path: optimistically remove the session for
+		// instant feedback, run the actual kill async, and refresh.
+		m.mode = ModeList
+		m.statusbar.SetMode(ModeList.String())
+		target := sess.TmuxTarget
+		m.removeSession(target)
+		return m, tea.Batch(m.killSessionCmd(sess), m.refreshSessionsCmd())
 
 	case "resume":
+		m.mode = ModeList
+		m.statusbar.SetMode(ModeList.String())
 		return m.resumeSession(sess)
 
 	case "fork_resume":
+		m.mode = ModeList
+		m.statusbar.SetMode(ModeList.String())
 		target := m.currentTmuxSession
 		if target == "" {
 			m.err = fmt.Errorf("fork-resume: cannot determine current tmux session")
+			m.statusbar.SetError("cannot determine current tmux session")
 			return m, nil
 		}
-		if err := m.manager.ForkResume(sess, target); err != nil {
-			m.err = fmt.Errorf("fork-resume: %w", err)
-		}
-		return m, nil
+		return m, tea.Batch(m.forkResumeCmd(sess, target), m.refreshSessionsCmd())
 
 	case "detail":
 		m.detail.Show(sess)
@@ -1420,12 +1477,16 @@ func (m Model) executeContextAction(action string, sess *session.Session) (tea.M
 
 	case "copy_id":
 		// Best-effort clipboard copy; silently ignore errors.
+		m.mode = ModeList
+		m.statusbar.SetMode(ModeList.String())
 		if sess.ID != "" {
 			copyToClipboard(sess.ID)
 		}
 		return m, nil
 
 	case "copy_path":
+		m.mode = ModeList
+		m.statusbar.SetMode(ModeList.String())
 		if sess.CWD != "" {
 			copyToClipboard(sess.CWD)
 		}
@@ -1438,6 +1499,49 @@ func (m Model) executeContextAction(action string, sess *session.Session) (tea.M
 // Session refresh: progressive two-phase approach
 // ---------------------------------------------------------------------------
 
+// buildActiveIDSet returns the set of non-empty session IDs in active, used to
+// exclude currently-active sessions from the closed/history scans.
+func buildActiveIDSet(active []*session.Session) map[string]bool {
+	ids := make(map[string]bool, len(active))
+	for _, s := range active {
+		if s.ID != "" {
+			ids[s.ID] = true
+		}
+	}
+	return ids
+}
+
+// enrichActiveSummaries fills in each active session's Summary from the history
+// index (first prompt) when the session doesn't already carry one. No-op when
+// scanner is nil.
+func enrichActiveSummaries(scanner *session.HistoryScanner, active []*session.Session) {
+	if scanner == nil {
+		return
+	}
+	historyIndex, _ := scanner.LoadHistoryIndex()
+	for _, s := range active {
+		if s.ID != "" {
+			if display, ok := historyIndex[s.ID]; ok && s.Summary == "" {
+				s.Summary = display
+			}
+		}
+	}
+}
+
+// scanClosedAndAllSessions returns the time-windowed closed sessions and the
+// full closed-session list, excluding active IDs. It uses the session package's
+// combined ScanClosedAndAll, which globs and parses every session file once and
+// derives both views from that single pass (the closed set is a subset of all),
+// avoiding the previous double Glob + double per-file parse. No-op (nil,nil)
+// when scanner is nil.
+func scanClosedAndAllSessions(scanner *session.HistoryScanner, closedHours float64, activeIDs map[string]bool) (closed, all []*session.Session) {
+	if scanner == nil {
+		return nil, nil
+	}
+	closed, all, _ = scanner.ScanClosedAndAll(closedHours, activeIDs)
+	return closed, all
+}
+
 // refreshActiveCmd performs the fast active-session scan only (no history).
 func (m Model) refreshActiveCmd() tea.Cmd {
 	detector := m.detector
@@ -1448,19 +1552,7 @@ func (m Model) refreshActiveCmd() tea.Cmd {
 		if err != nil {
 			return activeSessionsMsg{err: err}
 		}
-
-		// Enrich active sessions with history data (summary).
-		if scanner != nil {
-			historyIndex, _ := scanner.LoadHistoryIndex()
-			for _, s := range active {
-				if s.ID != "" {
-					if display, ok := historyIndex[s.ID]; ok && s.Summary == "" {
-						s.Summary = display
-					}
-				}
-			}
-		}
-
+		enrichActiveSummaries(scanner, active)
 		return activeSessionsMsg{active: active}
 	}
 }
@@ -1472,19 +1564,8 @@ func (m Model) refreshHistoryCmd() tea.Cmd {
 	activeSessions := m.activeSessions
 
 	return func() tea.Msg {
-		activeIDs := make(map[string]bool, len(activeSessions))
-		for _, s := range activeSessions {
-			if s.ID != "" {
-				activeIDs[s.ID] = true
-			}
-		}
-
-		var closed, all []*session.Session
-		if scanner != nil {
-			closed, _ = scanner.ScanClosed(closedHours, activeIDs)
-			all, _ = scanner.ScanAll(activeIDs)
-		}
-
+		activeIDs := buildActiveIDSet(activeSessions)
+		closed, all := scanClosedAndAllSessions(scanner, closedHours, activeIDs)
 		return historySessionsMsg{
 			closed: closed,
 			all:    all,
@@ -1504,30 +1585,9 @@ func (m Model) refreshSessionsCmd() tea.Cmd {
 			return sessionRefreshMsg{err: err}
 		}
 
-		activeIDs := make(map[string]bool, len(active))
-		for _, s := range active {
-			if s.ID != "" {
-				activeIDs[s.ID] = true
-			}
-		}
-
-		var closed, all []*session.Session
-		if scanner != nil {
-			closed, _ = scanner.ScanClosed(closedHours, activeIDs)
-			all, _ = scanner.ScanAll(activeIDs)
-		}
-
-		// Enrich active sessions with history data.
-		if scanner != nil {
-			historyIndex, _ := scanner.LoadHistoryIndex()
-			for _, s := range active {
-				if s.ID != "" {
-					if display, ok := historyIndex[s.ID]; ok && s.Summary == "" {
-						s.Summary = display
-					}
-				}
-			}
-		}
+		activeIDs := buildActiveIDSet(active)
+		closed, all := scanClosedAndAllSessions(scanner, closedHours, activeIDs)
+		enrichActiveSummaries(scanner, active)
 
 		return sessionRefreshMsg{
 			active: active,
@@ -1548,12 +1608,7 @@ func (m *Model) applySessionRefresh(msg sessionRefreshMsg) {
 	combined = append(combined, msg.closed...)
 
 	// Apply user-defined display name aliases.
-	aliases := m.aliasStore.All()
-	for _, s := range combined {
-		if name, ok := aliases[s.ID]; ok {
-			s.DisplayName = name
-		}
-	}
+	m.applyAliases(combined)
 
 	m.sessions = combined
 
@@ -1584,11 +1639,7 @@ func (m *Model) applySessionRefresh(msg sessionRefreshMsg) {
 	allCombined = append(allCombined, msg.active...)
 	allCombined = append(allCombined, msg.all...)
 	// Apply aliases to all sessions too (msg.all may have sessions not in combined).
-	for _, s := range allCombined {
-		if name, ok := aliases[s.ID]; ok {
-			s.DisplayName = name
-		}
-	}
+	m.applyAliases(allCombined)
 	m.allSessions = allCombined
 	m.search.SetSessions(allCombined)
 
@@ -1702,15 +1753,22 @@ func (m Model) capturePreviewCmd() tea.Cmd {
 	sessionID := sess.ID
 	captureEngine := m.captureEngine
 	statusDetector := m.statusDetector
+	// Compute the capture width here (on the event-loop goroutine, where the
+	// dimensions are stable) and pass it to Capture, rather than relying on a
+	// shared mutable field on the engine that the capture goroutine would race
+	// with a concurrent resize. Mirrors resizeComponents: previewWidth-2 for the
+	// preview's left/right padding.
+	previewWidth := m.width - m.sidebarWidth()
+	maxWidth := previewWidth - 2
 	// Only overlay the pane cursor when the preview is focused (passthrough);
 	// while browsing the menu the pane isn't receiving input, so a cursor block
 	// would be misleading.
 	showCursor := m.mode == ModePassthrough
 
 	return func() tea.Msg {
-		content, err := captureEngine.Capture(target, showCursor)
+		content, err := captureEngine.Capture(target, showCursor, maxWidth)
 		if err != nil {
-			return previewCaptureMsg{err: err, target: target}
+			return previewCaptureMsg{err: err, target: target, sessionID: sessionID}
 		}
 
 		// Claude Code's own native status is authoritative when available; fall
@@ -1722,9 +1780,10 @@ func (m Model) capturePreviewCmd() tea.Cmd {
 		}
 
 		return previewCaptureMsg{
-			content: content,
-			target:  target,
-			status:  status,
+			content:   content,
+			target:    target,
+			sessionID: sessionID,
+			status:    status,
 		}
 	}
 }
@@ -1792,9 +1851,9 @@ func (m *Model) resizeComponents() {
 	m.themePicker.SetSize(m.width, m.height)
 	m.dirPicker.SetSize(m.width, m.height)
 	m.contextMenu.SetTermSize(m.width, m.height)
-	// Truncate captured pane lines to the preview viewport width to prevent
-	// overflow when the source pane is wider than the popup.
-	m.captureEngine.SetMaxWidth(previewWidth - 2) // -2 for left padding
+	// The capture width is computed per-capture in capturePreviewCmd and passed
+	// to Capture, so there is no shared maxWidth field to set here. (Truncation
+	// to the preview viewport width still happens -- see capturePreviewCmd.)
 }
 
 // previewPaneDimensions returns the width and height that managed tmux panes
@@ -1867,6 +1926,37 @@ func (m *Model) selectSessionInSidebar(target *session.Session) {
 	m.preview.SetSession(target)
 }
 
+// reloadMetricsForSelection clears stale metrics and reloads them when the
+// selected session differs from the one the current metrics belong to. It
+// returns the load command (or nil when the selection is unchanged or has no
+// ID). Shared by list-mode and search-mode navigation so metrics never go
+// stale on the search path.
+func (m *Model) reloadMetricsForSelection(sel *session.Session) tea.Cmd {
+	if sel == nil || sel.ID == "" || sel.ID == m.metricsSessionID {
+		return nil
+	}
+	m.currentMetrics = nil
+	m.metricsSessionID = sel.ID
+	m.sidebar.SetMetrics(nil)
+	m.preview.SetMetrics(nil)
+	return loadMetricsCmd(sel)
+}
+
+// applyAliases overlays user-defined display-name aliases onto the given
+// session list in place. Centralizes alias application so refresh/rename/search
+// paths all behave identically.
+func (m *Model) applyAliases(list []*session.Session) {
+	aliases := m.aliasStore.All()
+	if len(aliases) == 0 {
+		return
+	}
+	for _, s := range list {
+		if name, ok := aliases[s.ID]; ok {
+			s.DisplayName = name
+		}
+	}
+}
+
 // mergePendingPlaceholder checks whether the pending new-session target has
 // been detected in active. If found, clears pendingNewTarget. Otherwise,
 // carries forward the placeholder from m.sessions so it stays visible.
@@ -1882,7 +1972,10 @@ func (m *Model) mergePendingPlaceholder(active []*session.Session) []*session.Se
 	}
 	for _, s := range m.sessions {
 		if s.TmuxTarget == m.pendingNewTarget {
-			return append(active, s)
+			// Prepend the carried placeholder so it stays at the FRONT, matching
+			// where creation originally placed (and selected) it. Appending would
+			// make the new session visibly jump on the next refresh.
+			return append([]*session.Session{s}, active...)
 		}
 	}
 	return active

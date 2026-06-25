@@ -99,13 +99,12 @@ func (m DetailModel) View() string {
 		rows = append(rows, detailRow{"Memory", fmt.Sprintf("%.0f MB", s.Memory)})
 	}
 
-	// Find longest label for alignment.
-	maxLabel := 0
-	for _, r := range rows {
-		if len(r.label) > maxLabel {
-			maxLabel = len(r.label)
-		}
+	// Find longest label for alignment (display-width aware, shared helper).
+	labels := make([]string, len(rows))
+	for i, r := range rows {
+		labels[i] = r.label
 	}
+	maxLabel := labelColumnWidth(labels)
 
 	var lines []string
 	lines = append(lines, title)
@@ -115,7 +114,7 @@ func (m DetailModel) View() string {
 		if r.value == "" {
 			continue
 		}
-		padding := strings.Repeat(" ", maxLabel-len(r.label)+2)
+		padding := strings.Repeat(" ", alignedLabelPad(r.label, maxLabel, 2))
 		line := styles.DetailLabel.Render(r.label) + padding + styles.DetailValue.Render(r.value)
 		lines = append(lines, line)
 	}

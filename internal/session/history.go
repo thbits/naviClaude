@@ -7,13 +7,19 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
 // HistoryScanner scans ~/.claude/projects/**/*.jsonl for closed sessions and
 // reads ~/.claude/history.jsonl for session summaries.
 type HistoryScanner struct {
-	claudeDir      string            // defaults to ~/.claude
+	claudeDir string // defaults to ~/.claude
+
+	// cacheMu guards cachedIndex/cachedIndexAge. LoadHistoryIndex is invoked
+	// from several overlapping refresh Cmds, so the check-or-build-and-store
+	// sequence must be serialized to avoid a data race on these fields.
+	cacheMu        sync.Mutex
 	cachedIndex    map[string]string // cached history index (sessionID -> display)
 	cachedIndexAge time.Time         // when the cache was populated
 }
@@ -22,11 +28,11 @@ type HistoryScanner struct {
 // defaults to $HOME/.claude.
 func NewHistoryScanner(claudeDir string) (*HistoryScanner, error) {
 	if claudeDir == "" {
-		home, err := os.UserHomeDir()
+		base, err := claudeHomeDir()
 		if err != nil {
 			return nil, fmt.Errorf("history scanner: get home dir: %w", err)
 		}
-		claudeDir = filepath.Join(home, ".claude")
+		claudeDir = base
 	}
 	return &HistoryScanner{claudeDir: claudeDir}, nil
 }
@@ -44,6 +50,13 @@ type HistoryEntry struct {
 // re-parsing on every call within the same refresh cycle. If the file does
 // not exist, an empty map is returned without error.
 func (s *HistoryScanner) LoadHistoryIndex() (map[string]string, error) {
+	// Serialize the entire check-or-build-and-store sequence: this method runs
+	// concurrently from several refresh Cmds. The returned map, once published
+	// into s.cachedIndex, is never mutated by this scanner, so callers may read
+	// it without holding the lock.
+	s.cacheMu.Lock()
+	defer s.cacheMu.Unlock()
+
 	// Return cached result if fresh enough (avoids triple-parse per refresh).
 	if s.cachedIndex != nil && time.Since(s.cachedIndexAge) < 5*time.Second {
 		return s.cachedIndex, nil
@@ -102,6 +115,71 @@ func (s *HistoryScanner) ScanAll(activeIDs map[string]bool) ([]*Session, error) 
 	return s.scan(0, activeIDs)
 }
 
+// ScanClosedAndAll globs and parses every session .jsonl file ONCE and returns
+// two views derived from that single pass:
+//
+//   - closed: sessions whose file was modified within the last closedHours
+//     hours (pass closedHours <= 0 for no time filter, matching ScanClosed).
+//   - all:    every parsed session regardless of modification time (matching
+//     ScanAll).
+//
+// closed is a subset of all and shares the same *Session pointers. This avoids
+// the previous double Glob + double per-file parse incurred by calling
+// ScanClosed and ScanAll separately. Filtering semantics are identical to the
+// existing ScanClosed/ScanAll methods (active sessions excluded, summaries
+// attached from history.jsonl).
+func (s *HistoryScanner) ScanClosedAndAll(closedHours float64, activeIDs map[string]bool) (closed []*Session, all []*Session, err error) {
+	summaries, lerr := s.LoadHistoryIndex()
+	if lerr != nil {
+		// Non-fatal: proceed without summaries.
+		summaries = make(map[string]string)
+	}
+
+	projectsDir := filepath.Join(s.claudeDir, "projects")
+	pattern := filepath.Join(projectsDir, "*", "*.jsonl")
+	files, gerr := filepath.Glob(pattern)
+	if gerr != nil {
+		return nil, nil, fmt.Errorf("glob project jsonl files: %w", gerr)
+	}
+
+	var cutoff time.Time
+	if closedHours > 0 {
+		cutoff = time.Now().Add(-time.Duration(closedHours * float64(time.Hour)))
+	}
+
+	for _, filePath := range files {
+		info, serr := os.Stat(filePath)
+		if serr != nil {
+			continue
+		}
+
+		sess, perr := parseSessionFile(filePath)
+		if perr != nil || sess == nil {
+			continue
+		}
+
+		// Skip sessions that are currently active.
+		if activeIDs[sess.ID] {
+			continue
+		}
+
+		// Attach summary from history.jsonl if available.
+		if display, ok := summaries[sess.ID]; ok {
+			sess.Summary = display
+		}
+
+		all = append(all, sess)
+
+		// Derive the closed subset in memory using the mtime filter. A zero
+		// cutoff (closedHours <= 0) means no time filter, so every session
+		// qualifies.
+		if cutoff.IsZero() || !info.ModTime().Before(cutoff) {
+			closed = append(closed, sess)
+		}
+	}
+	return closed, all, nil
+}
+
 func (s *HistoryScanner) scan(closedHours float64, activeIDs map[string]bool) ([]*Session, error) {
 	summaries, err := s.LoadHistoryIndex()
 	if err != nil {
@@ -156,14 +234,14 @@ func (s *HistoryScanner) scan(closedHours float64, activeIDs map[string]bool) ([
 // rawRecord is a loosely-typed representation of a single .jsonl line so we
 // can handle polymorphic message.content (string or []interface{}).
 type rawRecord struct {
-	SessionID  string          `json:"sessionId"`
-	Type       string          `json:"type"`
-	Timestamp  string          `json:"timestamp"`
-	CWD        string          `json:"cwd"`
-	GitBranch  string          `json:"gitBranch"`
-	Version    string          `json:"version"`
-	Slug       string          `json:"slug"`
-	Message    json.RawMessage `json:"message"`
+	SessionID string          `json:"sessionId"`
+	Type      string          `json:"type"`
+	Timestamp string          `json:"timestamp"`
+	CWD       string          `json:"cwd"`
+	GitBranch string          `json:"gitBranch"`
+	Version   string          `json:"version"`
+	Slug      string          `json:"slug"`
+	Message   json.RawMessage `json:"message"`
 }
 
 // rawMessage holds only the fields we need from the message object.

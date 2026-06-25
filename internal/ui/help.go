@@ -129,17 +129,16 @@ func (m HelpModel) View() string {
 }
 
 func renderBindings(bindings []helpBinding) []string {
-	// Find the longest key for alignment.
-	maxKeyLen := 0
-	for _, b := range bindings {
-		if len(b.key) > maxKeyLen {
-			maxKeyLen = len(b.key)
-		}
+	// Find the longest key for alignment (display-width aware, shared helper).
+	keys := make([]string, len(bindings))
+	for i, b := range bindings {
+		keys[i] = b.key
 	}
+	maxKeyLen := labelColumnWidth(keys)
 
 	var lines []string
 	for _, b := range bindings {
-		padding := strings.Repeat(" ", maxKeyLen-len(b.key)+2)
+		padding := strings.Repeat(" ", alignedLabelPad(b.key, maxKeyLen, 2))
 		line := styles.HelpKey.Render(b.key) + padding + styles.HelpDesc.Render(b.desc)
 		lines = append(lines, line)
 	}

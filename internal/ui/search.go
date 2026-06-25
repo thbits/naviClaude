@@ -72,7 +72,9 @@ func (m *SearchModel) Activate() {
 	m.input.SetValue("")
 	m.input.Focus()
 	m.cursor = 0
-	m.results = m.sessions // show all before typing
+	// Show all before typing. Copy rather than alias m.sessions so a caller
+	// sorting/reslicing Results() in place cannot mutate the source slice.
+	m.results = append([]*session.Session(nil), m.sessions...)
 }
 
 // Deactivate clears and hides the search.
@@ -130,7 +132,9 @@ func (m SearchModel) Update(msg tea.Msg) (SearchModel, tea.Cmd) {
 func (m *SearchModel) runSearch() {
 	query := m.input.Value()
 	if query == "" {
-		m.results = m.sessions
+		// Copy rather than alias m.sessions so a caller sorting/reslicing
+		// Results() in place cannot mutate the source slice.
+		m.results = append([]*session.Session(nil), m.sessions...)
 		m.cursor = 0
 		return
 	}
@@ -194,8 +198,19 @@ func (m *SearchModel) runSearch() {
 	for idx, score := range bestScore {
 		results = append(results, scored{session: m.sessions[idx], score: score})
 	}
-	sort.Slice(results, func(i, j int) bool {
-		return results[i].score > results[j].score
+	// Use a stable sort with a deterministic tiebreaker. The scores are
+	// collected by ranging over a Go map (random iteration order), so without
+	// a tiebreaker, equal-scored results would shuffle between renders. Break
+	// ties on session ID, then DisplayName, for a stable, repeatable order.
+	sort.SliceStable(results, func(i, j int) bool {
+		a, b := results[i], results[j]
+		if a.score != b.score {
+			return a.score > b.score
+		}
+		if a.session.ID != b.session.ID {
+			return a.session.ID < b.session.ID
+		}
+		return a.session.DisplayName < b.session.DisplayName
 	})
 
 	m.results = make([]*session.Session, len(results))

@@ -20,12 +20,12 @@ type MenuItem struct {
 
 // ContextMenuModel is a floating context menu for session actions.
 type ContextMenuModel struct {
-	visible       bool
-	x, y          int
-	cursor        int
-	items         []MenuItem
-	session       *session.Session
-	termW, termH  int
+	visible      bool
+	x, y         int
+	cursor       int
+	items        []MenuItem
+	session      *session.Session
+	termW, termH int
 }
 
 // NewContextMenu creates a ContextMenuModel.
@@ -178,10 +178,13 @@ func (m ContextMenuModel) View() string {
 	var rows []string
 	maxWidth := 0
 
+	// Measure widths in display columns (lipgloss.Width), not bytes, so the
+	// column math matches the lipgloss.Width-based placement clamp below and
+	// stays correct for multibyte labels/shortcuts.
 	for _, item := range m.items {
-		w := len(item.Label)
+		w := lipgloss.Width(item.Label)
 		if item.Shortcut != "" {
-			w += len(item.Shortcut) + 4 // space + parens
+			w += lipgloss.Width(item.Shortcut) + 4 // space + parens
 		}
 		if w > maxWidth {
 			maxWidth = w
@@ -199,18 +202,16 @@ func (m ContextMenuModel) View() string {
 		label := item.Label
 
 		if item.Shortcut != "" {
-			gap := maxWidth - len(item.Label) - len(item.Shortcut) - 2
+			gap := maxWidth - lipgloss.Width(item.Label) - lipgloss.Width(item.Shortcut) - 2
 			if gap < 1 {
 				gap = 1
 			}
 			shortcut := styles.ContextMenuShortcut.Render("(" + item.Shortcut + ")")
 			label = item.Label + strings.Repeat(" ", gap) + shortcut
 		} else {
-			gap := maxWidth - len(item.Label)
-			if gap < 0 {
-				gap = 0
-			}
-			label = item.Label + strings.Repeat(" ", gap)
+			// No shortcut: left-pad the label out to the column width (shared
+			// display-width-aware helper, floors the pad at 0).
+			label = item.Label + strings.Repeat(" ", alignedLabelPad(item.Label, maxWidth, 0))
 		}
 
 		var row string

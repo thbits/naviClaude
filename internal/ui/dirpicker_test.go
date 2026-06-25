@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 func paths(cands []DirCandidate) []string {
@@ -127,7 +129,22 @@ func TestDirPickerNavigation(t *testing.T) {
 		return []string{filepath.Join(base, "sub1"), filepath.Join(base, "sub2")}
 	}
 
-	m.Show("/proj", []string{"/sess/one"})
+	// runLoad executes the (now async) candidate-load command returned by the
+	// navigation methods and applies its dirCandidatesMsg, simulating the app's
+	// Update loop. The lookups are synchronous via the injected fns here.
+	runLoad := func(cmd tea.Cmd) {
+		if cmd == nil {
+			t.Fatal("expected a candidate-load command, got nil")
+		}
+		msg := cmd()
+		dc, ok := msg.(dirCandidatesMsg)
+		if !ok {
+			t.Fatalf("expected dirCandidatesMsg, got %T", msg)
+		}
+		m, _ = m.Update(dc)
+	}
+
+	runLoad(m.Show("/proj", []string{"/sess/one"}))
 
 	t.Run("base preselected", func(t *testing.T) {
 		if got := m.Selected(); got != "/proj" {
@@ -143,7 +160,7 @@ func TestDirPickerNavigation(t *testing.T) {
 	})
 
 	t.Run("descend makes the subdir the new base", func(t *testing.T) {
-		m.Descend() // into /proj/sub1
+		runLoad(m.Descend()) // into /proj/sub1
 		if got := m.Selected(); got != "/proj/sub1" {
 			t.Errorf("after descend Selected() = %q, want /proj/sub1 (new base)", got)
 		}
@@ -155,7 +172,7 @@ func TestDirPickerNavigation(t *testing.T) {
 	})
 
 	t.Run("parent ascends", func(t *testing.T) {
-		m.Parent() // back to /proj
+		runLoad(m.Parent()) // back to /proj
 		if got := m.Selected(); got != "/proj" {
 			t.Errorf("after parent Selected() = %q, want /proj", got)
 		}

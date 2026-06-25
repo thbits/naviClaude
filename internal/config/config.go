@@ -4,9 +4,17 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
+
+// validSortOrders is the set of allowed values for the group/session sort-order
+// enums. Anything outside this set falls back to the field default.
+var validSortOrders = map[string]bool{
+	"name":     true,
+	"activity": true,
+}
 
 // Config holds all user-configurable settings for naviClaude.
 type Config struct {
@@ -128,40 +136,70 @@ func Load(path string) (Config, error) {
 		return DefaultConfig(), err
 	}
 
-	// Ensure zero-value overrides don't break defaults.
-	if cfg.SidebarWidth == 0 {
-		cfg.SidebarWidth = 30
-	}
-	if cfg.ClosedSessionHours == 0 {
-		cfg.ClosedSessionHours = 8
-	}
-	if cfg.PopupWidth == 0 {
-		cfg.PopupWidth = 85
-	}
-	if cfg.PopupHeight == 0 {
-		cfg.PopupHeight = 85
-	}
-	if len(cfg.ProcessNames) == 0 {
-		cfg.ProcessNames = []string{"claude"}
-	}
-	if cfg.ActiveWindowSecs == 0 {
-		cfg.ActiveWindowSecs = 5
-	}
-	if cfg.CPUActiveThreshold == 0 {
-		cfg.CPUActiveThreshold = 5.0
-	}
-	if cfg.Theme == "" {
-		cfg.Theme = "tokyo-night"
-	}
-	if cfg.ClaudeCommand == "" {
-		cfg.ClaudeCommand = "claude"
-	}
-	if cfg.GroupSortOrder == "" {
-		cfg.GroupSortOrder = "name"
-	}
-	if cfg.SessionSortOrder == "" {
-		cfg.SessionSortOrder = "name"
-	}
+	sanitizeConfig(&cfg)
 
 	return cfg, nil
+}
+
+// sanitizeConfig applies the zero==default semantics, validates fields, and
+// falls back to the corresponding DefaultConfig() value for any field that is
+// unset (zero), out of range (negative), or otherwise invalid. It sources every
+// fallback from DefaultConfig() rather than restating literals, so the defaults
+// live in exactly one place.
+//
+// Note: zero is still treated as "unset" for numeric fields (it is replaced by
+// the default), preserving the historical behavior — an explicit 0 is NOT
+// honored.
+func sanitizeConfig(cfg *Config) {
+	d := DefaultConfig()
+
+	// Numeric fields: treat zero or negative as "unset" and fall back to the
+	// default. (Zero==default semantics are intentional and unchanged.)
+	if cfg.SidebarWidth <= 0 {
+		cfg.SidebarWidth = d.SidebarWidth
+	}
+	if cfg.ClosedSessionHours <= 0 {
+		cfg.ClosedSessionHours = d.ClosedSessionHours
+	}
+	if cfg.PopupWidth <= 0 {
+		cfg.PopupWidth = d.PopupWidth
+	}
+	if cfg.PopupHeight <= 0 {
+		cfg.PopupHeight = d.PopupHeight
+	}
+	if cfg.ActiveWindowSecs <= 0 {
+		cfg.ActiveWindowSecs = d.ActiveWindowSecs
+	}
+	if cfg.CPUActiveThreshold <= 0 {
+		cfg.CPUActiveThreshold = d.CPUActiveThreshold
+	}
+	// CollapseAfterHours uses 0 as a sentinel ("disabled"); only a negative
+	// value is invalid, so do not coerce a legitimate 0.
+	if cfg.CollapseAfterHours < 0 {
+		cfg.CollapseAfterHours = d.CollapseAfterHours
+	}
+
+	// String / slice fields: empty falls back to default.
+	if len(cfg.ProcessNames) == 0 {
+		cfg.ProcessNames = d.ProcessNames
+	}
+	if cfg.Theme == "" {
+		cfg.Theme = d.Theme
+	}
+	if cfg.ClaudeCommand == "" {
+		cfg.ClaudeCommand = d.ClaudeCommand
+	}
+
+	// RefreshInterval must parse as a time.Duration; otherwise fall back.
+	if _, err := time.ParseDuration(cfg.RefreshInterval); err != nil {
+		cfg.RefreshInterval = d.RefreshInterval
+	}
+
+	// Sort-order enums must be one of the allowed values; otherwise fall back.
+	if !validSortOrders[cfg.GroupSortOrder] {
+		cfg.GroupSortOrder = d.GroupSortOrder
+	}
+	if !validSortOrders[cfg.SessionSortOrder] {
+		cfg.SessionSortOrder = d.SessionSortOrder
+	}
 }

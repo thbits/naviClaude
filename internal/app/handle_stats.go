@@ -1,6 +1,8 @@
 package app
 
 import (
+	"os"
+	"path/filepath"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -86,6 +88,38 @@ type statsComputeMsg struct {
 	err   error
 }
 
+// statsCacheKey combines the session-file count with a freshness fingerprint
+// (the latest .jsonl modification time, truncated to seconds) so the stats
+// cache is invalidated when existing files grow even though the file count is
+// unchanged. The stats.Cache compares this value for equality; folding the
+// freshness signal into the int it stores keeps the cache benefit for the
+// truly-unchanged case (same count and same newest mtime) without editing the
+// stats package.
+func statsCacheKey() int {
+	fileCount := stats.CountSessionFiles("")
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fileCount
+	}
+	pattern := filepath.Join(home, ".claude", "projects", "*", "*.jsonl")
+	files, err := filepath.Glob(pattern)
+	if err != nil {
+		return fileCount
+	}
+	var maxMod int64
+	for _, f := range files {
+		if info, err := os.Stat(f); err == nil {
+			if mod := info.ModTime().Unix(); mod > maxMod {
+				maxMod = mod
+			}
+		}
+	}
+	// Combine count and newest mtime into one comparison key. The shift keeps the
+	// file count from colliding with the mtime component for any realistic count.
+	return fileCount + int(maxMod<<20)
+}
+
 // computeStatsCmd runs stats.Compute in the background.
 func (m Model) computeStatsCmd() tea.Cmd {
 	activeCount := len(m.activeSessions)
@@ -93,9 +127,10 @@ func (m Model) computeStatsCmd() tea.Cmd {
 	cache := m.statsCache
 
 	return func() tea.Msg {
-		// Check cache first.
-		fileCount := stats.CountSessionFiles("")
-		if cached := cache.Load(fileCount); cached != nil && cached.Filter == filter {
+		// Check cache first. The key incorporates both the file count and the
+		// newest .jsonl mtime so content growth invalidates a stale entry.
+		cacheKey := statsCacheKey()
+		if cached := cache.Load(cacheKey); cached != nil && cached.Filter == filter {
 			return statsComputeMsg{stats: cached}
 		}
 
@@ -105,7 +140,7 @@ func (m Model) computeStatsCmd() tea.Cmd {
 		}
 
 		// Save to cache.
-		_ = cache.Save(s, fileCount)
+		_ = cache.Save(s, cacheKey)
 
 		return statsComputeMsg{stats: s}
 	}

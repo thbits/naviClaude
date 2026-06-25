@@ -10,26 +10,30 @@ import (
 	"github.com/thbits/naviClaude/internal/session"
 )
 
-// detailDataMsg carries data loaded from the session's .jsonl file.
+// detailDataMsg carries data loaded from the session's .jsonl file. It carries
+// the session ID so a slow read doesn't repaint the detail popup after the user
+// has reopened it on a different session (mirrors metricsMsg).
 type detailDataMsg struct {
+	sessionID    string
 	messageCount int
 	startTime    time.Time
 }
 
 // loadDetailDataCmd reads the .jsonl file to count messages and extract start time.
 func loadDetailDataCmd(sess *session.Session) tea.Cmd {
+	sessionID := sess.ID
 	return func() tea.Msg {
 		filePath := sess.SessionFile
 		if filePath == "" && sess.ID != "" && sess.CWD != "" {
 			filePath = session.SessionFilePath(sess.ID, sess.CWD)
 		}
 		if filePath == "" {
-			return detailDataMsg{}
+			return detailDataMsg{sessionID: sessionID}
 		}
 
 		f, err := os.Open(filePath)
 		if err != nil {
-			return detailDataMsg{}
+			return detailDataMsg{sessionID: sessionID}
 		}
 		defer f.Close()
 
@@ -74,6 +78,7 @@ func loadDetailDataCmd(sess *session.Session) tea.Cmd {
 		}
 
 		return detailDataMsg{
+			sessionID:    sessionID,
 			messageCount: count,
 			startTime:    startTime,
 		}

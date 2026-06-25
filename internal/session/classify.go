@@ -36,8 +36,12 @@ const (
 // stripped internally) and returns the strongest signal it can find. A waiting
 // prompt always takes priority over the working footer.
 func ClassifyPaneContent(content string) PaneSignal {
-	// Window in original top-to-bottom order so menu adjacency is meaningful.
-	lines := reversedLines(lastNNonEmptyLines(content, classifyWindow))
+	// lastNNonEmptyLines yields the window bottom-to-top. The order does not
+	// matter here: the waiting/working scans below return on any match (so they
+	// are order-independent), and isSelectionMenu's adjacency check (±2 lines) is
+	// symmetric, so reversing to top-to-bottom screen order would not change any
+	// result. Pass it through directly.
+	lines := lastNNonEmptyLines(content, classifyWindow)
 
 	// Waiting takes priority: if a prompt is on screen, the session is blocked
 	// on the user regardless of any stale "interrupt" footer above it.
@@ -60,16 +64,6 @@ func ClassifyPaneContent(content string) PaneSignal {
 	}
 
 	return SignalNone
-}
-
-// reversedLines returns a copy of lines in reverse order. lastNNonEmptyLines
-// yields bottom-to-top; this restores top-to-bottom screen order.
-func reversedLines(lines []string) []string {
-	out := make([]string, len(lines))
-	for i, l := range lines {
-		out[len(lines)-1-i] = l
-	}
-	return out
 }
 
 // isSelectionMenu reports whether the window contains an interactive selection
@@ -128,6 +122,14 @@ func isOptionLine(line string) bool {
 
 // lineIsWaitingPrompt reports whether a single ANSI-stripped line indicates an
 // interactive prompt awaiting user input.
+//
+// NOTE: these are brittle heuristics. They match hard-coded English substrings
+// (e.g. "do you want to", "no, and tell claude what to do") and rely on the
+// blank-line-stripped adjacency of menu options. They are tightly coupled to
+// the exact wording and layout Claude Code uses for its prompts, so a CLI copy
+// change or a non-English locale can silently break Waiting detection. The
+// matching logic is intentionally left unchanged here; revisit it if Claude's
+// prompt wording changes.
 func lineIsWaitingPrompt(line string) bool {
 	lower := strings.ToLower(line)
 

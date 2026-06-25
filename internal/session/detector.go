@@ -10,8 +10,10 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/thbits/naviClaude/internal/tmux"
 )
 
@@ -155,6 +157,7 @@ type Detector struct {
 	activeWindow time.Duration     // how recently .jsonl must be written to count as active
 	cpuThreshold float64           // subtree CPU% above which a session counts as working
 	tracker      *StatusTracker    // resolves final status with priority + hysteresis
+	modelCacheMu sync.Mutex        // guards modelCache (Detect runs in overlapping tea.Cmd goroutines)
 	modelCache   map[string]string // sessionID -> model (cached, never changes mid-session)
 }
 
@@ -189,6 +192,12 @@ func NewDetector(client *tmux.Client, processNames []string, activeWindowSecs in
 // from the .jsonl file on first access. A session's model never changes, so
 // caching avoids repeated file I/O on every detect cycle.
 func (d *Detector) cachedModel(sessionID, cwd string) string {
+	// Bubble Tea runs each tea.Cmd in its own goroutine and multiple refresh
+	// Cmds can overlap, so concurrent Detect goroutines may read/write the cache
+	// at once. Hold the lock across the whole check-extract-store sequence; the
+	// file read is fast and only happens on the first access per session.
+	d.modelCacheMu.Lock()
+	defer d.modelCacheMu.Unlock()
 	if model, ok := d.modelCache[sessionID]; ok {
 		return model
 	}
@@ -232,18 +241,37 @@ func (d *Detector) Detect() ([]*Session, error) {
 		s.Status = d.resolveStatus(s, tree)
 		sessions = append(sessions, s)
 	}
+
+	// Drop hysteresis entries for tmux targets that are no longer live so the
+	// tracker's map does not grow unbounded as panes are closed. Build the live
+	// set from the targets detected this cycle (empty targets, e.g. subprocess
+	// panes without a target, are never tracked by Resolve so need not be kept).
+	activeTargets := make(map[string]bool, len(sessions))
+	for _, s := range sessions {
+		if s.TmuxTarget != "" {
+			activeTargets[s.TmuxTarget] = true
+		}
+	}
+	d.tracker.Prune(activeTargets)
+
 	return sessions, nil
 }
 
 // resolveStatus determines a session's status. Claude Code's own native status
 // (from ~/.claude/sessions/<pid>.json) is authoritative when available: it
 // already distinguishes working/waiting/idle and is debounced by the CLI, so no
-// signal blending or hysteresis is applied. Only when no native status exists
-// (older Claude versions, or a missing file) does it fall back to combining the
-// three legacy signals -- content classification, process subtree CPU, and
-// transcript freshness -- via the tracker's priority (Waiting > Working > Idle)
-// and hysteresis.
+// signal blending or hysteresis is applied. It is trusted regardless of how old
+// its statusUpdatedAt timestamp is: Claude writes that timestamp only when the
+// status CHANGES (event-driven, not a heartbeat), so a session sitting stably
+// idle or busy legitimately carries an old timestamp. Demoting on age forces the
+// unreliable content fallback, which false-positives WAITING on idle panes (the
+// input box / leftover scrollback). Only when no native status exists (older
+// Claude versions, or a missing file) does it fall back to combining the three
+// legacy signals -- content classification, process subtree CPU, and transcript
+// freshness -- via the tracker's priority (Waiting > Working > Idle) and
+// hysteresis.
 func (d *Detector) resolveStatus(s *Session, tree *ProcessTree) SessionStatus {
+	now := time.Now()
 	if status, ok := mapNativeStatus(s.nativeStatus); ok {
 		return status
 	}
@@ -263,11 +291,11 @@ func (d *Detector) resolveStatus(s *Session, tree *ProcessTree) SessionStatus {
 	transcriptActive := false
 	if s.ID != "" {
 		if mt := sessionFileModTime(s.ID, s.CWD); !mt.IsZero() {
-			transcriptActive = time.Since(mt) <= d.activeWindow
+			transcriptActive = now.Sub(mt) <= d.activeWindow
 		}
 	}
 
-	return d.tracker.Resolve(s.TmuxTarget, signal, cpuActive, transcriptActive, time.Now())
+	return d.tracker.Resolve(s.TmuxTarget, signal, cpuActive, transcriptActive, now)
 }
 
 // lastNNonEmptyLines returns up to n non-empty lines from the end of the string
@@ -284,9 +312,49 @@ func lastNNonEmptyLines(s string, n int) []string {
 	return result
 }
 
-// stripANSIBasic removes ANSI/VT100 escape sequences and common Unicode
-// control characters from a string.
+// stripANSIBasic removes ANSI/VT100 escape sequences from a string. It delegates
+// to ansi.Strip (the same robust implementation used by internal/preview), which
+// correctly handles CSI (ESC [ ...) and OSC (ESC ] ... BEL/ST) sequences that the
+// previous hand-rolled scanner mishandled. Real Claude pane output only ever
+// contains CSI and OSC sequences, so for those inputs this matches the preview
+// path exactly.
+//
+// The one carve-out preserves a long-standing contract: a bare ESC that is NOT a
+// CSI/OSC introducer (e.g. "a\x1bXb") is treated as a 2-byte drop (ESC + the next
+// byte), matching the legacy scanner. ansi.Strip would instead treat ESC X as an
+// SOS string-control opener and swallow everything up to its terminator, which is
+// surprising for arbitrary mid-text bytes that are not really escape sequences.
 func stripANSIBasic(s string) string {
+	// Fast path: when every ESC introduces a CSI or OSC sequence (the only kinds
+	// real Claude output contains), ansi.Strip handles the whole string. Only fall
+	// back to the legacy byte scanner when a non-CSI/non-OSC ESC is present.
+	if hasBareEscape(s) {
+		return stripBareEscapeScanner(s)
+	}
+	return ansi.Strip(s)
+}
+
+// hasBareEscape reports whether s contains an ESC that is not immediately
+// followed by '[' (CSI) or ']' (OSC) -- i.e. a sequence ansi.Strip would treat
+// differently from the legacy 2-byte-drop behavior.
+func hasBareEscape(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\x1b' {
+			if i+1 >= len(s) {
+				return true
+			}
+			if s[i+1] != '[' && s[i+1] != ']' {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// stripBareEscapeScanner reproduces the legacy scanner: CSI sequences are
+// consumed up to their final byte (0x40-0x7e), and any other ESC drops itself
+// plus the following byte. Used only when hasBareEscape is true.
+func stripBareEscapeScanner(s string) string {
 	var b strings.Builder
 	b.Grow(len(s))
 	i := 0
@@ -359,23 +427,35 @@ func (d *Detector) buildSession(pane tmux.PaneInfo, claudePID int, tree *Process
 		// No per-PID file -- typically because the PID naviClaude picked
 		// (comm=="claude") is a launcher/wrapper, not the PID Claude wrote its
 		// <pid>.json under. Resolve the sessionId from other signals, then recover
-		// name + status from the file whose sessionId matches, so they stay as
-		// reliable as the sessionId itself. (Previously only status had this
-		// fallback; the name could go stale on a PID mismatch, and a /clear or
-		// /new name change could be missed.)
+		// the name from the file whose sessionId matches, so it stays as reliable
+		// as the sessionId itself. (Previously only status had this fallback; the
+		// name could go stale on a PID mismatch, and a /clear or /new name change
+		// could be missed.) Status is resolved below via the shared helper.
 		s.ID = extractSessionIDFallback(claudePID, pane.CurrentPath)
 		if byID, ok := readSessionMetadataByID(s.ID); ok {
 			meta.Name = byID.Name
-			meta.Status = byID.Status
 		}
 	}
 	if meta.Name != "" {
 		s.DisplayName = meta.Name
 	}
-	// Claude Code's own status (busy|waiting|idle|shell), authoritative for
-	// resolveStatus when present. Empty on Claude versions without the status
-	// field, in which case resolveStatus falls back to signal-based detection.
-	s.nativeStatus = meta.Status
+	// Claude Code's own status (busy|waiting|idle|shell) plus its timestamp,
+	// authoritative for resolveStatus when present and fresh. Resolve it the same
+	// way the preview path (nativeStatusString) does -- prefer the per-PID file
+	// (already read into meta above), but fall back to the by-sessionId scan
+	// WHENEVER the per-PID status is empty (not only when the per-PID file is
+	// missing), so both code paths agree on a PID/launcher mismatch. s.ID is set
+	// above, so the fallback scan can find the right file. Empty status means an
+	// older Claude with no status field, in which case resolveStatus uses
+	// signal-based detection.
+	statusMeta := meta
+	if statusMeta.Status == "" {
+		if byID, ok := readSessionMetadataByID(s.ID); ok {
+			statusMeta = byID
+		}
+	}
+	s.nativeStatus = statusMeta.Status
+	s.nativeStatusAt = statusMeta.StatusUpdatedAt
 
 	// Detect if Claude is running as a subprocess (e.g. inside neovim).
 	if parentApp := tree.parentAppName(claudePID); parentApp != "" {
@@ -555,10 +635,17 @@ func fullCommandLine(pid int) string {
 	return strings.TrimSpace(string(out))
 }
 
-// parseResumeFlag extracts the session ID from a --resume flag in a command line.
+// parseResumeFlag extracts the session ID from a --resume flag in a command
+// line. It handles both the space-separated form (`--resume <uuid>`) and the
+// inline form (`--resume=<uuid>`).
 func parseResumeFlag(cmdLine string) string {
 	parts := strings.Fields(cmdLine)
 	for i, p := range parts {
+		// Inline form: --resume=<uuid> (split on the first '=').
+		if strings.HasPrefix(p, "--resume=") {
+			return strings.TrimPrefix(p, "--resume=")
+		}
+		// Space-separated form: --resume <uuid>.
 		if p == "--resume" && i+1 < len(parts) {
 			return parts[i+1]
 		}

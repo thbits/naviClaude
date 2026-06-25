@@ -102,4 +102,12 @@ type Session struct {
 	// resolveStatus then falls back to signal-based detection. Package-private:
 	// an implementation detail of status resolution, not part of the UI model.
 	nativeStatus string
+
+	// nativeStatusAt is the epoch-millisecond timestamp (statusUpdatedAt) of the
+	// native status, captured in buildSession. Zero when the field is absent
+	// (older Claude versions). Informational only: resolveStatus does NOT gate
+	// trust on it, because Claude writes statusUpdatedAt only when the status
+	// changes (event-driven, not a heartbeat), so a stable session legitimately
+	// carries an old timestamp. Retained for diagnostics and possible future use.
+	nativeStatusAt int64
 }

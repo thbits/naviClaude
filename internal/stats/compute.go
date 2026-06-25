@@ -7,26 +7,27 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
 // claudeStatsCache is the structure of ~/.claude/stats-cache.json.
 type claudeStatsCache struct {
-	TotalSessions    int               `json:"totalSessions"`
-	TotalMessages    int               `json:"totalMessages"`
-	FirstSessionDate string            `json:"firstSessionDate"`
-	DailyActivity    []dailyActivity   `json:"dailyActivity"`
+	TotalSessions    int                      `json:"totalSessions"`
+	TotalMessages    int                      `json:"totalMessages"`
+	FirstSessionDate string                   `json:"firstSessionDate"`
+	DailyActivity    []dailyActivity          `json:"dailyActivity"`
 	ModelUsage       map[string]modelUsageRaw `json:"modelUsage"`
-	LongestSession   longestSessionRaw `json:"longestSession"`
-	HourCounts       map[string]int    `json:"hourCounts"`
-	LastComputedDate string            `json:"lastComputedDate"`
+	LongestSession   longestSessionRaw        `json:"longestSession"`
+	HourCounts       map[string]int           `json:"hourCounts"`
+	LastComputedDate string                   `json:"lastComputedDate"`
 }
 
 type dailyActivity struct {
-	Date         string `json:"date"`
-	MessageCount int    `json:"messageCount"`
-	SessionCount int    `json:"sessionCount"`
-	ToolCallCount int   `json:"toolCallCount"`
+	Date          string `json:"date"`
+	MessageCount  int    `json:"messageCount"`
+	SessionCount  int    `json:"sessionCount"`
+	ToolCallCount int    `json:"toolCallCount"`
 }
 
 type modelUsageRaw struct {
@@ -66,9 +67,12 @@ func Compute(claudeDir string, activeCount int, filter string) (*Stats, error) {
 			st.TotalSessions = cc.TotalSessions
 			st.TotalMessages = cc.TotalMessages
 
-			// Compute avg sessions per day.
+			// Compute avg sessions per day. Parse the date in the local zone so
+			// the elapsed-days math lines up with the local time.Now() used by
+			// time.Since; time.Parse would yield UTC midnight and skew the span
+			// by up to the local UTC offset.
 			if cc.FirstSessionDate != "" {
-				first, err := time.Parse("2006-01-02", cc.FirstSessionDate)
+				first, err := time.ParseInLocation("2006-01-02", cc.FirstSessionDate, time.Local)
 				if err == nil {
 					days := time.Since(first).Hours() / 24
 					if days > 0 {
@@ -98,9 +102,11 @@ func Compute(claudeDir string, activeCount int, filter string) (*Stats, error) {
 			// Peak hour.
 			st.PeakHour = findPeakHour(cc.HourCounts)
 
-			// Supplement if stale.
+			// Supplement if stale. Parse in the local zone so both the
+			// time.Since staleness check and the later ModTime comparison in
+			// supplementStaleData operate in one consistent (local) zone.
 			if cc.LastComputedDate != "" {
-				lastDate, err := time.Parse("2006-01-02", cc.LastComputedDate)
+				lastDate, err := time.ParseInLocation("2006-01-02", cc.LastComputedDate, time.Local)
 				if err == nil && time.Since(lastDate) > 24*time.Hour {
 					supplementStaleData(st, claudeDir, lastDate)
 				}
@@ -217,15 +223,18 @@ func findPeakHour(hourCounts map[string]int) int {
 	maxCount := 0
 	peakHour := 0
 	for hourStr, count := range hourCounts {
-		if count > maxCount {
-			maxCount = count
-			// Parse hour string to int.
-			h := 0
-			for _, c := range hourStr {
-				if c >= '0' && c <= '9' {
-					h = h*10 + int(c-'0')
-				}
+		// Parse hour string to int.
+		h := 0
+		for _, c := range hourStr {
+			if c >= '0' && c <= '9' {
+				h = h*10 + int(c-'0')
 			}
+		}
+		// Iterating a Go map is nondeterministic, so a strict ">" would pick an
+		// arbitrary winner among hours that tie on count. Break ties toward the
+		// lowest hour so the result is stable across runs.
+		if count > maxCount || (count == maxCount && count > 0 && h < peakHour) {
+			maxCount = count
 			peakHour = h
 		}
 	}
@@ -271,25 +280,40 @@ func supplementStaleData(st *Stats, claudeDir string, lastDate time.Time) {
 		dayMap[st.WeeklyActivity[i].Date] = &st.WeeklyActivity[i]
 	}
 	for day, ds := range dayCounts {
+		// Track whether this day's sessions/messages were already represented
+		// in the cached weekly/total data so we don't double-count them below.
+		sessionsAlreadyCounted := false
+		messagesAlreadyCounted := false
 		if da, ok := dayMap[day]; ok {
 			if da.SessionCount == 0 {
 				da.SessionCount = ds.sessions
+			} else {
+				sessionsAlreadyCounted = true
 			}
 			if da.MessageCount == 0 {
 				da.MessageCount = ds.messages
+			} else {
+				messagesAlreadyCounted = true
 			}
 		}
-	}
 
-	// Also supplement total counts.
-	for _, ds := range dayCounts {
-		st.TotalSessions += ds.sessions
-		st.TotalMessages += ds.messages
+		// Also supplement total counts, but only with the days/metrics that were
+		// not already present in the cached weekly/total data. Adding every day
+		// unconditionally double-counts days that the cache already includes.
+		if !sessionsAlreadyCounted {
+			st.TotalSessions += ds.sessions
+		}
+		if !messagesAlreadyCounted {
+			st.TotalMessages += ds.messages
+		}
 	}
 }
 
 func buildHourlyActivity(claudeDir string) [24]int {
 	var hours [24]int
+	// Use local time for both the "today" key and the per-file ModTime bucketing
+	// so the day boundary is consistent (file ModTimes are reported in local
+	// time). Keep the date format stable to match the rest of the package.
 	today := time.Now().Format("2006-01-02")
 	pattern := filepath.Join(claudeDir, "projects", "*", "*.jsonl")
 	files, err := filepath.Glob(pattern)
@@ -309,6 +333,9 @@ func buildHourlyActivity(claudeDir string) [24]int {
 }
 
 func scanProjectCounts(claudeDir string, filter string) []ProjectCount {
+	// Build the cutoff from the local clock so it compares like-for-like against
+	// file ModTimes (also local) below; mixing in a UTC-parsed boundary would
+	// shift the day edge by the local UTC offset.
 	now := time.Now()
 	var cutoff time.Time
 	switch filter {
@@ -354,15 +381,14 @@ func scanProjectCounts(claudeDir string, filter string) []ProjectCount {
 		// The directory slug is lossy -- Claude maps every "/" in the path to
 		// "-", which is indistinguishable from "-" characters already in the
 		// path -- so splitting it mangles names like "dev/us-east-1" into "1".
-		name := projectNameFromCwd(readProjectCwd(files))
+		name := projectNameFromCwd(cachedProjectCwd(e.Name(), files))
 		if name == "" {
-			// Fall back to the slug heuristic: take the last path component.
-			name = e.Name()
-			parts := strings.Split(name, "-")
-			if len(parts) > 1 {
-				name = parts[len(parts)-1]
-			}
-			if name == "" {
+			// Fall back to the slug heuristic: the slug encodes the cwd path with
+			// "/" rewritten to "-", so turning "-" back into "/" and taking the
+			// last component recovers the final path segment (the same single
+			// component the previous hand-rolled "-" split produced).
+			name = filepath.Base(strings.ReplaceAll(e.Name(), "-", "/"))
+			if name == "" || name == "." || name == "/" {
 				name = e.Name()
 			}
 		}
@@ -401,6 +427,37 @@ func projectNameFromCwd(cwd string) string {
 	default:
 		return clean[len(clean)-2] + "/" + clean[len(clean)-1]
 	}
+}
+
+// projectCwdCache memoizes the slug -> cwd lookup so each project's .jsonl
+// files are line-scanned at most once per process. A project's recorded cwd is
+// stable for the life of the process, so recompute cycles can reuse it instead
+// of reopening and scanning the session files every time. The mutex guards
+// against concurrent computeStatsCmd goroutines racing on the map.
+var (
+	projectCwdMu     sync.Mutex
+	projectCwdBySlug = map[string]string{}
+)
+
+// cachedProjectCwd returns the cwd for a project slug, scanning its session
+// files on the first request and serving the memoized result thereafter. The
+// empty-string result ("" = no cwd recorded) is itself cached so projects
+// without a cwd are not re-scanned on every recompute.
+func cachedProjectCwd(slug string, files []string) string {
+	projectCwdMu.Lock()
+	if cwd, ok := projectCwdBySlug[slug]; ok {
+		projectCwdMu.Unlock()
+		return cwd
+	}
+	projectCwdMu.Unlock()
+
+	// Scan outside the lock -- file I/O can be slow and need not be serialized.
+	cwd := readProjectCwd(files)
+
+	projectCwdMu.Lock()
+	projectCwdBySlug[slug] = cwd
+	projectCwdMu.Unlock()
+	return cwd
 }
 
 // readProjectCwd returns the working directory recorded in a project's session
