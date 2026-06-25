@@ -83,21 +83,33 @@ func resumeWindowName(sess *Session) string {
 }
 
 // ResumeInSession resumes the closed session in the tmux session named
-// targetName, creating that session if it does not yet exist. When targetName
-// already exists the resumed Claude opens in a new window within it (identical
-// to Resume); otherwise a new detached tmux session named targetName is created
+// targetName, creating that session if it does not yet exist, and returns the
+// tmux target of the resumed pane (e.g. "work:3.0") so the caller can focus it.
+// When targetName already exists the resumed Claude opens in a new window
+// within it; otherwise a new detached tmux session named targetName is created
 // rooted at the session's working directory, sized to the current client, and
 // the resume command is sent to its pane via send-keys (so the user's shell
 // config -- aliases, PATH -- is respected, matching CreateNewTmuxSession).
-func (m *Manager) ResumeInSession(sess *Session, targetName string) error {
+func (m *Manager) ResumeInSession(sess *Session, targetName string) (string, error) {
 	if sess.ID == "" {
-		return fmt.Errorf("resume: session has no ID")
+		return "", fmt.Errorf("resume: session has no ID")
 	}
 	if targetName == "" {
-		return fmt.Errorf("resume: target session name is empty")
+		return "", fmt.Errorf("resume: target session name is empty")
 	}
+	cmd := resumeShellCommand(sess.CWD, sess.ID)
+
 	if m.tmuxClient.HasSession(targetName) {
-		return m.Resume(sess, targetName)
+		// Existing session: open the resume in a new window and return its target.
+		target, err := m.tmuxClient.NewWindowPrint(tmux.NewWindowOptions{
+			Target:  targetName + ":",
+			Name:    resumeWindowName(sess),
+			Command: cmd,
+		})
+		if err != nil {
+			return "", fmt.Errorf("create window: %w", err)
+		}
+		return target, nil
 	}
 
 	cwd := sess.CWD
@@ -110,20 +122,19 @@ func (m *Manager) ResumeInSession(sess *Session, targetName string) error {
 		StartDir:   cwd,
 	})
 	if err != nil {
-		return fmt.Errorf("create tmux session: %w", err)
+		return "", fmt.Errorf("create tmux session: %w", err)
 	}
 	// Resize to match the current client (detached sessions default to 80x24).
 	// Errors are non-fatal.
 	m.tmuxClient.ResizeToClient(targetName)
 
-	cmd := resumeShellCommand(cwd, sess.ID)
 	if err := m.tmuxClient.SendKeys(target, cmd); err != nil {
-		return fmt.Errorf("send resume command: %w", err)
+		return "", fmt.Errorf("send resume command: %w", err)
 	}
 	if err := m.tmuxClient.SendKeys(target, "Enter"); err != nil {
-		return fmt.Errorf("send enter: %w", err)
+		return "", fmt.Errorf("send enter: %w", err)
 	}
-	return nil
+	return target, nil
 }
 
 // Kill terminates an active session. Prefers tmux kill-pane (kills the pane

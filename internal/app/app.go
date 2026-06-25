@@ -79,6 +79,17 @@ type newTmuxSessionMsg struct {
 	err         error
 }
 
+// resumeMsg carries the result of resuming a closed session via the picker. It
+// holds the resumed pane's tmux target and the original closed session (used to
+// build a placeholder with the right metadata until the real session is
+// detected).
+type resumeMsg struct {
+	tmuxTarget  string
+	tmuxSession string
+	session     *session.Session
+	err         error
+}
+
 // errMsg is a transient error notification.
 type errMsg struct{ err error }
 
@@ -481,6 +492,44 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.preview.SetPassthrough(true)
 		m.statusbar.SetMode(ModePassthrough.String())
 		// Fire a refresh so the real session (with ID etc.) replaces the placeholder.
+		return m, m.refreshSessionsCmd()
+
+	case resumeMsg:
+		if msg.err != nil {
+			m.err = msg.err
+			m.statusbar.SetError(msg.err.Error())
+			return m, nil
+		}
+		// Place a placeholder for the resumed pane (carrying the closed
+		// session's metadata so it shows the right name and last-message time)
+		// and focus it in passthrough, mirroring the new-session flow. The next
+		// refresh replaces it with the detected active session.
+		src := msg.session
+		placeholder := &session.Session{
+			ID:           src.ID,
+			TmuxSession:  msg.tmuxSession,
+			TmuxTarget:   msg.tmuxTarget,
+			CWD:          src.CWD,
+			ProjectName:  src.ProjectName,
+			DisplayName:  src.DisplayName,
+			Slug:         src.Slug,
+			Model:        src.Model,
+			Status:       session.StatusActive,
+			LastActivity: src.LastActivity,
+		}
+		m.sessions = append([]*session.Session{placeholder}, m.sessions...)
+		m.sidebar.SetSessions(m.sessions)
+		for i, item := range m.sidebar.FlatItems() {
+			if item.Session != nil && item.Session.TmuxTarget == msg.tmuxTarget {
+				m.sidebar.SetCursor(i)
+				break
+			}
+		}
+		m.preview.SetSession(placeholder)
+		m.pendingNewTarget = msg.tmuxTarget
+		m.mode = ModePassthrough
+		m.preview.SetPassthrough(true)
+		m.statusbar.SetMode(ModePassthrough.String())
 		return m, m.refreshSessionsCmd()
 
 	case newTmuxSessionMsg:
@@ -1281,9 +1330,9 @@ func (m Model) handleResumePickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if sess == nil || name == "" {
 			return m, nil
 		}
-		// Resume off the event loop, then refresh so the new pane is detected.
-		// Don't enter passthrough yet -- the new pane needs discovery first.
-		return m, tea.Batch(m.resumeInSessionCmd(sess, name), m.refreshSessionsCmd())
+		// Resume off the event loop. The resulting resumeMsg places a
+		// placeholder for the new pane and enters passthrough on it.
+		return m, m.resumeInSessionCmd(sess, name)
 
 	default:
 		var cmd tea.Cmd
@@ -1293,14 +1342,16 @@ func (m Model) handleResumePickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // resumeInSessionCmd runs manager.ResumeInSession off the event loop, emitting
-// an errMsg on failure.
+// a resumeMsg with the resumed pane's target on success (so the app can focus
+// it) or an error on failure.
 func (m Model) resumeInSessionCmd(sess *session.Session, targetName string) tea.Cmd {
 	manager := m.manager
 	return func() tea.Msg {
-		if err := manager.ResumeInSession(sess, targetName); err != nil {
-			return errMsg{err: fmt.Errorf("resume: %w", err)}
+		target, err := manager.ResumeInSession(sess, targetName)
+		if err != nil {
+			return resumeMsg{err: fmt.Errorf("resume: %w", err)}
 		}
-		return nil
+		return resumeMsg{tmuxTarget: target, tmuxSession: targetName, session: sess}
 	}
 }
 
