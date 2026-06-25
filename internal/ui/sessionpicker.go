@@ -93,23 +93,62 @@ func (m *SessionPickerModel) MoveDown() {
 	}
 }
 
-// sessionRow is one selectable row: an existing session, or the create-new row.
+// sessionRow is one selectable row: an existing session (loose=false for a
+// substring match, loose=true for a fuzzy fallback match) or the create-new row.
 type sessionRow struct {
 	name  string
 	isNew bool
+	loose bool // true for a fuzzy fallback match shown below the create-new row
 }
 
-// rows returns the displayed rows: the filtered sessions followed by the
-// create-new row when the typed text names a new session.
+// rows returns the displayed rows. With no query, every session is listed. With
+// a query, substring matches come first (the create-new row trailing them);
+// when nothing matches as a substring, the create-new row floats to the top and
+// loose fuzzy matches are listed below it as a fallback.
 func (m SessionPickerModel) rows() []sessionRow {
-	rows := make([]sessionRow, 0, len(m.filtered)+1)
-	for _, s := range m.filtered {
-		rows = append(rows, sessionRow{name: s})
+	query := strings.TrimSpace(m.input.Value())
+	if query == "" {
+		rows := make([]sessionRow, 0, len(m.sessions))
+		for _, s := range m.sessions {
+			rows = append(rows, sessionRow{name: s})
+		}
+		return rows
 	}
-	if name := newSessionName(m.input.Value(), m.sessions); name != "" {
-		rows = append(rows, sessionRow{name: name, isNew: true})
+
+	newName := newSessionName(query, m.sessions)
+
+	// m.filtered holds the substring matches (see runFilter).
+	if len(m.filtered) > 0 {
+		rows := make([]sessionRow, 0, len(m.filtered)+1)
+		for _, s := range m.filtered {
+			rows = append(rows, sessionRow{name: s})
+		}
+		if newName != "" {
+			rows = append(rows, sessionRow{name: newName, isNew: true})
+		}
+		return rows
+	}
+
+	// No substring match: create-new on top, loose fuzzy matches below.
+	var rows []sessionRow
+	if newName != "" {
+		rows = append(rows, sessionRow{name: newName, isNew: true})
+	}
+	for _, s := range looseMatches(query, m.sessions) {
+		rows = append(rows, sessionRow{name: s, loose: true})
 	}
 	return rows
+}
+
+// firstLooseRow returns the index of the first loose (fuzzy fallback) row, or
+// -1 when there is none. The View draws a "similar" separator before it.
+func (m SessionPickerModel) firstLooseRow() int {
+	for i, r := range m.rows() {
+		if r.loose {
+			return i
+		}
+	}
+	return -1
 }
 
 // Selected returns the highlighted row's name and whether it is the create-new
@@ -123,17 +162,12 @@ func (m SessionPickerModel) Selected() (string, bool) {
 	return r.name, r.isNew
 }
 
-// runFilter re-applies the fuzzy filter for the current query and clamps the
-// cursor into the displayed row range.
+// runFilter re-applies the filter for the current query. The cursor resets to
+// the top row so a quick Enter after typing selects the most sensible default
+// (the best match, or the create-new row when nothing matches).
 func (m *SessionPickerModel) runFilter() {
 	m.filtered = filterSessions(m.input.Value(), m.sessions)
-	n := len(m.rows())
-	if m.cursor >= n {
-		m.cursor = n - 1
-	}
-	if m.cursor < 0 {
-		m.cursor = 0
-	}
+	m.cursor = 0
 }
 
 // Init satisfies tea.Model.
@@ -155,18 +189,37 @@ func (m SessionPickerModel) Update(msg tea.Msg) (SessionPickerModel, tea.Cmd) {
 // Pure logic (unit-tested directly)
 // ---------------------------------------------------------------------------
 
+// filterSessions filters session names to those containing query as a
+// case-insensitive substring, preserving the caller's recency order. An empty
+// (whitespace) query returns the names unchanged. Substring matching is
+// deliberately stricter than subsequence fuzzy matching: it only surfaces
+// names that actually contain what was typed, so loosely-related names don't
+// crowd out the create-new option.
+func filterSessions(query string, sessions []string) []string {
+	q := strings.ToLower(strings.TrimSpace(query))
+	if q == "" {
+		return sessions
+	}
+	var out []string
+	for _, s := range sessions {
+		if strings.Contains(strings.ToLower(s), q) {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
 // stringSource adapts a slice of session names for sahilm/fuzzy.
 type stringSource []string
 
 func (n stringSource) String(i int) string { return n[i] }
 func (n stringSource) Len() int            { return len(n) }
 
-// filterSessions fuzzy-filters session names by query. An empty (whitespace)
-// query returns the names unchanged, preserving the caller's recency order.
-func filterSessions(query string, sessions []string) []string {
-	if strings.TrimSpace(query) == "" {
-		return sessions
-	}
+// looseMatches returns subsequence ("fuzzy") matches for query, ranked by the
+// matcher's score. It is the hybrid fallback shown only when no name contains
+// the query as a substring, so abbreviations (e.g. "nvc" -> "naviclaude") stay
+// reachable without polluting normal substring results.
+func looseMatches(query string, sessions []string) []string {
 	matches := fuzzy.FindFrom(query, stringSource(sessions))
 	out := make([]string, len(matches))
 	for i, mt := range matches {
@@ -245,7 +298,13 @@ func (m SessionPickerModel) View() string {
 		if end > len(rows) {
 			end = len(rows)
 		}
+		looseAt := m.firstLooseRow()
 		for i := start; i < end; i++ {
+			// Divider before the loose (fuzzy fallback) section.
+			if i == looseAt {
+				lines = append(lines, lipgloss.NewStyle().Foreground(styles.ColorGray).
+					Render("  ── similar ──"))
+			}
 			r := rows[i]
 			var label string
 			if r.isNew {

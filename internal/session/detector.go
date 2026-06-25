@@ -159,6 +159,17 @@ type Detector struct {
 	tracker      *StatusTracker    // resolves final status with priority + hysteresis
 	modelCacheMu sync.Mutex        // guards modelCache (Detect runs in overlapping tea.Cmd goroutines)
 	modelCache   map[string]string // sessionID -> model (cached, never changes mid-session)
+
+	lastActMu    sync.Mutex                   // guards lastActCache
+	lastActCache map[string]lastActivityEntry // sessionID -> last-message time, keyed by file mtime
+}
+
+// lastActivityEntry caches a session's last-message time alongside the file
+// mtime it was computed from, so the transcript is only re-scanned when it
+// actually changes.
+type lastActivityEntry struct {
+	mtime time.Time
+	last  time.Time
 }
 
 // NewDetector creates a Detector that uses the given tmux client and matches
@@ -185,6 +196,7 @@ func NewDetector(client *tmux.Client, processNames []string, activeWindowSecs in
 		cpuThreshold: cpuThreshold,
 		tracker:      NewStatusTracker(activeWindow),
 		modelCache:   make(map[string]string),
+		lastActCache: make(map[string]lastActivityEntry),
 	}
 }
 
@@ -206,6 +218,27 @@ func (d *Detector) cachedModel(sessionID, cwd string) string {
 		d.modelCache[sessionID] = model
 	}
 	return model
+}
+
+// cachedLastActivity returns the timestamp of the most recent message in the
+// session's transcript, scanning the file only when its mtime has changed since
+// the last scan (the common case on the 200ms detect tick is a cache hit). It
+// falls back to mtime when the transcript has no timestamped records (e.g. a
+// brand-new session with no messages yet). Unlike mtime alone, this is not
+// fooled by `claude --resume`, which bumps mtime to now without adding a newer
+// message.
+func (d *Detector) cachedLastActivity(sessionID, cwd string, mtime time.Time) time.Time {
+	d.lastActMu.Lock()
+	defer d.lastActMu.Unlock()
+	if e, ok := d.lastActCache[sessionID]; ok && e.mtime.Equal(mtime) {
+		return e.last
+	}
+	last := lastMessageTime(SessionFilePath(sessionID, cwd))
+	if last.IsZero() {
+		last = mtime // no timestamped records yet -- fall back to the write time
+	}
+	d.lastActCache[sessionID] = lastActivityEntry{mtime: mtime, last: last}
+	return last
 }
 
 // Detect returns all active sessions found by walking the process tree of
@@ -466,13 +499,17 @@ func (d *Detector) buildSession(pane tmux.PaneInfo, claudePID int, tree *Process
 	// Populate CPU and memory from the bulk process tree (no per-session ps call).
 	s.CPU, s.Memory = tree.Stats(claudePID)
 
-	// Record the model and the transcript's last-write time (used for the UI's
-	// relative-time display and as one of the inputs to resolveStatus). The
-	// final status is decided in Detect via the StatusTracker, not here.
+	// Record the model and the transcript's last-message time, used for the
+	// UI's relative-time display, sorting, and auto-collapse. This does NOT feed
+	// status detection: Detect computes the "recently written" signal from a
+	// fresh mtime stat (see resolveStatus), so display time and status stay
+	// independent.
 	if s.ID != "" {
 		s.Model = d.cachedModel(s.ID, pane.CurrentPath)
 		if modTime := sessionFileModTime(s.ID, pane.CurrentPath); !modTime.IsZero() {
-			s.LastActivity = modTime
+			// Use the last message timestamp (not the file mtime) so a resumed
+			// session shows when its conversation last happened, not "now".
+			s.LastActivity = d.cachedLastActivity(s.ID, pane.CurrentPath, modTime)
 		}
 	}
 
