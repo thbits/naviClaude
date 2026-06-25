@@ -146,6 +146,7 @@ type Model struct {
 	pendingDirTmux       string             // target tmux session for the new-Claude (n) flow
 	renameSessionID      string             // session ID being renamed
 	pendingResumeSession *session.Session   // closed session awaiting a resume-target choice
+	pendingResumeJump    bool               // when true, jump to the resumed pane (f) instead of focusing it in passthrough (Enter)
 	previewTarget        string             // tmux target currently shown in the preview panel
 	resizedWinTarget     string             // window target we resized for preview
 	origWinW             int                // width to restore the previewed window to when navigating away
@@ -496,14 +497,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case resumeMsg:
 		if msg.err != nil {
+			m.pendingResumeJump = false
 			m.err = msg.err
 			m.statusbar.SetError(msg.err.Error())
 			return m, nil
 		}
-		// Place a placeholder for the resumed pane (carrying the closed
-		// session's metadata so it shows the right name and last-message time)
-		// and focus it in passthrough, mirroring the new-session flow. The next
-		// refresh replaces it with the detected active session.
+		if m.pendingResumeJump {
+			// f-style resume: jump to the resumed pane (switch the tmux client
+			// to it and quit naviClaude), so it opens at full terminal size like
+			// jumping to an already-open session -- no passthrough focus.
+			m.pendingResumeJump = false
+			m.restorePreviewedPane()
+			_ = m.tmuxClient.SwitchClient(msg.tmuxTarget)
+			_ = m.tmuxClient.SelectPane(msg.tmuxTarget)
+			return m, tea.Quit
+		}
+		// Enter-style resume: place a placeholder for the resumed pane (carrying
+		// the closed session's metadata so it shows the right name and
+		// last-message time) and focus it in passthrough, mirroring the
+		// new-session flow. The next refresh replaces it with the detected
+		// active session.
 		src := msg.session
 		placeholder := &session.Session{
 			ID:           src.ID,
@@ -807,9 +820,9 @@ func (m Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		if sess.Status == session.StatusClosed {
 			if key == KeyEnter {
-				// Enter resumes a closed session: open the target picker to
-				// choose which tmux session the resume opens in.
-				return m.openResumePicker(sess)
+				// Enter resumes a closed session: open the target picker, then
+				// focus the resumed session in passthrough.
+				return m.openResumePicker(sess, false)
 			}
 			// Tab still shows the conversation history in the preview pane.
 			m.selectPreviewSession(sess)
@@ -824,8 +837,10 @@ func (m Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case m.keys.Jump:
 		sess := m.sidebar.SelectedSession()
 		if sess != nil && sess.Status == session.StatusClosed {
-			// Resume closed session in a new tmux window.
-			return m.resumeSession(sess)
+			// Resume a closed session via the picker, then jump to the resumed
+			// tmux window (like jumping to an already-open session) rather than
+			// focusing it in passthrough.
+			return m.openResumePicker(sess, true)
 		}
 		return m.jumpToPane()
 
@@ -1289,10 +1304,13 @@ func (m Model) resumeSession(sess *session.Session) (tea.Model, tea.Cmd) {
 // openResumePicker opens the resume-target picker for a closed session. It lists
 // the live tmux sessions (most-recently-active first) and pre-highlights the
 // session naviClaude is running in. The actual resume happens on Enter in
-// handleResumePickerKey.
-func (m Model) openResumePicker(sess *session.Session) (tea.Model, tea.Cmd) {
+// handleResumePickerKey. When jump is true the resumed pane is jumped to (the
+// tmux client switches to it and naviClaude quits, like jumping to an open
+// session); when false it is focused in passthrough.
+func (m Model) openResumePicker(sess *session.Session, jump bool) (tea.Model, tea.Cmd) {
 	names := sessionNamesByRecency(m.tmuxClient.ListSessions())
 	m.pendingResumeSession = sess
+	m.pendingResumeJump = jump
 	m.resumePicker.SetSize(m.width, m.height)
 	m.resumePicker.Show(names, m.currentTmuxSession)
 	m.mode = ModeResumePicker
@@ -1308,6 +1326,7 @@ func (m Model) handleResumePickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "esc":
 		m.resumePicker.Hide()
 		m.pendingResumeSession = nil
+		m.pendingResumeJump = false
 		m.mode = ModeList
 		m.statusbar.SetMode(ModeList.String())
 		return m, nil
