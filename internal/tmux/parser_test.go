@@ -13,7 +13,7 @@ func TestParsePanes(t *testing.T) {
 	}{
 		{
 			name:      "single valid line",
-			raw:       "main:0.0 zsh 12345 /home/user/project",
+			raw:       "main:0.0\x1fzsh\x1f12345\x1f/home/user/project",
 			wantCount: 1,
 			wantFirst: PaneInfo{
 				SessionName:    "main",
@@ -27,8 +27,8 @@ func TestParsePanes(t *testing.T) {
 		},
 		{
 			name: "multiple valid lines",
-			raw: "main:0.0 zsh 100 /home/user\n" +
-				"dev:1.2 vim 200 /tmp/work\n",
+			raw: "main:0.0\x1fzsh\x1f100\x1f/home/user\n" +
+				"dev:1.2\x1fvim\x1f200\x1f/tmp/work\n",
 			wantCount: 2,
 			wantFirst: PaneInfo{
 				SessionName:    "main",
@@ -52,7 +52,7 @@ func TestParsePanes(t *testing.T) {
 		},
 		{
 			name:      "malformed lines skipped silently",
-			raw:       "not-a-valid-line\nmain:0.0 zsh 100 /home\nbadline",
+			raw:       "not-a-valid-line\nmain:0.0\x1fzsh\x1f100\x1f/home\nbadline",
 			wantCount: 1,
 			wantFirst: PaneInfo{
 				SessionName:    "main",
@@ -66,7 +66,7 @@ func TestParsePanes(t *testing.T) {
 		},
 		{
 			name:      "path with spaces preserved",
-			raw:       "work:3.1 claude 999 /Users/tom/my project/src dir",
+			raw:       "work:3.1\x1fclaude\x1f999\x1f/Users/tom/my project/src dir",
 			wantCount: 1,
 			wantFirst: PaneInfo{
 				SessionName:    "work",
@@ -76,6 +76,38 @@ func TestParsePanes(t *testing.T) {
 				CurrentCommand: "claude",
 				PID:            999,
 				CurrentPath:    "/Users/tom/my project/src dir",
+			},
+		},
+		{
+			// Regression: tmux session names may contain spaces. The old
+			// space-delimited format dropped these entirely (the name's first
+			// space shifted every field, so the target failed to parse).
+			name:      "session name with spaces preserved",
+			raw:       "navi space test:1.1\x1fzsh\x1f86830\x1f/Users/tom/proj",
+			wantCount: 1,
+			wantFirst: PaneInfo{
+				SessionName:    "navi space test",
+				WindowIndex:    1,
+				PaneIndex:      1,
+				Target:         "navi space test:1.1",
+				CurrentCommand: "zsh",
+				PID:            86830,
+				CurrentPath:    "/Users/tom/proj",
+			},
+		},
+		{
+			// Both name and path containing spaces, simultaneously.
+			name:      "spaces in both session name and path",
+			raw:       "my cool session:2.3\x1fclaude\x1f4242\x1f/Users/tom/my project",
+			wantCount: 1,
+			wantFirst: PaneInfo{
+				SessionName:    "my cool session",
+				WindowIndex:    2,
+				PaneIndex:      3,
+				Target:         "my cool session:2.3",
+				CurrentCommand: "claude",
+				PID:            4242,
+				CurrentPath:    "/Users/tom/my project",
 			},
 		},
 	}
@@ -186,17 +218,17 @@ func TestParsePaneLine(t *testing.T) {
 	}{
 		{
 			name:      "too few fields",
-			line:      "main:0.0 zsh 100",
+			line:      "main:0.0\x1fzsh\x1f100",
 			wantError: true,
 		},
 		{
 			name:      "invalid pid",
-			line:      "main:0.0 zsh notapid /home",
+			line:      "main:0.0\x1fzsh\x1fnotapid\x1f/home",
 			wantError: true,
 		},
 		{
 			name:      "invalid target format",
-			line:      "badtarget zsh 100 /home",
+			line:      "badtarget\x1fzsh\x1f100\x1f/home",
 			wantError: true,
 		},
 	}

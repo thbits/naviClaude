@@ -29,7 +29,7 @@ func lastMessageTime(path string) time.Time {
 	var last time.Time
 	scanner := bufio.NewScanner(f)
 	buf := make([]byte, 0, 64*1024)
-	scanner.Buffer(buf, 4*1024*1024)
+	scanner.Buffer(buf, maxTranscriptLineBytes)
 
 	for scanner.Scan() {
 		line := scanner.Bytes()

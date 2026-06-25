@@ -3,10 +3,51 @@ package session
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 )
+
+// TestParseSessionFile_OversizedLineKeepsSession verifies that a single very
+// large transcript line (e.g. a big paste / base64 image) no longer causes the
+// entire closed session to be dropped, as long as the cwd-bearing record was
+// seen before it. Previously parseSessionFile used a 2MB scanner buffer and
+// returned bufio.ErrTooLong, which both callers treated as "skip this file".
+func TestParseSessionFile_OversizedLineKeepsSession(t *testing.T) {
+	cases := []struct {
+		name    string
+		lineLen int
+	}{
+		{"3MB line (within the 4MB buffer)", 3 * 1024 * 1024},
+		{"5MB line (exceeds buffer, ErrTooLong tolerated)", 5 * 1024 * 1024},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			sessionID := "11111111-2222-3333-4444-555555555555"
+			filePath := filepath.Join(dir, sessionID+".jsonl")
+
+			// A small record carrying the cwd comes first; then one oversized record.
+			small := `{"type":"user","timestamp":"2026-06-25T10:00:00Z","cwd":"/home/user/proj","message":{"role":"user","content":"hi"}}`
+			big := `{"type":"user","message":{"role":"user","content":"` + strings.Repeat("A", c.lineLen) + `"}}`
+			if err := os.WriteFile(filePath, []byte(small+"\n"+big+"\n"), 0o644); err != nil {
+				t.Fatalf("write: %v", err)
+			}
+
+			sess, err := parseSessionFile(filePath)
+			if err != nil {
+				t.Fatalf("parseSessionFile error: %v", err)
+			}
+			if sess == nil {
+				t.Fatal("session dropped despite a cwd record before the oversized line")
+			}
+			if sess.CWD != "/home/user/proj" {
+				t.Errorf("CWD = %q, want /home/user/proj", sess.CWD)
+			}
+		})
+	}
+}
 
 // writeClosedSessionFile writes a minimal valid session .jsonl with one
 // assistant record (so parseSessionFile yields a Session with a CWD) and sets

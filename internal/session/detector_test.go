@@ -65,6 +65,38 @@ func TestParseResumeFlag(t *testing.T) {
 			cmdLine: "",
 			want:    "",
 		},
+		{
+			// Bare --resume opens Claude's interactive picker; the following
+			// token is another flag, not a session ID, and must not be grabbed.
+			name:    "bare --resume followed by a flag",
+			cmdLine: "claude --resume --fork-session",
+			want:    "",
+		},
+		{
+			name:    "--resume followed by --model flag",
+			cmdLine: "claude --resume --model opus",
+			want:    "",
+		},
+		{
+			name:    "short -r space-separated form",
+			cmdLine: "claude -r abc-123-def",
+			want:    "abc-123-def",
+		},
+		{
+			name:    "short -r inline form",
+			cmdLine: "claude -r=abc-123-def",
+			want:    "abc-123-def",
+		},
+		{
+			name:    "bare -r followed by a flag",
+			cmdLine: "claude -r --fork-session",
+			want:    "",
+		},
+		{
+			name:    "short -r at end without value",
+			cmdLine: "claude -r",
+			want:    "",
+		},
 	}
 
 	for _, tt := range tests {

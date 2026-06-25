@@ -6,6 +6,17 @@ import (
 	"strings"
 )
 
+// paneFieldSep separates the fields in the list-panes -F format string. It is
+// the ASCII Unit Separator (0x1f), which -- unlike a space -- cannot appear in a
+// tmux session name, a process command, or a filesystem path. Using it lets
+// panes whose session name OR working directory contains spaces parse correctly;
+// a space delimiter silently dropped them, because the first space in the name
+// shifted every subsequent field and the target failed to parse.
+//
+// This MUST stay byte-for-byte in sync with the -F format string built in
+// Client.ListPanes.
+const paneFieldSep = "\x1f"
+
 // PaneInfo holds the data parsed from a single tmux list-panes output line.
 type PaneInfo struct {
 	SessionName    string
@@ -19,10 +30,11 @@ type PaneInfo struct {
 
 // ParsePanes parses the raw output of:
 //
-//	tmux list-panes -a -F '#{session_name}:#{window_index}.#{pane_index} #{pane_current_command} #{pane_pid} #{pane_current_path}'
+//	tmux list-panes -a -F '#{session_name}:#{window_index}.#{pane_index}<US>#{pane_current_command}<US>#{pane_pid}<US>#{pane_current_path}'
 //
-// Each non-empty line is parsed into a PaneInfo.  Malformed lines are skipped
-// with no error so that a single bad line does not abort the full listing.
+// where <US> is the ASCII Unit Separator (paneFieldSep). Each non-empty line is
+// parsed into a PaneInfo.  Malformed lines are skipped with no error so that a
+// single bad line does not abort the full listing.
 func ParsePanes(raw string) ([]PaneInfo, error) {
 	lines := strings.Split(raw, "\n")
 	panes := make([]PaneInfo, 0, len(lines))
@@ -43,14 +55,16 @@ func ParsePanes(raw string) ([]PaneInfo, error) {
 }
 
 // parsePaneLine parses a single line produced by the list-panes format string.
-// Expected format: "session:window.pane command pid /current/path"
-// Fields are space-separated; the path is everything after the pid field.
+// Expected format: "session:window.pane<US>command<US>pid<US>/current/path"
+// Fields are separated by paneFieldSep (0x1f); the target (session:window.pane)
+// and the path may both contain spaces.
 func parsePaneLine(line string) (PaneInfo, error) {
 	// The format is:
-	//   <session>:<window>.<pane> <command> <pid> <path>
-	// There are exactly 4 space-separated tokens, but the path may itself
-	// contain spaces.  We split into at most 4 fields so the path is preserved.
-	fields := strings.SplitN(line, " ", 4)
+	//   <session>:<window>.<pane><US><command><US><pid><US><path>
+	// There are exactly 4 separator-delimited tokens. We split into at most 4
+	// fields so any stray separator in the path is preserved rather than
+	// truncating the line.
+	fields := strings.SplitN(line, paneFieldSep, 4)
 	if len(fields) < 4 {
 		return PaneInfo{}, fmt.Errorf("too few fields: %q", line)
 	}

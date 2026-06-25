@@ -76,7 +76,7 @@ func (s *HistoryScanner) LoadHistoryIndex() (map[string]string, error) {
 	scanner := bufio.NewScanner(f)
 	// history.jsonl can be large; increase buffer size.
 	buf := make([]byte, 0, 256*1024)
-	scanner.Buffer(buf, 4*1024*1024)
+	scanner.Buffer(buf, maxTranscriptLineBytes)
 
 	for scanner.Scan() {
 		line := scanner.Bytes()
@@ -250,6 +250,13 @@ type rawMessage struct {
 	Role  string `json:"role"`
 }
 
+// maxTranscriptLineBytes is the largest single .jsonl line the transcript
+// scanners will buffer. One record can be large when a user pastes a big file or
+// a base64-encoded image, so keep this generous AND identical across every
+// transcript reader -- if the readers disagree on the limit, one path can parse
+// a session that another silently drops.
+const maxTranscriptLineBytes = 4 * 1024 * 1024
+
 // parseSessionFile reads a .jsonl session file and constructs a Session from
 // its records. Returns nil without error if the file is empty or yields no
 // usable records.
@@ -278,7 +285,7 @@ func parseSessionFile(filePath string) (*Session, error) {
 
 	scanner := bufio.NewScanner(f)
 	buf := make([]byte, 0, 64*1024)
-	scanner.Buffer(buf, 2*1024*1024)
+	scanner.Buffer(buf, maxTranscriptLineBytes)
 
 	for scanner.Scan() {
 		line := scanner.Bytes()
@@ -332,9 +339,14 @@ func parseSessionFile(filePath string) (*Session, error) {
 			}
 		}
 	}
-	if err := scanner.Err(); err != nil {
+	if err := scanner.Err(); err != nil && err != bufio.ErrTooLong {
 		return nil, err
 	}
+	// bufio.ErrTooLong (a single record larger than maxTranscriptLineBytes, e.g.
+	// a huge paste) is deliberately NOT fatal: scanning stops at that line, but
+	// any metadata gathered from earlier records (cwd, model, timestamps) is
+	// still valid, so the session is kept rather than vanishing from the picker.
+	// It only drops below if no cwd was seen before the oversized line.
 
 	// A file that produced no usable records, no session ID, or no CWD
 	// (e.g. empty or metadata-only .jsonl) is skipped.

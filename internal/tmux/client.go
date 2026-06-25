@@ -55,7 +55,13 @@ func (c *Client) CheckVersion(major, minor int) error {
 
 // ListPanes returns all panes across all sessions.
 func (c *Client) ListPanes() ([]PaneInfo, error) {
-	format := "#{session_name}:#{window_index}.#{pane_index} #{pane_current_command} #{pane_pid} #{pane_current_path}"
+	// Fields are joined with paneFieldSep (0x1f) rather than spaces so that
+	// session names and working directories containing spaces parse correctly.
+	// MUST stay in sync with parsePaneLine.
+	format := "#{session_name}:#{window_index}.#{pane_index}" + paneFieldSep +
+		"#{pane_current_command}" + paneFieldSep +
+		"#{pane_pid}" + paneFieldSep +
+		"#{pane_current_path}"
 	out, err := exec.Command("tmux", "list-panes", "-a", "-F", format).Output()
 	if err != nil {
 		return nil, fmt.Errorf("tmux list-panes: %w", err)

@@ -672,19 +672,33 @@ func fullCommandLine(pid int) string {
 	return strings.TrimSpace(string(out))
 }
 
-// parseResumeFlag extracts the session ID from a --resume flag in a command
-// line. It handles both the space-separated form (`--resume <uuid>`) and the
-// inline form (`--resume=<uuid>`).
+// parseResumeFlag extracts the session ID from a resume flag in a command line.
+// It handles the long flag in inline (`--resume=<uuid>`) and space-separated
+// (`--resume <uuid>`) forms, plus the documented short forms (`-r <uuid>` and
+// `-r=<uuid>`).
+//
+// A resume flag with no value yields "" rather than mistaking a neighbouring
+// token for a session ID: bare `--resume` (or `-r`) opens Claude's interactive
+// session picker, and forms like `--resume --fork-session` or `--resume --model
+// opus` carry the ID elsewhere (or not on the command line at all). The
+// space-separated value is therefore accepted only when the next token does not
+// itself start with '-'. A session UUID never starts with '-', so this never
+// rejects a real ID.
 func parseResumeFlag(cmdLine string) string {
 	parts := strings.Fields(cmdLine)
 	for i, p := range parts {
-		// Inline form: --resume=<uuid> (split on the first '=').
-		if strings.HasPrefix(p, "--resume=") {
+		switch {
+		// Inline forms: --resume=<uuid> / -r=<uuid> (value is the rest of the token).
+		case strings.HasPrefix(p, "--resume="):
 			return strings.TrimPrefix(p, "--resume=")
-		}
-		// Space-separated form: --resume <uuid>.
-		if p == "--resume" && i+1 < len(parts) {
-			return parts[i+1]
+		case strings.HasPrefix(p, "-r="):
+			return strings.TrimPrefix(p, "-r=")
+		// Space-separated forms: --resume <uuid> / -r <uuid>. Only consume the next
+		// token as the value when it is not itself a flag.
+		case p == "--resume" || p == "-r":
+			if i+1 < len(parts) && !strings.HasPrefix(parts[i+1], "-") {
+				return parts[i+1]
+			}
 		}
 	}
 	return ""
