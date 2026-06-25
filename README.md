@@ -49,8 +49,10 @@ This installs the binary to `~/.local/bin/naviclaude`. Set a custom prefix with 
 
 ### Run as a tmux popup
 
-```
-tmux display-popup -E -w 85% -h 85% naviclaude
+Bind it to a key in `~/.config/tmux/tmux.conf` to open a centered popup with `<prefix> g`:
+
+```tmux
+bind g display-popup -E -w 85% -h 85% -x C -y C "naviclaude"
 ```
 
 ## Usage
