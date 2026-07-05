@@ -14,7 +14,13 @@ import (
 	"github.com/thbits/naviClaude/internal/styles"
 )
 
-// sessionGroup groups sessions by their tmux session name (or "Closed").
+// ClosedGroupName is the sidebar group that holds closed sessions. It is a
+// pseudo-group, not a real tmux session, so callers that map a group to a tmux
+// target (e.g. resolveNewSessionTarget) must treat it specially. Exported so
+// those callers reference this constant rather than re-hardcoding the string.
+const ClosedGroupName = "Closed"
+
+// sessionGroup groups sessions by their tmux session name (or ClosedGroupName).
 type sessionGroup struct {
 	Name     string
 	Sessions []*session.Session
@@ -244,7 +250,7 @@ func (m *SidebarModel) rebuildGroups() {
 	}
 	if len(closedSessions) > 0 {
 		m.groups = append(m.groups, sessionGroup{
-			Name:     "Closed",
+			Name:     ClosedGroupName,
 			Sessions: closedSessions,
 		})
 	}
@@ -260,15 +266,15 @@ func (m *SidebarModel) rebuildGroups() {
 	}
 
 	// Always collapse Closed group by default (unless user toggled it open).
-	if !m.userToggled["Closed"] {
-		m.collapsed["Closed"] = true
+	if !m.userToggled[ClosedGroupName] {
+		m.collapsed[ClosedGroupName] = true
 	}
 
 	// Auto-collapse stale groups (unless user has manually toggled them).
 	if m.collapseAfterHrs > 0 {
 		cutoff := time.Now().Add(-time.Duration(m.collapseAfterHrs * float64(time.Hour)))
 		for _, g := range m.groups {
-			if g.Name == "Closed" {
+			if g.Name == ClosedGroupName {
 				continue
 			}
 			if m.userToggled[g.Name] {

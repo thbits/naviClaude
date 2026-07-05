@@ -1425,8 +1425,8 @@ func sessionNamesByRecency(infos []tmux.SessionInfo) []string {
 //     header name IS the tmux session name; the cwd comes from the group's first
 //     session. This reads the group model rather than the visible flat rows, so
 //     it works even when the group is collapsed (collapsed groups contribute no
-//     child rows). The "Closed" group is skipped -- it is not a real tmux
-//     session.
+//     child rows). The closed-sessions group (ui.ClosedGroupName) is skipped --
+//     it is a pseudo-group, not a real tmux session.
 //  3. The tmux session naviClaude itself runs in.
 //
 // tmuxSess may be empty only when the app is not inside a tmux session; callers
@@ -1439,7 +1439,7 @@ func (m Model) resolveNewSessionTarget() (tmuxSess, cwd string) {
 		return m.currentTmuxSession, sel.CWD
 	}
 
-	if name := m.sidebar.SelectedGroupName(); name != "" && name != "Closed" {
+	if name := m.sidebar.SelectedGroupName(); name != "" && name != ui.ClosedGroupName {
 		if sessions := m.sidebar.GroupSessions(name); len(sessions) > 0 {
 			cwd = sessions[0].CWD
 		}
