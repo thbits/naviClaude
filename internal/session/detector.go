@@ -162,6 +162,9 @@ type Detector struct {
 
 	lastActMu    sync.Mutex                   // guards lastActCache
 	lastActCache map[string]lastActivityEntry // sessionID -> last-message time, keyed by file mtime
+
+	aiTitleMu    sync.Mutex              // guards aiTitleCache
+	aiTitleCache map[string]aiTitleEntry // sessionID -> ai-title, keyed by file mtime
 }
 
 // lastActivityEntry caches a session's last-message time alongside the file
@@ -170,6 +173,13 @@ type Detector struct {
 type lastActivityEntry struct {
 	mtime time.Time
 	last  time.Time
+}
+
+// aiTitleEntry caches a session's ai-title alongside the transcript mtime it was
+// read from, so the file is only re-scanned when it actually changes.
+type aiTitleEntry struct {
+	mtime time.Time
+	title string
 }
 
 // NewDetector creates a Detector that uses the given tmux client and matches
@@ -197,6 +207,7 @@ func NewDetector(client *tmux.Client, processNames []string, activeWindowSecs in
 		tracker:      NewStatusTracker(activeWindow),
 		modelCache:   make(map[string]string),
 		lastActCache: make(map[string]lastActivityEntry),
+		aiTitleCache: make(map[string]aiTitleEntry),
 	}
 }
 
@@ -239,6 +250,21 @@ func (d *Detector) cachedLastActivity(sessionID, cwd string, mtime time.Time) ti
 	}
 	d.lastActCache[sessionID] = lastActivityEntry{mtime: mtime, last: last}
 	return last
+}
+
+// cachedAITitle returns the session's latest ai-title, scanning the transcript
+// only when its mtime has changed since the last read (the common case on the
+// detect tick is a cache hit). Mirrors cachedLastActivity so the per-second
+// detect tick does not re-read the whole transcript on every pass.
+func (d *Detector) cachedAITitle(sessionID, cwd string, mtime time.Time) string {
+	d.aiTitleMu.Lock()
+	defer d.aiTitleMu.Unlock()
+	if e, ok := d.aiTitleCache[sessionID]; ok && e.mtime.Equal(mtime) {
+		return e.title
+	}
+	title := lastAITitle(SessionFilePath(sessionID, cwd))
+	d.aiTitleCache[sessionID] = aiTitleEntry{mtime: mtime, title: title}
+	return title
 }
 
 // Detect returns all active sessions found by walking the process tree of
@@ -467,10 +493,8 @@ func (d *Detector) buildSession(pane tmux.PaneInfo, claudePID int, tree *Process
 		s.ID = extractSessionIDFallback(claudePID, pane.CurrentPath)
 		if byID, ok := readSessionMetadataByID(s.ID); ok {
 			meta.Name = byID.Name
+			meta.NameSource = byID.NameSource
 		}
-	}
-	if meta.Name != "" {
-		s.DisplayName = meta.Name
 	}
 	// Claude Code's own status (busy|waiting|idle|shell) plus its timestamp,
 	// authoritative for resolveStatus when present and fresh. Resolve it the same
@@ -504,14 +528,20 @@ func (d *Detector) buildSession(pane tmux.PaneInfo, claudePID int, tree *Process
 	// status detection: Detect computes the "recently written" signal from a
 	// fresh mtime stat (see resolveStatus), so display time and status stay
 	// independent.
+	// Resolve the display title from the per-PID name and the transcript's
+	// ai-title (see resolveTitle). aiTitle stays "" until a transcript exists on
+	// disk, in which case resolveTitle falls back to the per-PID name.
+	aiTitle := ""
 	if s.ID != "" {
 		s.Model = d.cachedModel(s.ID, pane.CurrentPath)
 		if modTime := sessionFileModTime(s.ID, pane.CurrentPath); !modTime.IsZero() {
 			// Use the last message timestamp (not the file mtime) so a resumed
 			// session shows when its conversation last happened, not "now".
 			s.LastActivity = d.cachedLastActivity(s.ID, pane.CurrentPath, modTime)
+			aiTitle = d.cachedAITitle(s.ID, pane.CurrentPath, modTime)
 		}
 	}
+	s.DisplayName = resolveTitle(meta.Name, meta.NameSource, aiTitle)
 
 	return s
 }
