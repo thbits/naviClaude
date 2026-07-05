@@ -269,14 +269,26 @@ func (m PreviewModel) renderHeader() string {
 
 	rightLine := strings.Join(rightParts, sep)
 
+	// The header must render on exactly one line (+ its bottom border = 2 rows):
+	// the viewport height is sized as paneHeight-2 assuming a single-line header,
+	// so a wrapped header would steal a row and push the last content line
+	// off-screen. Both header styles carry PaddingLeft(1)+PaddingRight(1), so the
+	// text area is maxWidth-2; budget the gap against that and truncate as a hard
+	// guard so an overflowing header is cut, never wrapped.
+	const headerPadding = 2
+	contentWidth := maxWidth - headerPadding
+	if contentWidth < 1 {
+		contentWidth = 1
+	}
+
 	leftWidth := lipgloss.Width(leftLine)
 	rightWidth := lipgloss.Width(rightLine)
-	gap := maxWidth - leftWidth - rightWidth
+	gap := contentWidth - leftWidth - rightWidth
 	if gap < 1 {
 		gap = 1
 	}
 
-	headerLine := leftLine + strings.Repeat(" ", gap) + rightLine
+	headerLine := ansi.Truncate(leftLine+strings.Repeat(" ", gap)+rightLine, contentWidth, "")
 
 	// In passthrough mode, use a blue border on the header to visually
 	// indicate the pane is focused.
