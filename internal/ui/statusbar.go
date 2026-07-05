@@ -10,11 +10,12 @@ import (
 
 // StatusBarModel renders the bottom bar with contextual keybinding hints.
 type StatusBarModel struct {
-	width     int
-	mode      string
-	version   string
-	listHints []statusHint // configurable list-mode hints
-	errText   string
+	width           int
+	mode            string
+	version         string
+	updateAvailable bool         // a newer release exists on GitHub
+	listHints       []statusHint // configurable list-mode hints
+	errText         string
 }
 
 type statusHint struct {
@@ -48,6 +49,11 @@ func (m *StatusBarModel) SetKeyHints(hints []StatusHintInput) {
 // SetMode sets the current mode which determines which hints are displayed.
 func (m *StatusBarModel) SetMode(mode string) {
 	m.mode = mode
+}
+
+// SetUpdateAvailable toggles the "update available" label next to the version.
+func (m *StatusBarModel) SetUpdateAvailable(v bool) {
+	m.updateAvailable = v
 }
 
 // SetSize updates the status bar width.
@@ -98,6 +104,9 @@ func (m StatusBarModel) View() string {
 
 	left := strings.Join(parts, "")
 	right := styles.StatusBarVersion.Render(m.version)
+	if m.updateAvailable {
+		right += styles.StatusBarVersion.Render("  ") + styles.StatusBarUpdate.Render("update available")
+	}
 
 	// Compute gap between left hints and right-aligned version.
 	leftWidth := lipgloss.Width(left)

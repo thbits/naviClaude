@@ -168,6 +168,9 @@ var StatusBarSep lipgloss.Style
 // StatusBarVersion is the version string on the right.
 var StatusBarVersion lipgloss.Style
 
+// StatusBarUpdate is the "update available" label shown beside the version.
+var StatusBarUpdate lipgloss.Style
+
 // --- Overlay / popup styles ---
 
 var HelpBorder lipgloss.Style
@@ -428,6 +431,11 @@ func buildStyles(p Palette) {
 	StatusBarVersion = lipgloss.NewStyle().
 		Foreground(ColorGray).
 		Background(ColorBgPanel)
+
+	StatusBarUpdate = lipgloss.NewStyle().
+		Foreground(ColorAmber).
+		Background(ColorBgPanel).
+		Bold(true)
 
 	HelpBorder = lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).

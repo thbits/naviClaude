@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -19,6 +20,7 @@ import (
 	"github.com/thbits/naviClaude/internal/styles"
 	"github.com/thbits/naviClaude/internal/tmux"
 	"github.com/thbits/naviClaude/internal/ui"
+	"github.com/thbits/naviClaude/internal/update"
 )
 
 // tickPreviewMsg triggers a preview capture refresh.
@@ -89,6 +91,9 @@ type resumeMsg struct {
 	session     *session.Session
 	err         error
 }
+
+// updateAvailableMsg reports that a newer naviClaude release exists on GitHub.
+type updateAvailableMsg struct{ latest string }
 
 // errMsg is a transient error notification.
 type errMsg struct{ err error }
@@ -167,6 +172,7 @@ type Model struct {
 
 	// Configuration
 	cfg                config.Config
+	version            string // build version, for the update check
 	keys               KeyMap
 	sidebarWidthPct    int
 	closedSessionHours float64
@@ -224,6 +230,7 @@ func New(version string) Model {
 
 		// Configuration
 		cfg:                cfg,
+		version:            version,
 		keys:               keys,
 		mode:               ModeList,
 		sidebarWidthPct:    cfg.SidebarWidth,
@@ -275,14 +282,31 @@ func (m Model) Init() tea.Cmd {
 		fmt.Fprintf(os.Stderr, "Error: %s\n", err)
 		return tea.Quit
 	}
-	return tea.Batch(
+	cmds := []tea.Cmd{
 		m.tickPreviewCmd(),
 		tickSession(),
 		tickResource(),
 		m.refreshActiveCmd(),
 		breathingTickCmd(),
 		m.spinner.Tick,
-	)
+	}
+	if m.cfg.CheckForUpdates {
+		cmds = append(cmds, m.checkUpdateCmd())
+	}
+	return tea.Batch(cmds...)
+}
+
+// checkUpdateCmd queries GitHub (cached) for a newer release off the render
+// path, emitting updateAvailableMsg only when an update is available.
+func (m Model) checkUpdateCmd() tea.Cmd {
+	version := m.version
+	return func() tea.Msg {
+		latest, available := update.Check(context.Background(), version)
+		if !available {
+			return nil
+		}
+		return updateAvailableMsg{latest: latest}
+	}
 }
 
 // Update is the main message router.
@@ -582,6 +606,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.preview.SetContent(msg.content)
 		}
+		return m, nil
+
+	case updateAvailableMsg:
+		m.statusbar.SetUpdateAvailable(true)
 		return m, nil
 
 	case errMsg:

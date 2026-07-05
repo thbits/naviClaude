@@ -120,6 +120,7 @@ active_window_secs: 5
 cpu_active_threshold: 5
 theme: "tokyo-night"
 claude_command: "claude"
+check_for_updates: true
 # new_session_dir: "~/projects"
 ```
 
@@ -139,6 +140,7 @@ claude_command: "claude"
 | `cpu_active_threshold` | `5` | Process-subtree CPU% above which a session counts as "working" |
 | `theme` | `tokyo-night` | Color theme name |
 | `claude_command` | `claude` | Command to start Claude (sent via send-keys, supports aliases) |
+| `check_for_updates` | `true` | Check GitHub on startup for a newer release and show "update available" in the status bar |
 | `new_session_dir` | `~` | Working directory for new tmux sessions created with `N` |
 
 ## Themes

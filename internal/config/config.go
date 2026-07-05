@@ -34,6 +34,7 @@ type Config struct {
 	NewSessionDir      string      `yaml:"new_session_dir"`      // working directory for new tmux sessions (default "~")
 	GroupSortOrder     string      `yaml:"group_sort_order"`     // "name" (alphabetical, default) or "activity"
 	SessionSortOrder   string      `yaml:"session_sort_order"`   // "name" (alphabetical, default) or "activity"
+	CheckForUpdates    bool        `yaml:"check_for_updates"`    // check GitHub for a newer release on startup (default true)
 }
 
 // KeyBindings maps user-facing actions to key names (tea.KeyMsg.String() format).
@@ -81,6 +82,7 @@ func DefaultConfig() Config {
 		ClaudeCommand:      "claude",
 		GroupSortOrder:     "name",
 		SessionSortOrder:   "name",
+		CheckForUpdates:    true,
 	}
 }
 

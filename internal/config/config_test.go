@@ -166,6 +166,32 @@ func TestLoadPartialOverride(t *testing.T) {
 	}
 }
 
+func TestLoadCheckForUpdates(t *testing.T) {
+	dir := t.TempDir()
+
+	// Absent key falls back to the default (true).
+	absent := filepath.Join(dir, "absent.yaml")
+	os.WriteFile(absent, []byte("theme: dracula\n"), 0o644)
+	cfg, err := Load(absent)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if !cfg.CheckForUpdates {
+		t.Error("CheckForUpdates absent from file should default to true")
+	}
+
+	// Explicit false disables it.
+	off := filepath.Join(dir, "off.yaml")
+	os.WriteFile(off, []byte("check_for_updates: false\n"), 0o644)
+	cfg, err = Load(off)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if cfg.CheckForUpdates {
+		t.Error("check_for_updates: false should disable the check")
+	}
+}
+
 func TestLoadInvalidRefreshIntervalFallsBack(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
