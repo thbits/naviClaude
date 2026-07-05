@@ -1387,39 +1387,38 @@ func sessionNamesByRecency(infos []tmux.SessionInfo) []string {
 	return names
 }
 
-func (m Model) createNewSession() (tea.Model, tea.Cmd) {
-	// Determine tmux session and CWD from the hovered item.
-	var tmuxSess, cwd string
-
-	sel := m.sidebar.SelectedSession()
-	if sel != nil {
-		tmuxSess = sel.TmuxSession
-		cwd = sel.CWD
+// resolveNewSessionTarget determines the tmux session and starting directory a
+// new Claude session should use, based on the sidebar cursor. Resolution order:
+//
+//  1. The hovered session -- its tmux session and cwd.
+//  2. The selected group header. Groups are keyed by tmux session name, so the
+//     header name IS the tmux session name; the cwd comes from the group's first
+//     session. This reads the group model rather than the visible flat rows, so
+//     it works even when the group is collapsed (collapsed groups contribute no
+//     child rows). The "Closed" group is skipped -- it is not a real tmux
+//     session.
+//  3. The tmux session naviClaude itself runs in.
+//
+// tmuxSess may be empty only when the app is not inside a tmux session; callers
+// treat that as an error. cwd may be empty (caller falls back to home).
+func (m Model) resolveNewSessionTarget() (tmuxSess, cwd string) {
+	if sel := m.sidebar.SelectedSession(); sel != nil {
+		return sel.TmuxSession, sel.CWD
 	}
 
-	// If on a group header, use the group's tmux session name.
-	if tmuxSess == "" {
-		items := m.sidebar.FlatItems()
-		cursor := m.sidebar.Cursor()
-		if cursor >= 0 && cursor < len(items) && items[cursor].IsGroup {
-			// Find the tmux session name from the group's first session.
-			for _, item := range items[cursor+1:] {
-				if item.IsGroup {
-					break
-				}
-				if item.Session != nil {
-					tmuxSess = item.Session.TmuxSession
-					cwd = item.Session.CWD
-					break
-				}
-			}
+	if name := m.sidebar.SelectedGroupName(); name != "" && name != "Closed" {
+		if sessions := m.sidebar.GroupSessions(name); len(sessions) > 0 {
+			cwd = sessions[0].CWD
 		}
+		return name, cwd
 	}
 
-	// Fall back to the tmux session naviClaude is running in.
-	if tmuxSess == "" {
-		tmuxSess = m.currentTmuxSession
-	}
+	return m.currentTmuxSession, ""
+}
+
+func (m Model) createNewSession() (tea.Model, tea.Cmd) {
+	tmuxSess, cwd := m.resolveNewSessionTarget()
+
 	if tmuxSess == "" {
 		m.err = fmt.Errorf("new session: cannot determine target tmux session")
 		m.statusbar.SetError("cannot determine target tmux session")
