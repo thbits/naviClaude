@@ -31,9 +31,11 @@ func loadDetailDataCmd(sess *session.Session) tea.Cmd {
 		}
 
 		// Model family only affects the context limit, which the detail popup
-		// does not use, so the default ("") is fine here.
-		m, err := session.LoadMetrics(filePath, "")
-		if err != nil {
+		// does not use, so the default ("") is fine here. A scan error still
+		// yields useful partial counts, so only a nil result (open failure) is
+		// treated as "no data".
+		m, _ := session.LoadMetrics(filePath, "")
+		if m == nil {
 			return detailDataMsg{sessionID: sessionID}
 		}
 

@@ -21,8 +21,11 @@ func loadMetricsCmd(sess *session.Session) tea.Cmd {
 		if filePath == "" {
 			return metricsMsg{sessionID: sess.ID}
 		}
-		m, err := session.LoadMetrics(filePath, sess.Model)
-		if err != nil {
+		// A scan error (e.g. a transcript line over the scanner buffer) still
+		// yields useful partial metrics, so only a nil result -- an outright
+		// open failure -- is treated as "no data".
+		m, _ := session.LoadMetrics(filePath, sess.Model)
+		if m == nil {
 			return metricsMsg{sessionID: sess.ID}
 		}
 		return metricsMsg{sessionID: sess.ID, metrics: m}
