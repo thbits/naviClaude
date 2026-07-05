@@ -23,8 +23,15 @@ import (
 // latestReleaseURL is the GitHub API endpoint for the newest published release.
 const latestReleaseURL = "https://api.github.com/repos/thbits/naviClaude/releases/latest"
 
-// cacheTTL is how long a check result is reused before hitting the network.
+// cacheTTL is how long a successful check result is reused before hitting the
+// network.
 const cacheTTL = 6 * time.Hour
+
+// negativeCacheTTL is how long a failed check (no tag) is remembered before
+// retrying. It is shorter than cacheTTL so an offline launch doesn't suppress
+// the check for the rest of the day, but long enough that a burst of launches
+// doesn't re-fire a doomed request every time.
+const negativeCacheTTL = 30 * time.Minute
 
 // httpTimeout bounds the network call so startup is never blocked for long.
 const httpTimeout = 3 * time.Second
@@ -60,15 +67,27 @@ func Check(ctx context.Context, current string) (latest string, available bool) 
 // fresh and otherwise fetching from GitHub (and refreshing the cache). It
 // returns ok=false when no tag can be determined.
 func latestTag(ctx context.Context) (tag string, ok bool) {
-	if entry, err := readCache(); err == nil && time.Since(entry.CheckedAt) < cacheTTL {
+	if entry, err := readCache(); err == nil {
+		// A failed check (empty tag) is cached briefly; a successful one for the
+		// full TTL. Guard against a future CheckedAt (clock skew, restored VM
+		// snapshot): a negative age must count as stale, not perpetually fresh.
+		ttl := cacheTTL
 		if entry.LatestTag == "" {
-			return "", false
+			ttl = negativeCacheTTL
 		}
-		return entry.LatestTag, true
+		if age := time.Since(entry.CheckedAt); age >= 0 && age < ttl {
+			if entry.LatestTag == "" {
+				return "", false
+			}
+			return entry.LatestTag, true
+		}
 	}
 
 	tag, ok = fetchLatestTag(ctx)
 	if !ok {
+		// Cache the failure so repeated launches don't each pay a doomed network
+		// attempt. Best-effort; ignore write errors.
+		_ = writeCache(cacheEntry{CheckedAt: time.Now(), LatestTag: ""})
 		return "", false
 	}
 	// Best-effort cache write; ignore errors.
@@ -125,7 +144,7 @@ func isReleaseVersion(v string) bool {
 	if v == "" || v == "dev" {
 		return false
 	}
-	_, _, _, ok := parseSemver(v)
+	_, _, _, _, ok := parseSemver(v)
 	return ok
 }
 
@@ -138,8 +157,8 @@ func normalize(tag string) string {
 // version that fails to parse sorts as older (returns a negative result when
 // compared against a valid version), which keeps Check conservative.
 func compareSemver(a, b string) int {
-	amaj, amin, apat, aok := parseSemver(a)
-	bmaj, bmin, bpat, bok := parseSemver(b)
+	amaj, amin, apat, apre, aok := parseSemver(a)
+	bmaj, bmin, bpat, bpre, bok := parseSemver(b)
 	switch {
 	case !aok && !bok:
 		return 0
@@ -154,40 +173,91 @@ func compareSemver(a, b string) int {
 	if amin != bmin {
 		return amin - bmin
 	}
-	return apat - bpat
+	if apat != bpat {
+		return apat - bpat
+	}
+	return comparePreRelease(apre, bpre)
 }
 
-// parseSemver parses "v1.2.3" or "1.2.3" (a trailing pre-release/build suffix
-// like "-rc1" is ignored on the patch component). It returns ok=false when the
+// comparePreRelease orders pre-release identifiers per semver precedence: a
+// version WITHOUT a pre-release is newer than the same core version WITH one
+// (1.2.3 > 1.2.3-rc1), and two pre-releases compare field-by-field on their
+// dot-separated identifiers.
+func comparePreRelease(a, b string) int {
+	if a == b {
+		return 0
+	}
+	if a == "" {
+		return 1 // a is the final release, b is a pre-release
+	}
+	if b == "" {
+		return -1
+	}
+	aIDs := strings.Split(a, ".")
+	bIDs := strings.Split(b, ".")
+	for i := 0; i < len(aIDs) && i < len(bIDs); i++ {
+		if c := comparePreReleaseID(aIDs[i], bIDs[i]); c != 0 {
+			return c
+		}
+	}
+	// All shared identifiers equal: the version with more identifiers is newer.
+	return len(aIDs) - len(bIDs)
+}
+
+// comparePreReleaseID compares a single pre-release identifier. Numeric
+// identifiers compare numerically and always rank lower than alphanumeric ones.
+func comparePreReleaseID(a, b string) int {
+	an, aErr := strconv.Atoi(a)
+	bn, bErr := strconv.Atoi(b)
+	switch {
+	case aErr == nil && bErr == nil:
+		return an - bn
+	case aErr == nil:
+		return -1 // numeric identifiers have lower precedence than alphanumeric
+	case bErr == nil:
+		return 1
+	default:
+		return strings.Compare(a, b)
+	}
+}
+
+// parseSemver parses "v1.2.3" or "1.2.3", optionally with a pre-release suffix
+// ("1.2.3-rc1") and/or build metadata ("1.2.3+build9"). It returns the numeric
+// triplet plus the pre-release identifier (empty when absent); build metadata
+// is discarded since semver excludes it from precedence. ok is false when the
 // major/minor/patch triplet cannot be read.
-func parseSemver(v string) (major, minor, patch int, ok bool) {
+func parseSemver(v string) (major, minor, patch int, pre string, ok bool) {
 	v = strings.TrimSpace(v)
 	v = strings.TrimPrefix(v, "v")
 	if v == "" {
-		return 0, 0, 0, false
+		return 0, 0, 0, "", false
+	}
+	// Build metadata ("+...") is ignored for precedence; strip it first.
+	if i := strings.IndexByte(v, '+'); i >= 0 {
+		v = v[:i]
+	}
+	// A pre-release ("-...") is retained for precedence comparison.
+	if i := strings.IndexByte(v, '-'); i >= 0 {
+		pre = v[i+1:]
+		v = v[:i]
 	}
 	parts := strings.SplitN(v, ".", 3)
 	if len(parts) != 3 {
-		return 0, 0, 0, false
+		return 0, 0, 0, "", false
 	}
 	major, err := strconv.Atoi(parts[0])
 	if err != nil {
-		return 0, 0, 0, false
+		return 0, 0, 0, "", false
 	}
 	minor, err = strconv.Atoi(parts[1])
 	if err != nil {
-		return 0, 0, 0, false
+		return 0, 0, 0, "", false
 	}
-	// Strip any pre-release/build metadata from the patch component.
-	patchStr := parts[2]
-	if i := strings.IndexAny(patchStr, "-+"); i >= 0 {
-		patchStr = patchStr[:i]
-	}
-	patch, err = strconv.Atoi(patchStr)
+	patch, err = strconv.Atoi(parts[2])
 	if err != nil {
-		return 0, 0, 0, false
+		return 0, 0, 0, "", false
 	}
-	return major, minor, patch, true
+	return major, minor, patch, pre, true
 }
 
 // cachePath returns the path to the update-check cache file, honoring
@@ -225,12 +295,28 @@ func writeCache(entry cacheEntry) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
 	data, err := json.Marshal(entry)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o644)
+	// Write atomically (temp file + rename) so a concurrent launch can never
+	// read a half-written cache file.
+	tmp, err := os.CreateTemp(dir, "update-check-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName) // no-op once the rename succeeds
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
 }
