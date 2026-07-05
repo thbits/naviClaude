@@ -308,14 +308,14 @@ func buildStyles(p Palette) {
 	ColorDimText = p.DimText
 
 	// Build all style variables from the (now updated) colors.
+	// Panel-fill styles set no Background so the app blends into the terminal's
+	// own background instead of painting an opaque block behind the content.
 	SidebarPanel = lipgloss.NewStyle().
-		Background(ColorBgPanel).
 		BorderRight(true).
 		BorderStyle(lipgloss.NormalBorder()).
 		BorderForeground(ColorBorder)
 
 	SidebarPanelFocused = lipgloss.NewStyle().
-		Background(ColorBgPanel).
 		BorderRight(true).
 		BorderStyle(lipgloss.NormalBorder()).
 		BorderForeground(ColorBlue)
@@ -407,12 +407,13 @@ func buildStyles(p Palette) {
 	PreviewSep = lipgloss.NewStyle().Foreground(ColorBorder)
 
 	StatusBar = lipgloss.NewStyle().
-		Background(ColorBgPanel).
 		Foreground(ColorFg).
 		BorderTop(true).
 		BorderStyle(lipgloss.NormalBorder()).
 		BorderForeground(ColorBorder)
 
+	// StatusBarKey keeps a background: the key badge is a deliberate "keycap"
+	// affordance, not part of the transparent bar fill.
 	StatusBarKey = lipgloss.NewStyle().
 		Foreground(ColorBlue).
 		Background(ColorBgHover).
@@ -421,20 +422,16 @@ func buildStyles(p Palette) {
 		PaddingRight(1)
 
 	StatusBarDesc = lipgloss.NewStyle().
-		Foreground(ColorGray).
-		Background(ColorBgPanel)
+		Foreground(ColorGray)
 
 	StatusBarSep = lipgloss.NewStyle().
-		Foreground(ColorBorder).
-		Background(ColorBgPanel)
+		Foreground(ColorBorder)
 
 	StatusBarVersion = lipgloss.NewStyle().
-		Foreground(ColorGray).
-		Background(ColorBgPanel)
+		Foreground(ColorGray)
 
 	StatusBarUpdate = lipgloss.NewStyle().
 		Foreground(ColorAmber).
-		Background(ColorBgPanel).
 		Bold(true)
 
 	HelpBorder = lipgloss.NewStyle().
@@ -498,7 +495,6 @@ func buildStyles(p Palette) {
 	SearchMatch = lipgloss.NewStyle().Foreground(ColorAmber).Bold(true)
 
 	TitleBar = lipgloss.NewStyle().
-		Background(ColorBgPanel).
 		Foreground(ColorFg).
 		BorderBottom(true).
 		BorderStyle(lipgloss.NormalBorder()).

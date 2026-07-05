@@ -64,9 +64,11 @@ func TestBuildStylesDefaultMatchesTokyoNight(t *testing.T) {
 	// Independently reconstruct the expected default styles, mirroring the
 	// original top-of-file definitions exactly.
 	want := map[string]lipgloss.Style{
-		"SidebarPanel": lipgloss.NewStyle().Background(cBgPanel).BorderRight(true).
+		// Panel-fill styles are intentionally transparent so the app blends into
+		// the terminal's own background instead of painting an opaque dark block.
+		"SidebarPanel": lipgloss.NewStyle().BorderRight(true).
 			BorderStyle(lipgloss.NormalBorder()).BorderForeground(cBorder),
-		"SidebarPanelFocused": lipgloss.NewStyle().Background(cBgPanel).BorderRight(true).
+		"SidebarPanelFocused": lipgloss.NewStyle().BorderRight(true).
 			BorderStyle(lipgloss.NormalBorder()).BorderForeground(cBlue),
 		"SidebarTitle":      lipgloss.NewStyle().Foreground(cBlue).Bold(true).PaddingLeft(1),
 		"SidebarTitleCount": lipgloss.NewStyle().Foreground(cGray),
@@ -100,13 +102,13 @@ func TestBuildStylesDefaultMatchesTokyoNight(t *testing.T) {
 		"StatusBadgeIdle":         lipgloss.NewStyle().Foreground(cGray).Bold(true),
 		"PreviewContent":          lipgloss.NewStyle().Foreground(cFg),
 		"PreviewSep":              lipgloss.NewStyle().Foreground(cBorder),
-		"StatusBar": lipgloss.NewStyle().Background(cBgPanel).Foreground(cFg).BorderTop(true).
+		"StatusBar": lipgloss.NewStyle().Foreground(cFg).BorderTop(true).
 			BorderStyle(lipgloss.NormalBorder()).BorderForeground(cBorder),
 		"StatusBarKey": lipgloss.NewStyle().Foreground(cBlue).Background(cBgHover).Bold(true).
 			PaddingLeft(1).PaddingRight(1),
-		"StatusBarDesc":    lipgloss.NewStyle().Foreground(cGray).Background(cBgPanel),
-		"StatusBarSep":     lipgloss.NewStyle().Foreground(cBorder).Background(cBgPanel),
-		"StatusBarVersion": lipgloss.NewStyle().Foreground(cGray).Background(cBgPanel),
+		"StatusBarDesc":    lipgloss.NewStyle().Foreground(cGray),
+		"StatusBarSep":     lipgloss.NewStyle().Foreground(cBorder),
+		"StatusBarVersion": lipgloss.NewStyle().Foreground(cGray),
 		"HelpBorder": lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).
 			BorderForeground(cPurple).Background(cBgPanel).Padding(1, 2),
 		"HelpTitle":       lipgloss.NewStyle().Foreground(cPurple).Bold(true).MarginBottom(1),
@@ -124,7 +126,7 @@ func TestBuildStylesDefaultMatchesTokyoNight(t *testing.T) {
 			Foreground(cFg).Background(cBgHover).Padding(0, 1),
 		"SearchPrompt": lipgloss.NewStyle().Foreground(cBlue).Bold(true),
 		"SearchMatch":  lipgloss.NewStyle().Foreground(cAmber).Bold(true),
-		"TitleBar": lipgloss.NewStyle().Background(cBgPanel).Foreground(cFg).BorderBottom(true).
+		"TitleBar": lipgloss.NewStyle().Foreground(cFg).BorderBottom(true).
 			BorderStyle(lipgloss.NormalBorder()).BorderForeground(cBorder),
 		"TitleBarName":               lipgloss.NewStyle().Foreground(cBlue).Bold(true),
 		"TitleBarDim":                lipgloss.NewStyle().Foreground(cGray),
@@ -257,9 +259,11 @@ func TestApplyThemeReassignsColors(t *testing.T) {
 	if string(ColorBg) != "#282a36" {
 		t.Errorf("ApplyTheme(dracula) did not set ColorBg: got %q", ColorBg)
 	}
-	if string(StatusBar.GetBackground().(lipgloss.Color)) != "#21222c" {
-		t.Errorf("ApplyTheme(dracula) did not rebuild StatusBar bg: got %q",
-			StatusBar.GetBackground())
+	// StatusBar is transparent (no fill); assert on a style that still carries a
+	// rebuilt background -- the key badge, which keeps ColorBgHover.
+	if string(StatusBarKey.GetBackground().(lipgloss.Color)) != "#343746" {
+		t.Errorf("ApplyTheme(dracula) did not rebuild StatusBarKey bg: got %q",
+			StatusBarKey.GetBackground())
 	}
 
 	ApplyTheme(Named(fallbackThemeKey))
