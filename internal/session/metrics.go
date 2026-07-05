@@ -10,7 +10,7 @@ import (
 
 // SessionMetrics holds aggregate statistics extracted from a session's .jsonl file.
 type SessionMetrics struct {
-	MessageCount   int       // count of type=="user" || type=="assistant" records
+	MessageCount   int       // conversational turns (see isConversationalTurn): user/assistant records with visible text, excluding meta, sidechain, and tool-only records
 	StartTime      time.Time // first non-zero timestamp in the file
 	TokensUsed     int       // context fill (input + cache_read + cache_creation + output) from the assistant record with the max timestamp
 	ContextLimit   int       // inferred from model: opus->1000000, sonnet->200000, haiku->200000, default->200000
@@ -39,6 +39,13 @@ type contentBlock struct {
 // carry no visible text (thinking-only or tool_use-only).
 func isConversationalTurn(rec metricsRecord) bool {
 	if rec.IsMeta || rec.IsSidechain {
+		return false
+	}
+	// Only user/assistant records are conversational. This guard must precede
+	// the content checks below: a non-conversation record (e.g. a "system"
+	// record) can also carry plain-string content, and the string fast paths
+	// would otherwise count it as a turn.
+	if rec.Type != "user" && rec.Type != "assistant" {
 		return false
 	}
 

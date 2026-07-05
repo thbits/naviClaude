@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -247,6 +248,53 @@ func TestLoadMetrics(t *testing.T) {
 		// Counts: user "hello", assistant "on it", assistant "done", user "thanks".
 		if m.MessageCount != 4 {
 			t.Errorf("MessageCount = %d, want 4", m.MessageCount)
+		}
+	})
+
+	t.Run("non-conversation record with string content is not counted", func(t *testing.T) {
+		dir := t.TempDir()
+		filePath := filepath.Join(dir, "system-string.jsonl")
+
+		records := []map[string]interface{}{
+			{"type": "user", "timestamp": "2025-03-01T10:00:00Z", "message": map[string]interface{}{"content": "hello"}},
+			// A non-user/assistant record carrying plain-string content must not
+			// count as a turn (the type guard precedes the string fast path).
+			{"type": "system", "timestamp": "2025-03-01T10:00:01Z", "message": map[string]interface{}{"content": "hook output"}},
+		}
+		writeJSONL(t, filePath, records)
+
+		m, err := LoadMetrics(filePath, "opus")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if m.MessageCount != 1 {
+			t.Errorf("MessageCount = %d, want 1 (system record excluded)", m.MessageCount)
+		}
+	})
+
+	t.Run("oversized line yields partial metrics plus error", func(t *testing.T) {
+		dir := t.TempDir()
+		filePath := filepath.Join(dir, "oversized.jsonl")
+
+		// One valid turn, then a single line larger than the 4MB scanner buffer.
+		valid := `{"type":"user","timestamp":"2025-03-01T10:00:00Z","message":{"content":"before the big line"}}` + "\n"
+		huge := `{"type":"user","message":{"content":"` + strings.Repeat("x", 5*1024*1024) + `"}}` + "\n"
+		if err := os.WriteFile(filePath, []byte(valid+huge), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		m, err := LoadMetrics(filePath, "sonnet")
+		if err == nil {
+			t.Fatal("expected a scanner error for the oversized line")
+		}
+		// The caller relies on this: partial metrics are still returned (non-nil)
+		// so the detail popup / preview can show counts accumulated before the
+		// failure rather than blanking out.
+		if m == nil {
+			t.Fatal("LoadMetrics returned nil metrics on scan error; want partial data")
+		}
+		if m.MessageCount != 1 {
+			t.Errorf("partial MessageCount = %d, want 1", m.MessageCount)
 		}
 	})
 

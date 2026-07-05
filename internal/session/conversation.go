@@ -81,13 +81,20 @@ func LoadConversation(sess *Session, maxTurns int) ([]ConversationEntry, error) 
 		}
 
 		var rec struct {
-			Type    string          `json:"type"`
-			Message json.RawMessage `json:"message"`
+			Type        string          `json:"type"`
+			Message     json.RawMessage `json:"message"`
+			IsMeta      bool            `json:"isMeta"`
+			IsSidechain bool            `json:"isSidechain"`
 		}
 		if err := json.Unmarshal(line, &rec); err != nil {
 			continue
 		}
 
+		// Exclude injected/meta records and subagent traffic so the pane matches
+		// what MessageCount counts (see session.isConversationalTurn).
+		if rec.IsMeta || rec.IsSidechain {
+			continue
+		}
 		if rec.Type != "user" && rec.Type != "assistant" {
 			continue
 		}

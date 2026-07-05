@@ -70,6 +70,35 @@ func TestLoadConversationNonTextTurnsSkipped(t *testing.T) {
 	}
 }
 
+// TestLoadConversationExcludesMetaAndSidechain verifies that injected/meta
+// records and subagent (sidechain) traffic are excluded from the pane, so it
+// agrees with what MessageCount (isConversationalTurn) counts.
+func TestLoadConversationExcludesMetaAndSidechain(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "convo-meta.jsonl")
+
+	records := []map[string]interface{}{
+		{"type": "user", "message": map[string]interface{}{"content": "real prompt"}},
+		{"type": "user", "isMeta": true, "message": map[string]interface{}{"content": "<system-reminder>"}},
+		{"type": "assistant", "isSidechain": true, "message": map[string]interface{}{"content": "subagent reply"}},
+		{"type": "assistant", "message": map[string]interface{}{"content": "real reply"}},
+	}
+	writeJSONL(t, filePath, records)
+
+	sess := &Session{ID: "convo-meta", SessionFile: filePath}
+
+	entries, err := LoadConversation(sess, 10)
+	if err != nil {
+		t.Fatalf("LoadConversation: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("len(entries) = %d, want 2 (meta and sidechain excluded)", len(entries))
+	}
+	if entries[0].Text != "real prompt" || entries[1].Text != "real reply" {
+		t.Errorf("entries = [%q, %q], want [real prompt, real reply]", entries[0].Text, entries[1].Text)
+	}
+}
+
 // TestLoadConversationFewerThanMax returns all turns when there are fewer than
 // maxTurns, preserving order.
 func TestLoadConversationFewerThanMax(t *testing.T) {
