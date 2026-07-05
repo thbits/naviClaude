@@ -33,8 +33,11 @@ type dailyActivity struct {
 type modelUsageRaw struct {
 	InputTokens  int `json:"inputTokens"`
 	OutputTokens int `json:"outputTokens"`
-	CacheRead    int `json:"cacheRead"`
-	CacheWrite   int `json:"cacheWrite"`
+	// Claude's cache keys these as cacheReadInputTokens /
+	// cacheCreationInputTokens. For Claude Code these dwarf input+output
+	// (cache read/creation is ~99.9% of tokens), so usage counts them too.
+	CacheRead  int `json:"cacheReadInputTokens"`
+	CacheWrite int `json:"cacheCreationInputTokens"`
 }
 
 type longestSessionRaw struct {
@@ -67,12 +70,12 @@ func Compute(claudeDir string, activeCount int, filter string) (*Stats, error) {
 			st.TotalSessions = cc.TotalSessions
 			st.TotalMessages = cc.TotalMessages
 
-			// Compute avg sessions per day. Parse the date in the local zone so
-			// the elapsed-days math lines up with the local time.Now() used by
-			// time.Since; time.Parse would yield UTC midnight and skew the span
-			// by up to the local UTC offset.
+			// Compute avg sessions per day. firstSessionDate is a full RFC3339
+			// timestamp in the real cache, so parseStatsDate tries that first
+			// (a date-only parse would fail on the "T..." suffix and leave the
+			// average at 0) before falling back to a local-zone date parse.
 			if cc.FirstSessionDate != "" {
-				first, err := time.ParseInLocation("2006-01-02", cc.FirstSessionDate, time.Local)
+				first, err := parseStatsDate(cc.FirstSessionDate)
 				if err == nil {
 					days := time.Since(first).Hours() / 24
 					if days > 0 {
@@ -102,11 +105,11 @@ func Compute(claudeDir string, activeCount int, filter string) (*Stats, error) {
 			// Peak hour.
 			st.PeakHour = findPeakHour(cc.HourCounts)
 
-			// Supplement if stale. Parse in the local zone so both the
-			// time.Since staleness check and the later ModTime comparison in
-			// supplementStaleData operate in one consistent (local) zone.
+			// Supplement if stale. parseStatsDate handles both the date-only
+			// form this field normally takes and the RFC3339 form, so the
+			// staleness check stays consistent regardless of which Claude wrote.
 			if cc.LastComputedDate != "" {
-				lastDate, err := time.ParseInLocation("2006-01-02", cc.LastComputedDate, time.Local)
+				lastDate, err := parseStatsDate(cc.LastComputedDate)
 				if err == nil && time.Since(lastDate) > 24*time.Hour {
 					supplementStaleData(st, claudeDir, lastDate)
 				}
@@ -118,6 +121,19 @@ func Compute(claudeDir string, activeCount int, filter string) (*Stats, error) {
 	st.ProjectCounts = scanProjectCounts(claudeDir, filter)
 
 	return st, nil
+}
+
+// parseStatsDate parses a date from Claude's stats cache, which is not
+// self-consistent: firstSessionDate is a full RFC3339 timestamp
+// ("2026-01-29T11:07:33.236Z") while lastComputedDate is date-only
+// ("2026-02-16"). Try the timestamp form first, then fall back to a date-only
+// parse in the local zone so the elapsed-days math against time.Now() (used by
+// time.Since) lines up in one consistent zone.
+func parseStatsDate(s string) (time.Time, error) {
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		return t, nil
+	}
+	return time.ParseInLocation("2006-01-02", s, time.Local)
 }
 
 // CountSessionFiles returns the total number of .jsonl files across all project dirs.
@@ -196,7 +212,7 @@ func groupModelUsage(usage map[string]modelUsageRaw) []ModelUsageEntry {
 
 	for modelID, u := range usage {
 		lower := strings.ToLower(modelID)
-		total := u.InputTokens + u.OutputTokens
+		total := u.InputTokens + u.OutputTokens + u.CacheRead + u.CacheWrite
 		switch {
 		case strings.Contains(lower, "opus"):
 			families["opus"] += total
