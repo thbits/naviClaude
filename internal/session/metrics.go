@@ -19,9 +19,70 @@ type SessionMetrics struct {
 
 // metricsRecord captures the fields we need from each .jsonl line for metrics.
 type metricsRecord struct {
-	Type      string          `json:"type"`
-	Timestamp string          `json:"timestamp"`
-	Message   json.RawMessage `json:"message"`
+	Type        string          `json:"type"`
+	Timestamp   string          `json:"timestamp"`
+	Message     json.RawMessage `json:"message"`
+	IsMeta      bool            `json:"isMeta"`
+	IsSidechain bool            `json:"isSidechain"`
+}
+
+// contentBlock captures the discriminator of a single message content block.
+type contentBlock struct {
+	Type string `json:"type"`
+}
+
+// isConversationalTurn reports whether a record represents an actual
+// conversational message rather than tool plumbing or injected context.
+//
+// Excluded: injected/meta records (isMeta), subagent traffic (isSidechain),
+// user records that are only tool_result blocks, and assistant records that
+// carry no visible text (thinking-only or tool_use-only).
+func isConversationalTurn(rec metricsRecord) bool {
+	if rec.IsMeta || rec.IsSidechain {
+		return false
+	}
+
+	// A plain string content is a real message (older/simple transcript form).
+	var str string
+	if err := json.Unmarshal(rec.Message, &str); err == nil {
+		return strings.TrimSpace(str) != ""
+	}
+
+	var wrapper struct {
+		Content json.RawMessage `json:"content"`
+	}
+	if err := json.Unmarshal(rec.Message, &wrapper); err != nil {
+		return false
+	}
+	if err := json.Unmarshal(wrapper.Content, &str); err == nil {
+		return strings.TrimSpace(str) != ""
+	}
+
+	var blocks []contentBlock
+	if err := json.Unmarshal(wrapper.Content, &blocks); err != nil {
+		return false
+	}
+
+	switch rec.Type {
+	case "user":
+		// Real human input has at least one non-tool_result block.
+		for _, b := range blocks {
+			if b.Type != "tool_result" {
+				return true
+			}
+		}
+		return false
+	case "assistant":
+		// A visible reply has at least one text block; thinking/tool_use alone
+		// is not a message.
+		for _, b := range blocks {
+			if b.Type == "text" {
+				return true
+			}
+		}
+		return false
+	}
+	return false
 }
 
 // metricsUsage captures token counts nested inside an assistant message.
@@ -87,7 +148,7 @@ func LoadMetrics(filePath, model string) (*SessionMetrics, error) {
 			m.StartTime = recTime
 		}
 
-		if rec.Type == "user" || rec.Type == "assistant" {
+		if isConversationalTurn(rec) {
 			m.MessageCount++
 			if !recTime.IsZero() {
 				msgTimes = append(msgTimes, recTime)

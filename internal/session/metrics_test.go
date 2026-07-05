@@ -208,6 +208,48 @@ func TestLoadMetrics(t *testing.T) {
 		}
 	})
 
+	t.Run("counts only conversational turns", func(t *testing.T) {
+		dir := t.TempDir()
+		filePath := filepath.Join(dir, "turns.jsonl")
+
+		textBlock := func(s string) []interface{} {
+			return []interface{}{map[string]interface{}{"type": "text", "text": s}}
+		}
+
+		records := []map[string]interface{}{
+			// Real human prompt (string content) -> counts.
+			{"type": "user", "timestamp": "2025-03-01T10:00:00Z", "message": map[string]interface{}{"content": "hello"}},
+			// Assistant thinking-only -> not a message.
+			{"type": "assistant", "timestamp": "2025-03-01T10:00:01Z", "message": map[string]interface{}{"content": []interface{}{map[string]interface{}{"type": "thinking", "thinking": "hmm"}}}},
+			// Assistant visible reply -> counts.
+			{"type": "assistant", "timestamp": "2025-03-01T10:00:02Z", "message": map[string]interface{}{"content": textBlock("on it")}},
+			// Assistant tool call -> plumbing, not a message.
+			{"type": "assistant", "timestamp": "2025-03-01T10:00:03Z", "message": map[string]interface{}{"content": []interface{}{map[string]interface{}{"type": "tool_use", "name": "Read"}}}},
+			// Tool result -> plumbing, not a message.
+			{"type": "user", "timestamp": "2025-03-01T10:00:04Z", "message": map[string]interface{}{"content": []interface{}{map[string]interface{}{"type": "tool_result", "content": "file data"}}}},
+			// Assistant visible reply -> counts.
+			{"type": "assistant", "timestamp": "2025-03-01T10:00:05Z", "message": map[string]interface{}{"content": textBlock("done")}},
+			// Real human prompt (text block form) -> counts.
+			{"type": "user", "timestamp": "2025-03-01T10:00:06Z", "message": map[string]interface{}{"content": textBlock("thanks")}},
+			// Injected context -> not a message.
+			{"type": "user", "timestamp": "2025-03-01T10:00:07Z", "isMeta": true, "message": map[string]interface{}{"content": textBlock("<system-reminder>")}},
+			// Subagent traffic -> not a message.
+			{"type": "assistant", "timestamp": "2025-03-01T10:00:08Z", "isSidechain": true, "message": map[string]interface{}{"content": textBlock("subagent reply")}},
+		}
+
+		writeJSONL(t, filePath, records)
+
+		m, err := LoadMetrics(filePath, "opus")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		// Counts: user "hello", assistant "on it", assistant "done", user "thanks".
+		if m.MessageCount != 4 {
+			t.Errorf("MessageCount = %d, want 4", m.MessageCount)
+		}
+	})
+
 	t.Run("empty file", func(t *testing.T) {
 		dir := t.TempDir()
 		filePath := filepath.Join(dir, "empty.jsonl")

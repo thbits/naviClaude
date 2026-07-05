@@ -1,9 +1,6 @@
 package app
 
 import (
-	"bufio"
-	"encoding/json"
-	"os"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -19,7 +16,9 @@ type detailDataMsg struct {
 	startTime    time.Time
 }
 
-// loadDetailDataCmd reads the .jsonl file to count messages and extract start time.
+// loadDetailDataCmd reads the .jsonl file to count conversational turns and
+// extract the start time. It delegates to session.LoadMetrics so the detail
+// popup and the preview header report the same message count.
 func loadDetailDataCmd(sess *session.Session) tea.Cmd {
 	sessionID := sess.ID
 	return func() tea.Msg {
@@ -31,56 +30,17 @@ func loadDetailDataCmd(sess *session.Session) tea.Cmd {
 			return detailDataMsg{sessionID: sessionID}
 		}
 
-		f, err := os.Open(filePath)
+		// Model family only affects the context limit, which the detail popup
+		// does not use, so the default ("") is fine here.
+		m, err := session.LoadMetrics(filePath, "")
 		if err != nil {
 			return detailDataMsg{sessionID: sessionID}
-		}
-		defer f.Close()
-
-		var (
-			count     int
-			startTime time.Time
-		)
-
-		scanner := bufio.NewScanner(f)
-		buf := make([]byte, 0, 64*1024)
-		scanner.Buffer(buf, 4*1024*1024)
-
-		for scanner.Scan() {
-			line := scanner.Bytes()
-			if len(line) == 0 {
-				continue
-			}
-
-			var rec struct {
-				Type      string `json:"type"`
-				Timestamp string `json:"timestamp"`
-			}
-			if err := json.Unmarshal(line, &rec); err != nil {
-				continue
-			}
-
-			// Count user and assistant messages.
-			if rec.Type == "user" || rec.Type == "assistant" {
-				count++
-			}
-
-			// Extract the earliest timestamp as start time.
-			if rec.Timestamp != "" && startTime.IsZero() {
-				t, err := time.Parse(time.RFC3339Nano, rec.Timestamp)
-				if err != nil {
-					t, _ = time.Parse(time.RFC3339, rec.Timestamp)
-				}
-				if !t.IsZero() {
-					startTime = t
-				}
-			}
 		}
 
 		return detailDataMsg{
 			sessionID:    sessionID,
-			messageCount: count,
-			startTime:    startTime,
+			messageCount: m.MessageCount,
+			startTime:    m.StartTime,
 		}
 	}
 }
