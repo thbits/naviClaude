@@ -241,6 +241,7 @@ type rawRecord struct {
 	GitBranch string          `json:"gitBranch"`
 	Version   string          `json:"version"`
 	Slug      string          `json:"slug"`
+	AITitle   string          `json:"aiTitle"`
 	Message   json.RawMessage `json:"message"`
 }
 
@@ -281,6 +282,7 @@ func parseSessionFile(filePath string) (*Session, error) {
 		firstTime time.Time
 		lastTime  time.Time
 		modelSet  bool
+		aiTitle   string
 	)
 
 	scanner := bufio.NewScanner(f)
@@ -329,6 +331,9 @@ func parseSessionFile(filePath string) (*Session, error) {
 		if sess.Slug == "" && rec.Slug != "" {
 			sess.Slug = rec.Slug
 		}
+		if rec.Type == "ai-title" && rec.AITitle != "" {
+			aiTitle = rec.AITitle
+		}
 
 		// Extract model from assistant records.
 		if !modelSet && rec.Type == "assistant" && len(rec.Message) > 0 {
@@ -352,6 +357,13 @@ func parseSessionFile(filePath string) (*Session, error) {
 	// (e.g. empty or metadata-only .jsonl) is skipped.
 	if sess.ID == "" || sess.CWD == "" {
 		return nil, nil
+	}
+
+	// The latest ai-title record is the session's current title; surface it so a
+	// closed session keeps the title Claude gave it instead of falling back to the
+	// Slug/ProjectName placeholder in the sidebar.
+	if aiTitle != "" {
+		sess.DisplayName = aiTitle
 	}
 
 	if !lastTime.IsZero() {

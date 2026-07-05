@@ -252,3 +252,31 @@ func TestLoadHistoryIndexConcurrent(t *testing.T) {
 		t.Errorf("idx[s1] = %q, want %q", idx["s1"], "first prompt")
 	}
 }
+
+func TestParseSessionFileSetsAITitle(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "11111111-2222-3333-4444-555555555555.jsonl")
+
+	// An assistant record carries the cwd (required for parseSessionFile to keep
+	// the session); two ai-title records bracket it and the last one must win.
+	lines := []string{
+		`{"type":"ai-title","aiTitle":"Old title"}`,
+		`{"type":"assistant","timestamp":"2026-07-05T09:00:00Z","cwd":"/work/proj","message":{"model":"claude-opus-4-6","role":"assistant"}}`,
+		`{"type":"ai-title","aiTitle":"Configure Hindsight memory with local Postgres"}`,
+	}
+	if err := os.WriteFile(filePath, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	sess, err := parseSessionFile(filePath)
+	if err != nil {
+		t.Fatalf("parseSessionFile error: %v", err)
+	}
+	if sess == nil {
+		t.Fatal("parseSessionFile returned nil session")
+	}
+	want := "Configure Hindsight memory with local Postgres"
+	if sess.DisplayName != want {
+		t.Errorf("DisplayName = %q, want %q", sess.DisplayName, want)
+	}
+}
