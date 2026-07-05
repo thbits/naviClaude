@@ -547,6 +547,7 @@ func extractSessionIDFallback(pid int, cwd string) string {
 type sessionMetadata struct {
 	SessionID       string `json:"sessionId"`
 	Name            string `json:"name"`
+	NameSource      string `json:"nameSource"`      // "derived" = auto placeholder
 	Status          string `json:"status"`          // busy|waiting|idle|shell
 	StatusUpdatedAt int64  `json:"statusUpdatedAt"` // epoch ms
 }
