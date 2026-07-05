@@ -5,6 +5,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/thbits/naviClaude/internal/styles"
 )
 
@@ -86,7 +87,7 @@ func (m StatusBarModel) View() string {
 	if m.errText != "" {
 		errStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#f7768e")).Bold(true)
 		bar := errStyle.Render(" " + m.errText)
-		return styles.StatusBar.Width(m.width).Render(bar)
+		return m.renderBar(bar)
 	}
 
 	hints := m.hintsForMode()
@@ -105,7 +106,12 @@ func (m StatusBarModel) View() string {
 	left := strings.Join(parts, "")
 	right := styles.StatusBarVersion.Render(m.version)
 	if m.updateAvailable {
-		right += styles.StatusBarVersion.Render("  ") + styles.StatusBarUpdate.Render("update available")
+		withLabel := right + styles.StatusBarVersion.Render("  ") + styles.StatusBarUpdate.Render("update available")
+		// Only show the label when it fits: an overflowing bar wraps to a
+		// second line and shifts the whole app layout up a row.
+		if lipgloss.Width(left)+1+lipgloss.Width(withLabel) <= m.width {
+			right = withLabel
+		}
 	}
 
 	// Compute gap between left hints and right-aligned version.
@@ -116,9 +122,15 @@ func (m StatusBarModel) View() string {
 		gap = 1
 	}
 
-	bar := left + strings.Repeat(" ", gap) + right
+	return m.renderBar(left + strings.Repeat(" ", gap) + right)
+}
 
-	return styles.StatusBar.Width(m.width).Render(bar)
+// renderBar applies the StatusBar style with a last-resort ANSI-aware
+// truncation: content wider than the bar (long error text, many hints on a
+// very narrow terminal) must be cut, never wrapped, because a taller status
+// bar breaks the app's content-height math.
+func (m StatusBarModel) renderBar(bar string) string {
+	return styles.StatusBar.Width(m.width).Render(ansi.Truncate(bar, m.width, ""))
 }
 
 func (m StatusBarModel) hintsForMode() []statusHint {

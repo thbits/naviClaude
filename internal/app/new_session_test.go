@@ -62,6 +62,29 @@ func TestResolveNewSessionTargetHoveredSession(t *testing.T) {
 	}
 }
 
+// A hovered closed session has no tmux session of its own (only live pane
+// detection assigns one), so the new session must fall back to naviClaude's
+// own tmux session while keeping the closed session's cwd for the dir picker.
+func TestResolveNewSessionTargetHoveredClosedSessionFallsBack(t *testing.T) {
+	sb := newSidebarWith(0, []*session.Session{
+		{ID: "c", Status: session.StatusClosed, CWD: "/home/u/old", LastActivity: time.Now().Add(-3 * time.Hour)},
+	})
+	sb.ExpandAll()
+	if ok := sb.SelectByID("c"); !ok {
+		t.Fatalf("precondition: could not select closed session c")
+	}
+
+	m := Model{sidebar: sb, currentTmuxSession: "navi"}
+	tmuxSess, cwd := m.resolveNewSessionTarget()
+
+	if tmuxSess != "navi" {
+		t.Errorf("tmuxSess = %q, want %q (fallback to current)", tmuxSess, "navi")
+	}
+	if cwd != "/home/u/old" {
+		t.Errorf("cwd = %q, want %q (keep the closed session's cwd)", cwd, "/home/u/old")
+	}
+}
+
 // The "Closed" group is not a real tmux session, so selecting its header must
 // fall through to naviClaude's own tmux session.
 func TestResolveNewSessionTargetClosedGroupFallsBack(t *testing.T) {

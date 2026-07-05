@@ -1418,7 +1418,9 @@ func sessionNamesByRecency(infos []tmux.SessionInfo) []string {
 // resolveNewSessionTarget determines the tmux session and starting directory a
 // new Claude session should use, based on the sidebar cursor. Resolution order:
 //
-//  1. The hovered session -- its tmux session and cwd.
+//  1. The hovered session -- its tmux session and cwd. Closed sessions carry
+//     no tmux session (only live pane detection assigns one), so they resolve
+//     to the current tmux session while keeping their cwd for the dir picker.
 //  2. The selected group header. Groups are keyed by tmux session name, so the
 //     header name IS the tmux session name; the cwd comes from the group's first
 //     session. This reads the group model rather than the visible flat rows, so
@@ -1431,7 +1433,10 @@ func sessionNamesByRecency(infos []tmux.SessionInfo) []string {
 // treat that as an error. cwd may be empty (caller falls back to home).
 func (m Model) resolveNewSessionTarget() (tmuxSess, cwd string) {
 	if sel := m.sidebar.SelectedSession(); sel != nil {
-		return sel.TmuxSession, sel.CWD
+		if sel.TmuxSession != "" {
+			return sel.TmuxSession, sel.CWD
+		}
+		return m.currentTmuxSession, sel.CWD
 	}
 
 	if name := m.sidebar.SelectedGroupName(); name != "" && name != "Closed" {
