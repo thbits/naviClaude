@@ -499,6 +499,38 @@ func (m *SidebarModel) SelectByID(id string) bool {
 	return false
 }
 
+// SelectByTarget moves the cursor to the session with the given tmux target.
+// Returns true if the session was found. Used to focus a freshly created
+// placeholder session that has no session ID assigned yet.
+func (m *SidebarModel) SelectByTarget(target string) bool {
+	if target == "" {
+		return false
+	}
+	for i, item := range m.flatItems {
+		if !item.isGroup && item.session != nil && item.session.TmuxTarget == target {
+			m.cursor = i
+			m.updateTracked()
+			m.syncViewport()
+			return true
+		}
+	}
+	return false
+}
+
+// ExpandGroup ensures the named group is expanded so its sessions are visible --
+// e.g. after creating a new session inside a collapsed group, whose child rows
+// would otherwise be hidden. Marks the group as user-toggled so a subsequent
+// auto-collapse pass leaves it open. No-op if the group is already expanded.
+func (m *SidebarModel) ExpandGroup(name string) {
+	if name == "" || !m.collapsed[name] {
+		return
+	}
+	m.collapsed[name] = false
+	m.userToggled[name] = true
+	m.rebuildFlatItems()
+	m.restoreCursor(m.trackedID, m.trackedTarget, m.trackedGroup)
+}
+
 // FlatItem is a public wrapper for flat list items to allow external iteration.
 type FlatItem struct {
 	IsGroup bool

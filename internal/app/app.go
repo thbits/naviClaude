@@ -493,29 +493,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		// Create a placeholder session and enter passthrough immediately.
+		// LastActivity=now keeps the (possibly stale) target group from
+		// auto-collapsing, which would hide the new row and drop focus.
 		placeholder := &session.Session{
-			TmuxSession: msg.tmuxSession,
-			TmuxTarget:  msg.tmuxTarget,
-			CWD:         msg.cwd,
-			ProjectName: "claude",
-			Status:      session.StatusActive,
+			TmuxSession:  msg.tmuxSession,
+			TmuxTarget:   msg.tmuxTarget,
+			CWD:          msg.cwd,
+			ProjectName:  "claude",
+			Status:       session.StatusActive,
+			LastActivity: time.Now(),
 		}
-		// Prepend to session list so it appears right away.
-		m.sessions = append([]*session.Session{placeholder}, m.sessions...)
-		m.sidebar.SetSessions(m.sessions)
-		m.sidebar.SelectByID("") // won't match, so find by target below
-		// Select by target since ID is unknown yet.
-		for i, item := range m.sidebar.FlatItems() {
-			if item.Session != nil && item.Session.TmuxTarget == msg.tmuxTarget {
-				m.sidebar.SetCursor(i)
-				break
-			}
-		}
-		m.preview.SetSession(placeholder)
-		m.pendingNewTarget = msg.tmuxTarget
-		m.mode = ModePassthrough
-		m.preview.SetPassthrough(true)
-		m.statusbar.SetMode(ModePassthrough.String())
+		m.enterNewSessionPassthrough(placeholder)
 		// Fire a refresh so the real session (with ID etc.) replaces the placeholder.
 		return m, m.refreshSessionsCmd()
 
@@ -554,19 +542,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			Status:       session.StatusActive,
 			LastActivity: src.LastActivity,
 		}
-		m.sessions = append([]*session.Session{placeholder}, m.sessions...)
-		m.sidebar.SetSessions(m.sessions)
-		for i, item := range m.sidebar.FlatItems() {
-			if item.Session != nil && item.Session.TmuxTarget == msg.tmuxTarget {
-				m.sidebar.SetCursor(i)
-				break
-			}
-		}
-		m.preview.SetSession(placeholder)
-		m.pendingNewTarget = msg.tmuxTarget
-		m.mode = ModePassthrough
-		m.preview.SetPassthrough(true)
-		m.statusbar.SetMode(ModePassthrough.String())
+		// LastActivity stays the closed session's time so the row shows the right
+		// last-message time; enterNewSessionPassthrough expands the group so the
+		// row is visible regardless of that (possibly stale) time.
+		m.enterNewSessionPassthrough(placeholder)
 		return m, m.refreshSessionsCmd()
 
 	case newTmuxSessionMsg:
@@ -2161,6 +2140,25 @@ func (m *Model) applyAliases(list []*session.Session) {
 			s.DisplayName = name
 		}
 	}
+}
+
+// enterNewSessionPassthrough inserts a just-created (or just-resumed) placeholder
+// at the front of the session list, focuses it in the sidebar, and enters
+// passthrough on it. It expands the placeholder's group first: a new session in a
+// collapsed group would otherwise be hidden from the flat list, so the cursor
+// could never land on it and focus would stay on the previous selection.
+// pendingNewTarget keeps the cursor pinned to the placeholder until the real
+// detected session replaces it on the next refresh.
+func (m *Model) enterNewSessionPassthrough(placeholder *session.Session) {
+	m.sessions = append([]*session.Session{placeholder}, m.sessions...)
+	m.sidebar.SetSessions(m.sessions)
+	m.sidebar.ExpandGroup(placeholder.TmuxSession)
+	m.sidebar.SelectByTarget(placeholder.TmuxTarget)
+	m.preview.SetSession(placeholder)
+	m.pendingNewTarget = placeholder.TmuxTarget
+	m.mode = ModePassthrough
+	m.preview.SetPassthrough(true)
+	m.statusbar.SetMode(ModePassthrough.String())
 }
 
 // mergePendingPlaceholder checks whether the pending new-session target has
