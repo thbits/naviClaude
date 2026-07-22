@@ -251,7 +251,9 @@ func (m ChangedFilesModel) View() string {
 		if gap < 1 {
 			gap = 1
 		}
-		header = title + strings.Repeat(" ", gap) + countStr + " "
+		// Two trailing spaces (not one) so this totals m.width, matching the
+		// focused branch above -- otherwise focus would shrink the header by 1.
+		header = title + strings.Repeat(" ", gap) + countStr + "  "
 	}
 
 	if len(m.files) == 0 {

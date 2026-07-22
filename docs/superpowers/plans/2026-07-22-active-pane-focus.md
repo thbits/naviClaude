@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - No emojis anywhere (output or code). Geometric glyphs like `▸` are allowed and already used (`▼ ▶ ● ◎`).
-- Every color MUST derive from the active `styles.Palette` role (`ColorBlue`, `ColorBorder`, `ColorDimText`, `ColorBg`, `ColorGreen`, `ColorRed`) — never a hardcoded hex. This is what makes it work across all 11 themes.
+- Every color MUST derive from the active `styles.Palette` role (`ColorBlue`, `ColorBorder`, `ColorDimText`, `ColorBg`, `ColorGreen`, `ColorRed`) — never a hardcoded hex. This is what makes it work across all 10 themes.
 - No terminal-width cost: the active separator swaps the border *rune* (thick `┃` vs thin `│`), both 1 cell wide; it never adds/removes a column.
 - Preview body (live tmux ANSI) is never dimmed — only its header chip + underline change with focus.
 - Sidebar status dots keep their semantic colors even when the sidebar is dimmed.
@@ -64,7 +64,7 @@ func TestActiveTitleBarHasContrastInAllThemes(t *testing.T) {
 - [ ] **Step 2: Run it to verify it passes already (guards existing palettes)**
 
 Run: `go test ./internal/styles/ -run TestFocusAccent -v` and `go test ./internal/styles/ -run TestActiveTitleBar -v`
-Expected: PASS (all 11 themes already satisfy `Blue != Border` and `Blue != Bg`). This test is a regression guard for future palette edits.
+Expected: PASS (all 10 themes already satisfy `Blue != Border` and `Blue != Bg`). This test is a regression guard for future palette edits.
 
 - [ ] **Step 3: Add the two new style declarations**
 

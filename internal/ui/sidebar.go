@@ -162,6 +162,14 @@ func (m *SidebarModel) SetSpinnerView(view string) {
 
 // SetFocused marks whether the sidebar pane has keyboard focus. It re-renders on
 // change so the lit title bar and content dimming update immediately.
+//
+// Invariant this depends on: SetSize does NOT call syncViewport, so row
+// dimming on an unfocused resize relies entirely on SetFocused's syncViewport
+// call firing here. That in turn relies on the change-guard above actually
+// registering a change: View() runs against a throwaway *copy* of the real
+// Model (see app.go), so any SetFocused(false) it calls only ever mutates that
+// copy's `focused` field -- the persisted model's `focused` stays true --
+// which is why the guard reliably sees `true != false` and re-syncs every time.
 func (m *SidebarModel) SetFocused(focused bool) {
 	if m.focused == focused {
 		return
@@ -699,7 +707,9 @@ func (m SidebarModel) View() string {
 		if gap < 1 {
 			gap = 1
 		}
-		header = title + strings.Repeat(" ", gap) + countStr + " "
+		// Two trailing spaces (not one) so this totals m.width, matching the
+		// focused branch above -- otherwise focus would shrink the header by 1.
+		header = title + strings.Repeat(" ", gap) + countStr + "  "
 	}
 
 	if len(m.flatItems) == 0 {

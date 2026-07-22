@@ -65,12 +65,6 @@ var PaneTitleActive lipgloss.Style
 // PaneTitleInactive is the dim title shown on an unfocused pane.
 var PaneTitleInactive lipgloss.Style
 
-// SidebarTitle is the "SESSIONS" header at the top of the sidebar.
-var SidebarTitle lipgloss.Style
-
-// SidebarTitleCount is the active session count next to the title.
-var SidebarTitleCount lipgloss.Style
-
 // SidebarItem is a normal (unselected) session entry in the sidebar.
 var SidebarItem lipgloss.Style
 
@@ -346,14 +340,6 @@ func buildStyles(p Palette) {
 		BorderLeft(true).
 		BorderStyle(lipgloss.ThickBorder()).
 		BorderForeground(ColorBlue)
-
-	SidebarTitle = lipgloss.NewStyle().
-		Foreground(ColorBlue).
-		Bold(true).
-		PaddingLeft(1)
-
-	SidebarTitleCount = lipgloss.NewStyle().
-		Foreground(ColorGray)
 
 	SidebarItem = lipgloss.NewStyle().
 		Foreground(ColorFg).

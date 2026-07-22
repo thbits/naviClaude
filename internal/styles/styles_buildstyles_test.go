@@ -70,8 +70,6 @@ func TestBuildStylesDefaultMatchesTokyoNight(t *testing.T) {
 			BorderStyle(lipgloss.NormalBorder()).BorderForeground(cBorder),
 		"SidebarPanelFocused": lipgloss.NewStyle().BorderRight(true).
 			BorderStyle(lipgloss.ThickBorder()).BorderForeground(cBlue),
-		"SidebarTitle":      lipgloss.NewStyle().Foreground(cBlue).Bold(true).PaddingLeft(1),
-		"SidebarTitleCount": lipgloss.NewStyle().Foreground(cGray),
 		"PaneTitleActive":   lipgloss.NewStyle().Background(cBlue).Foreground(cBg).Bold(true),
 		"PaneTitleInactive": lipgloss.NewStyle().Foreground(cDimText).PaddingLeft(1),
 		"SidebarItem":       lipgloss.NewStyle().Foreground(cFg).PaddingLeft(2),
@@ -164,8 +162,6 @@ func TestBuildStylesDefaultMatchesTokyoNight(t *testing.T) {
 	got := map[string]lipgloss.Style{
 		"SidebarPanel":                  SidebarPanel,
 		"SidebarPanelFocused":           SidebarPanelFocused,
-		"SidebarTitle":                  SidebarTitle,
-		"SidebarTitleCount":             SidebarTitleCount,
 		"PaneTitleActive":               PaneTitleActive,
 		"PaneTitleInactive":             PaneTitleInactive,
 		"SidebarItem":                   SidebarItem,

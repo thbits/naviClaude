@@ -32,7 +32,7 @@ none. That is the whole problem.
 
 - One glance tells you which pane is active, unmistakably.
 - The signal belongs to exactly one pane at a time (no shared-edge ambiguity).
-- Works across all 11 supported themes with zero hardcoded colors -- every
+- Works across all 10 supported themes with zero hardcoded colors -- every
   color derives from the active `Palette`.
 - No terminal-width cost (the preview is a live tmux pane; every column matters).
 
@@ -101,7 +101,7 @@ render fold their text toward `DimText` when inactive.
 - **Preview:** body stays bright (raw tmux ANSI; dimming is unreliable and would
   distort Claude's own colors). Only the header chip + underline read inactive.
 
-### Palette mapping (all 11 themes)
+### Palette mapping (all 10 themes)
 
 Add semantic style variants, all built inside `buildStyles(p Palette)` from the
 palette roles:

@@ -3,6 +3,9 @@ package app
 import "testing"
 
 func TestFocusedPaneMapping(t *testing.T) {
+	// This map must list every Mode. focusedPane() has a `default -> PaneList`
+	// fallthrough, so a forgotten new mode would silently resolve to PaneList
+	// here too instead of failing -- there is no "missing case" signal to catch it.
 	cases := map[Mode]Pane{
 		ModeList:          PaneList,
 		ModeSearch:        PaneList,
