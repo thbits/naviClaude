@@ -70,6 +70,8 @@ type SidebarModel struct {
 
 	breathingFrame int    // animation frame for breathing status dots
 	spinnerView    string // spinner view string passed from app for loading state
+
+	focused bool // whether the sidebar pane currently has keyboard focus
 }
 
 // NewSidebar creates a SidebarModel with the given dimensions.
@@ -81,6 +83,7 @@ func NewSidebar(width, height int) SidebarModel {
 		collapsed:   make(map[string]bool),
 		userToggled: make(map[string]bool),
 		vp:          vp,
+		focused:     true,
 	}
 }
 
@@ -155,6 +158,16 @@ func (m *SidebarModel) SetBreathingFrame(frame int) {
 // SetSpinnerView sets the spinner view string for the loading state.
 func (m *SidebarModel) SetSpinnerView(view string) {
 	m.spinnerView = view
+}
+
+// SetFocused marks whether the sidebar pane has keyboard focus. It re-renders on
+// change so the lit title bar and content dimming update immediately.
+func (m *SidebarModel) SetFocused(focused bool) {
+	if m.focused == focused {
+		return
+	}
+	m.focused = focused
+	m.syncViewport()
 }
 
 // ActiveCount returns the cached count of non-closed sessions.
@@ -666,15 +679,28 @@ func (m *SidebarModel) scrollToCursor() {
 
 // View renders the sidebar.
 func (m SidebarModel) View() string {
-	// Render the "SESSIONS" header.
+	// Render the pane title: a lit reverse-video bar when focused, a dim title
+	// otherwise. Both fill to m.width so focus never changes the pane width.
 	activeCount := m.ActiveCount()
-	title := styles.SidebarTitle.Render("SESSIONS")
-	countStr := styles.SidebarTitleCount.Render(fmt.Sprintf("%d active", activeCount))
-	gap := m.width - lipgloss.Width(title) - lipgloss.Width(countStr) - 2
-	if gap < 1 {
-		gap = 1
+	countText := fmt.Sprintf("%d active", activeCount)
+	var header string
+	if m.focused {
+		titleText := "▸ SESSIONS"
+		gap := m.width - lipgloss.Width(titleText) - lipgloss.Width(countText) - 2
+		if gap < 1 {
+			gap = 1
+		}
+		inner := " " + titleText + strings.Repeat(" ", gap) + countText + " "
+		header = styles.PaneTitleActive.Width(m.width).Render(inner)
+	} else {
+		title := styles.PaneTitleInactive.Render("SESSIONS")
+		countStr := lipgloss.NewStyle().Foreground(styles.ColorDimText).Render(countText)
+		gap := m.width - lipgloss.Width(title) - lipgloss.Width(countStr) - 2
+		if gap < 1 {
+			gap = 1
+		}
+		header = title + strings.Repeat(" ", gap) + countStr + " "
 	}
-	header := title + strings.Repeat(" ", gap) + countStr + " "
 
 	if len(m.flatItems) == 0 {
 		listHeight := m.vp.Height
@@ -742,9 +768,16 @@ func (m SidebarModel) renderGroupHeader(name string, count, idx int, isCursor bo
 		return rendered
 	}
 
-	// Normal group header: triangle + name left, count right-aligned
-	left := styles.SidebarGroupHeader.Render(fmt.Sprintf("%s %s", arrow, name))
-	right := styles.SidebarGroupCount.Render(fmt.Sprintf("%d", count))
+	// Normal group header: triangle + name left, count right-aligned. Dim toward
+	// DimText when the pane is unfocused.
+	ghStyle := styles.SidebarGroupHeader
+	gcStyle := styles.SidebarGroupCount
+	if !m.focused {
+		ghStyle = lipgloss.NewStyle().Foreground(styles.ColorDimText).PaddingLeft(1)
+		gcStyle = lipgloss.NewStyle().Foreground(styles.ColorDimText)
+	}
+	left := ghStyle.Render(fmt.Sprintf("%s %s", arrow, name))
+	right := gcStyle.Render(fmt.Sprintf("%d", count))
 	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right) - 1
 	if gap < 1 {
 		gap = 1
@@ -876,10 +909,19 @@ func (m SidebarModel) renderSessionItem(s *session.Session, isCursor bool) []str
 		return result
 	}
 
-	// Normal item.
+	// Normal item. The status icon keeps its semantic color even when dimmed so
+	// session status stays glanceable across panes; only the text dims.
 	icon := statusIcon(s.Status, m.breathingFrame)
-	nameStyled := styles.SidebarProjectName.Render(displayName)
-	timeStyled := styles.SidebarTime.Render(relTime)
+	nameStyle := styles.SidebarProjectName
+	timeStyle := styles.SidebarTime
+	summaryStyle := styles.SidebarSummary
+	if !m.focused {
+		nameStyle = lipgloss.NewStyle().Foreground(styles.ColorDimText)
+		timeStyle = lipgloss.NewStyle().Foreground(styles.ColorDimText)
+		summaryStyle = lipgloss.NewStyle().Foreground(styles.ColorDimText).PaddingLeft(4)
+	}
+	nameStyled := nameStyle.Render(displayName)
+	timeStyled := timeStyle.Render(relTime)
 
 	iconWidth := lipgloss.Width(icon)
 	nameWidth := lipgloss.Width(nameStyled)
@@ -890,7 +932,7 @@ func (m SidebarModel) renderSessionItem(s *session.Session, isCursor bool) []str
 		gap = 1
 	}
 	line1 := "  " + icon + " " + nameStyled + strings.Repeat(" ", gap) + timeStyled + " "
-	line2 := styles.SidebarSummary.Render(summary)
+	line2 := summaryStyle.Render(summary)
 
 	return []string{line1, line2}
 }
