@@ -1015,6 +1015,11 @@ func (m Model) handleChangedFilesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
 
 	switch key {
+	case m.keys.Quit:
+		// The quit key still quits from the focused panel (matches list mode).
+		m.restorePreviewedPane()
+		return m, tea.Quit
+
 	case m.keys.ToggleChanged:
 		// Collapse the panel entirely and return to the session list.
 		m.rightPanelOpen = false
