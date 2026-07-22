@@ -26,6 +26,23 @@ func truncateDisplay(s string, maxWidth int) string {
 	return ansi.Truncate(s, maxWidth, ellipsis)
 }
 
+// truncateDisplayLeft shortens s from the LEFT so its terminal display width
+// does not exceed maxWidth, prepending an ellipsis when characters are dropped.
+// Use it for file paths, where the tail (basename and extension) is the most
+// useful part to keep visible. Display-width and ANSI aware like truncateDisplay.
+func truncateDisplayLeft(s string, maxWidth int) string {
+	if maxWidth <= 0 {
+		return ""
+	}
+	w := ansi.StringWidth(s)
+	if w <= maxWidth {
+		return s
+	}
+	// Remove enough leading cells to leave room for the ellipsis + the tail:
+	// result width == 1 (ellipsis) + (w - n) == maxWidth.
+	return ansi.TruncateLeft(s, w-maxWidth+1, ellipsis)
+}
+
 // labelColumnWidth returns the display width of the widest label, used to size
 // an aligned label column. It is display-width aware so multibyte/wide labels
 // align correctly.

@@ -5,15 +5,30 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/thbits/naviClaude/internal/session"
 )
 
-// changedFilesMsg carries the files edited during the selected session.
+// changedFilesMsg carries the files edited during the selected session, plus
+// the transcript's modification time at load, used to gate live refreshes.
 type changedFilesMsg struct {
 	sessionID string
 	files     []session.ChangedFile
+	mtime     time.Time
+}
+
+// changedFilesTranscriptPath resolves the JSONL transcript path for a session,
+// mirroring loadMetricsCmd's resolution. Empty when it cannot be determined.
+func changedFilesTranscriptPath(sess *session.Session) string {
+	if sess.SessionFile != "" {
+		return sess.SessionFile
+	}
+	if sess.ID != "" && sess.CWD != "" {
+		return session.SessionFilePath(sess.ID, sess.CWD)
+	}
+	return ""
 }
 
 // editorDoneMsg signals that the $EDITOR process exited. err is non-nil if the
@@ -24,16 +39,18 @@ type editorDoneMsg struct{ err error }
 // asynchronously, mirroring loadMetricsCmd's transcript-path resolution.
 func loadChangedFilesCmd(sess *session.Session) tea.Cmd {
 	return func() tea.Msg {
-		filePath := sess.SessionFile
-		if filePath == "" && sess.ID != "" && sess.CWD != "" {
-			filePath = session.SessionFilePath(sess.ID, sess.CWD)
-		}
+		filePath := changedFilesTranscriptPath(sess)
 		if filePath == "" {
 			return changedFilesMsg{sessionID: sess.ID}
 		}
 		files, _ := session.LoadChangedFiles(filePath)
 		applyGitCounts(files, session.GitDiffStats(sess.CWD))
-		return changedFilesMsg{sessionID: sess.ID, files: files}
+
+		var mtime time.Time
+		if fi, err := os.Stat(filePath); err == nil {
+			mtime = fi.ModTime()
+		}
+		return changedFilesMsg{sessionID: sess.ID, files: files, mtime: mtime}
 	}
 }
 

@@ -6,6 +6,33 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
+func TestTruncateDisplayLeft(t *testing.T) {
+	tests := []struct {
+		name     string
+		in       string
+		maxWidth int
+		want     string
+	}{
+		{"empty input", "", 10, ""},
+		{"fits exactly", "hello", 5, "hello"},
+		{"shorter than max", "hi", 10, "hi"},
+		{"truncates from the left with leading ellipsis", "hello world", 5, ellipsis + "orld"},
+		{"keeps the tail (basename)", "internal/app/main.go", 9, ellipsis + "/main.go"},
+		{"maxWidth zero returns empty", "hello", 0, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := truncateDisplayLeft(tt.in, tt.maxWidth)
+			if got != tt.want {
+				t.Errorf("truncateDisplayLeft(%q, %d) = %q, want %q", tt.in, tt.maxWidth, got, tt.want)
+			}
+			if w := ansi.StringWidth(got); tt.maxWidth > 0 && w > tt.maxWidth {
+				t.Errorf("result width %d exceeds maxWidth %d", w, tt.maxWidth)
+			}
+		})
+	}
+}
+
 func TestTruncateDisplay(t *testing.T) {
 	tests := []struct {
 		name     string

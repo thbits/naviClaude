@@ -80,6 +80,38 @@ func TestChangedFilesEmptyState(t *testing.T) {
 	}
 }
 
+func TestChangedFilesSetFilesPreservesCursorOnRefresh(t *testing.T) {
+	m := NewChangedFiles(40, 10)
+	m.SetFiles(sampleFiles(), "/repo")
+	m, _ = m.Update(key("j")) // move to /repo/pkg/b.go
+
+	// A live refresh returns the same session's files, possibly with a new one
+	// prepended (indices shift). The cursor should stay on the same file.
+	refreshed := append([]session.ChangedFile{{Path: "/repo/new.go", Added: 1}}, sampleFiles()...)
+	m.SetFiles(refreshed, "/repo")
+
+	if got := m.SelectedFile(); got != "/repo/pkg/b.go" {
+		t.Errorf("after refresh, SelectedFile = %q, want /repo/pkg/b.go (cursor should follow the file)", got)
+	}
+}
+
+func TestChangedFilesLongNameKeepsCounts(t *testing.T) {
+	m := NewChangedFiles(20, 6) // narrow panel
+	m.SetFiles([]session.ChangedFile{
+		{Path: "/repo/internal/app/handle_changedfiles.go", Added: 123, Removed: 45},
+	}, "/repo")
+
+	view := m.View()
+	// Counts must never be cut off, even when the name does not fit.
+	if !strings.Contains(view, "+123") || !strings.Contains(view, "-45") {
+		t.Errorf("counts were cut off in a narrow panel:\n%s", view)
+	}
+	// The name is truncated from the left, so a leading ellipsis appears.
+	if !strings.Contains(view, "…") {
+		t.Errorf("expected a leading ellipsis on the truncated name:\n%s", view)
+	}
+}
+
 func TestChangedFilesViewShowsRelativePathAndCounts(t *testing.T) {
 	m := NewChangedFiles(40, 10)
 	m.SetFiles(sampleFiles(), "/repo")

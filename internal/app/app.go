@@ -162,8 +162,9 @@ type Model struct {
 	metricsSessionID string // session ID the metrics belong to
 
 	// Changed-files right sidebar
-	rightPanelOpen        bool   // whether the changed-files sidebar is expanded
-	changedFilesSessionID string // session ID the loaded changed files belong to
+	rightPanelOpen        bool      // whether the changed-files sidebar is expanded
+	changedFilesSessionID string    // session ID the loaded changed files belong to
+	changedFilesMtime     time.Time // transcript mtime at last load, gates live refresh
 
 	// Session aliases (user-defined display names)
 	aliasStore *session.AliasStore
@@ -344,6 +345,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, tickSession())
 		// The periodic ticker fires the full combined refresh.
 		cmds = append(cmds, m.refreshSessionsCmd())
+		// Live-refresh the changed-files panel if its session's transcript grew.
+		if cmd := m.maybeRefreshChangedFilesCmd(); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
 		return m, tea.Batch(cmds...)
 
 	case tickResourceMsg:
@@ -400,8 +405,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// (a slow read must not repaint after the user navigated away).
 		if sel := m.sidebar.SelectedSession(); sel != nil && sel.ID == msg.sessionID {
 			m.changedFilesSessionID = msg.sessionID
-			cwd := sel.CWD
-			m.rightSidebar.SetFiles(msg.files, cwd)
+			m.changedFilesMtime = msg.mtime
+			m.rightSidebar.SetFiles(msg.files, sel.CWD)
 		}
 		return m, nil
 
@@ -2280,7 +2285,37 @@ func (m *Model) reloadChangedFilesForSelection(sel *session.Session) tea.Cmd {
 		return nil
 	}
 	m.changedFilesSessionID = sel.ID
+	m.changedFilesMtime = time.Time{} // pending load; suppress live refresh until it lands
 	m.rightSidebar.SetFiles(nil, sel.CWD)
+	return loadChangedFilesCmd(sel)
+}
+
+// maybeRefreshChangedFilesCmd returns a reload command when the open changed-
+// files panel is stale: the selected session's transcript has been written to
+// since the last load (Claude edited more files). It stats the transcript --
+// cheap enough to run on every session tick -- and only triggers the heavier
+// transcript scan + git diff when the mtime actually advanced. The cursor is
+// preserved across the reload by SetFiles. Returns nil when the panel is
+// closed, no session is selected, or a load is already pending.
+func (m *Model) maybeRefreshChangedFilesCmd() tea.Cmd {
+	if !m.rightPanelOpen {
+		return nil
+	}
+	sel := m.sidebar.SelectedSession()
+	if sel == nil || sel.ID == "" || sel.ID != m.changedFilesSessionID {
+		return nil
+	}
+	if m.changedFilesMtime.IsZero() {
+		return nil // initial (or post-switch) load still in flight
+	}
+	path := changedFilesTranscriptPath(sel)
+	if path == "" {
+		return nil
+	}
+	fi, err := os.Stat(path)
+	if err != nil || !fi.ModTime().After(m.changedFilesMtime) {
+		return nil
+	}
 	return loadChangedFilesCmd(sel)
 }
 

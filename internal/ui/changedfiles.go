@@ -49,12 +49,23 @@ func (m *ChangedFilesModel) SetSize(w, h int) {
 }
 
 // SetFiles replaces the file list and records the session CWD used to show
-// relative paths. The cursor resets to the top because the list belongs to a
-// (possibly) different session.
+// relative paths. The cursor stays on the same file when it is still present
+// (so a live refresh does not jump the selection); otherwise it resets to the
+// top -- which also handles a session switch, where none of the old paths are
+// in the new list.
 func (m *ChangedFilesModel) SetFiles(files []session.ChangedFile, cwd string) {
+	prev := m.SelectedFile()
 	m.files = files
 	m.cwd = cwd
 	m.cursor = 0
+	if prev != "" {
+		for i, f := range files {
+			if f.Path == prev {
+				m.cursor = i
+				break
+			}
+		}
+	}
 	m.syncViewport()
 }
 
@@ -133,20 +144,29 @@ func (m *ChangedFilesModel) syncViewport() {
 }
 
 // renderRow renders one file row: the (relative) path on the left and the
-// +added/-removed counts on the right, filling the gap between.
+// +added/-removed counts on the right, filling the gap between. The counts
+// always get their full width and a one-column gap; the name takes whatever
+// space is left and is truncated from the LEFT (leading ellipsis) so the
+// basename and extension stay visible. This guarantees the counts are never
+// cut off, no matter how long the path.
 func (m ChangedFilesModel) renderRow(f session.ChangedFile, selected bool) string {
 	stats := m.renderStats(f)
 	statsWidth := lipgloss.Width(stats)
 
-	// -1 leaves a trailing space; the selection style adds a 1-col left border,
-	// so both selected and unselected rows reserve one leading column.
-	nameWidth := m.width - statsWidth - 2
-	if nameWidth < 1 {
-		nameWidth = 1
+	// Content occupies m.width minus the two columns the row style adds (left
+	// padding, or the selection bar + padding on the selected row).
+	inner := m.width - 2
+	if inner < 1 {
+		inner = 1
 	}
-	name := truncateDisplay(m.relPath(f.Path), nameWidth)
 
-	gap := m.width - lipgloss.Width(name) - statsWidth - 2
+	nameWidth := inner - statsWidth - 1 // -1 for the gap before the counts
+	var name string
+	if nameWidth >= 1 {
+		name = truncateDisplayLeft(m.relPath(f.Path), nameWidth)
+	}
+
+	gap := inner - lipgloss.Width(name) - statsWidth
 	if gap < 1 {
 		gap = 1
 	}
