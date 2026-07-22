@@ -57,6 +57,14 @@ var RightSidebarPanel lipgloss.Style
 // RightSidebarPanelFocused is the changed-files panel when it has focus.
 var RightSidebarPanelFocused lipgloss.Style
 
+// PaneTitleActive is the lit reverse-video title bar shown on the focused pane
+// (blue background, bg-colored text). Derives from the palette so it follows
+// every theme, including light ones (fg=Bg keeps contrast on the blue bar).
+var PaneTitleActive lipgloss.Style
+
+// PaneTitleInactive is the dim title shown on an unfocused pane.
+var PaneTitleInactive lipgloss.Style
+
 // SidebarTitle is the "SESSIONS" header at the top of the sidebar.
 var SidebarTitle lipgloss.Style
 
@@ -323,7 +331,7 @@ func buildStyles(p Palette) {
 
 	SidebarPanelFocused = lipgloss.NewStyle().
 		BorderRight(true).
-		BorderStyle(lipgloss.NormalBorder()).
+		BorderStyle(lipgloss.ThickBorder()).
 		BorderForeground(ColorBlue)
 
 	// RightSidebarPanel is the changed-files panel container. It uses a LEFT
@@ -336,7 +344,7 @@ func buildStyles(p Palette) {
 	// RightSidebarPanelFocused is the changed-files panel when it has focus.
 	RightSidebarPanelFocused = lipgloss.NewStyle().
 		BorderLeft(true).
-		BorderStyle(lipgloss.NormalBorder()).
+		BorderStyle(lipgloss.ThickBorder()).
 		BorderForeground(ColorBlue)
 
 	SidebarTitle = lipgloss.NewStyle().
@@ -411,8 +419,17 @@ func buildStyles(p Palette) {
 		PaddingLeft(1).
 		PaddingRight(1).
 		BorderBottom(true).
-		BorderStyle(lipgloss.NormalBorder()).
+		BorderStyle(lipgloss.ThickBorder()).
 		BorderForeground(ColorBlue)
+
+	PaneTitleActive = lipgloss.NewStyle().
+		Background(ColorBlue).
+		Foreground(ColorBg).
+		Bold(true)
+
+	PaneTitleInactive = lipgloss.NewStyle().
+		Foreground(ColorDimText).
+		PaddingLeft(1)
 
 	PreviewHeaderLabel = lipgloss.NewStyle().Foreground(ColorGray)
 	PreviewHeaderValue = lipgloss.NewStyle().Foreground(ColorGray)

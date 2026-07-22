@@ -69,9 +69,11 @@ func TestBuildStylesDefaultMatchesTokyoNight(t *testing.T) {
 		"SidebarPanel": lipgloss.NewStyle().BorderRight(true).
 			BorderStyle(lipgloss.NormalBorder()).BorderForeground(cBorder),
 		"SidebarPanelFocused": lipgloss.NewStyle().BorderRight(true).
-			BorderStyle(lipgloss.NormalBorder()).BorderForeground(cBlue),
+			BorderStyle(lipgloss.ThickBorder()).BorderForeground(cBlue),
 		"SidebarTitle":      lipgloss.NewStyle().Foreground(cBlue).Bold(true).PaddingLeft(1),
 		"SidebarTitleCount": lipgloss.NewStyle().Foreground(cGray),
+		"PaneTitleActive":   lipgloss.NewStyle().Background(cBlue).Foreground(cBg).Bold(true),
+		"PaneTitleInactive": lipgloss.NewStyle().Foreground(cDimText).PaddingLeft(1),
 		"SidebarItem":       lipgloss.NewStyle().Foreground(cFg).PaddingLeft(2),
 		"SidebarItemSelected": lipgloss.NewStyle().Foreground(cBlue).Background(cSelection).
 			Bold(true).PaddingLeft(1).BorderLeft(true).BorderStyle(SelectionIndicator).
@@ -91,7 +93,7 @@ func TestBuildStylesDefaultMatchesTokyoNight(t *testing.T) {
 		"PreviewHeader": lipgloss.NewStyle().Foreground(cFg).PaddingLeft(1).PaddingRight(1).
 			BorderBottom(true).BorderStyle(lipgloss.NormalBorder()).BorderForeground(cBorder),
 		"PreviewHeaderFocused": lipgloss.NewStyle().Foreground(cFg).PaddingLeft(1).PaddingRight(1).
-			BorderBottom(true).BorderStyle(lipgloss.NormalBorder()).BorderForeground(cBlue),
+			BorderBottom(true).BorderStyle(lipgloss.ThickBorder()).BorderForeground(cBlue),
 		"PreviewHeaderLabel":      lipgloss.NewStyle().Foreground(cGray),
 		"PreviewHeaderValue":      lipgloss.NewStyle().Foreground(cGray),
 		"PreviewHeaderBranch":     lipgloss.NewStyle().Foreground(cGreen),
@@ -164,6 +166,8 @@ func TestBuildStylesDefaultMatchesTokyoNight(t *testing.T) {
 		"SidebarPanelFocused":           SidebarPanelFocused,
 		"SidebarTitle":                  SidebarTitle,
 		"SidebarTitleCount":             SidebarTitleCount,
+		"PaneTitleActive":               PaneTitleActive,
+		"PaneTitleInactive":             PaneTitleInactive,
 		"SidebarItem":                   SidebarItem,
 		"SidebarItemSelected":           SidebarItemSelected,
 		"SidebarGroupHeader":            SidebarGroupHeader,
