@@ -126,6 +126,8 @@ cpu_active_threshold: 5
 theme: "tokyo-night"
 claude_command: "claude"
 check_for_updates: true
+focus_last_session: false
+remember_group_state: false
 # editor: "cursor"   # falls back to $EDITOR, then vi
 # new_session_dir: "~/projects"
 ```
@@ -147,6 +149,8 @@ check_for_updates: true
 | `theme` | `tokyo-night` | Color theme name |
 | `claude_command` | `claude` | Command to start Claude (sent via send-keys, supports aliases) |
 | `check_for_updates` | `true` | Check GitHub on startup for a newer release and show "update available" in the status bar |
+| `focus_last_session` | `false` | On startup, re-focus the session you last had selected; falls back to the first session if it no longer exists |
+| `remember_group_state` | `false` | On startup, restore the open/closed state of groups you manually toggled |
 | `editor` | `$EDITOR`, else `vi` | Editor for opening changed files from the changed-files sidebar; may include flags. GUI editors (`cursor`, `code`, `zed`, ...) open in their own window; terminal editors (`vim`, `nvim`, `nano`, ...) take over the TUI and return on exit |
 | `new_session_dir` | `~` | Working directory for new tmux sessions created with `N` |
 
