@@ -208,8 +208,13 @@ func (m PreviewModel) renderHeader() string {
 
 	var leftParts []string
 
-	// Project name in blue bold.
-	leftParts = append(leftParts, lipgloss.NewStyle().Foreground(styles.ColorBlue).Bold(true).Render(projectName))
+	// Project name: a lit reverse-video chip when the preview is focused
+	// (passthrough), plain blue bold otherwise.
+	if m.passthrough {
+		leftParts = append(leftParts, styles.PaneTitleActive.Render(" ▸ "+projectName+" "))
+	} else {
+		leftParts = append(leftParts, lipgloss.NewStyle().Foreground(styles.ColorBlue).Bold(true).Render(projectName))
+	}
 
 	// Git branch in green.
 	if s.GitBranch != "" {
