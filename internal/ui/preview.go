@@ -189,7 +189,6 @@ func (m PreviewModel) View() string {
 }
 
 func (m PreviewModel) renderHeader() string {
-	sep := styles.PreviewSep.Render(" \u2022 ")
 	maxWidth := m.width - 3 // account for left padding
 	if maxWidth < 10 {
 		maxWidth = 10
@@ -206,101 +205,141 @@ func (m PreviewModel) renderHeader() string {
 		projectName = "unknown"
 	}
 
-	var leftParts []string
-
-	// Project name: a lit reverse-video chip when the preview is focused
-	// (passthrough), plain blue bold otherwise.
-	if m.passthrough {
-		leftParts = append(leftParts, styles.PaneTitleActive.Render(" ▸ "+projectName+" "))
-	} else {
-		leftParts = append(leftParts, lipgloss.NewStyle().Foreground(styles.ColorBlue).Bold(true).Render(projectName))
-	}
-
-	// Git branch in green.
-	if s.GitBranch != "" {
-		leftParts = append(leftParts, styles.PreviewHeaderBranch.Render(s.GitBranch))
-	}
-
-	// Status text badge (colored).
-	var statusBadge string
+	// Status label shared by both render paths.
+	statusLabel := "CLOSED"
 	switch s.Status {
 	case session.StatusActive:
-		statusBadge = styles.StatusBadgeActive.Render("ACTIVE")
+		statusLabel = "ACTIVE"
 	case session.StatusWaiting:
-		statusBadge = styles.StatusBadgeWaiting.Render("WAITING")
+		statusLabel = "WAITING"
 	case session.StatusIdle:
-		statusBadge = styles.StatusBadgeIdle.Render("IDLE")
-	default:
-		statusBadge = styles.StatusBadgeIdle.Render("CLOSED")
-	}
-	leftParts = append(leftParts, statusBadge)
-
-	// Cache-expiry warning, right next to the status badge so it can't be
-	// missed when scanning many sessions. A session idle past the prompt-cache
-	// TTL re-processes its whole context on the next message / on resume.
-	if cacheExpired(s, time.Now()) {
-		leftParts = append(leftParts, styles.PreviewHeaderAlert.Render("cache expired"))
+		statusLabel = "IDLE"
 	}
 
-	// Tmux target in gray (e.g. "infra:1.2").
-	if s.TmuxTarget != "" {
-		leftParts = append(leftParts, styles.PreviewHeaderLabel.Render(s.TmuxTarget))
-	}
-
-	leftLine := strings.Join(leftParts, sep)
-
-	// Right side: uptime, message count, CPU, MEM, and relative time.
-	var rightParts []string
-
-	// Uptime (from metrics).
+	// Right-side metrics as plain strings (styled per render path below).
+	var rightPlain []string
 	if m.metrics != nil && !m.metrics.StartTime.IsZero() {
-		uptime := time.Since(m.metrics.StartTime)
-		uptimeStr := formatUptime(uptime)
-		rightParts = append(rightParts, styles.PreviewHeaderLabel.Render("\u23f1 ")+styles.PreviewHeaderValue.Render(uptimeStr))
+		rightPlain = append(rightPlain, "⏱ "+formatUptime(time.Since(m.metrics.StartTime)))
 	}
-
-	// Message count (from metrics).
 	if m.metrics != nil && m.metrics.MessageCount > 0 {
-		rightParts = append(rightParts, styles.PreviewHeaderLabel.Render("msgs ")+styles.PreviewHeaderValue.Render(fmt.Sprintf("%d", m.metrics.MessageCount)))
+		rightPlain = append(rightPlain, fmt.Sprintf("msgs %d", m.metrics.MessageCount))
 	}
-
-	rightParts = append(rightParts, styles.PreviewHeaderValue.Render(fmt.Sprintf("CPU %.1f%%", s.CPU)))
-	rightParts = append(rightParts, styles.PreviewHeaderValue.Render(fmt.Sprintf("MEM %.0fMB", s.Memory)))
-
+	rightPlain = append(rightPlain, fmt.Sprintf("CPU %.1f%%", s.CPU))
+	rightPlain = append(rightPlain, fmt.Sprintf("MEM %.0fMB", s.Memory))
 	if !s.LastActivity.IsZero() {
-		relTime := relativeTime(time.Since(s.LastActivity))
-		rightParts = append(rightParts, styles.PreviewHeaderValue.Render(relTime))
+		rightPlain = append(rightPlain, relativeTime(time.Since(s.LastActivity)))
 	}
 
-	rightLine := strings.Join(rightParts, sep)
+	const sepStr = " • "
 
 	// The header must render on exactly one line (+ its bottom border = 2 rows):
 	// the viewport height is sized as paneHeight-2 assuming a single-line header,
-	// so a wrapped header would steal a row and push the last content line
-	// off-screen. Both header styles carry PaddingLeft(1)+PaddingRight(1), so the
-	// text area is maxWidth-2; budget the gap against that and truncate as a hard
-	// guard so an overflowing header is cut, never wrapped.
+	// so a wrapped header would steal a row. Both header styles carry
+	// PaddingLeft(1)+PaddingRight(1), so the text area is maxWidth-2; budget the
+	// gap against that and truncate as a hard guard so overflow is cut, not wrapped.
 	const headerPadding = 2
 	contentWidth := maxWidth - headerPadding
 	if contentWidth < 1 {
 		contentWidth = 1
 	}
 
-	leftWidth := lipgloss.Width(leftLine)
-	rightWidth := lipgloss.Width(rightLine)
-	gap := contentWidth - leftWidth - rightWidth
-	if gap < 1 {
-		gap = 1
-	}
+	var headerLine string
+	var headerStyle lipgloss.Style
 
-	headerLine := ansi.Truncate(leftLine+strings.Repeat(" ", gap)+rightLine, contentWidth, "")
-
-	// In passthrough mode, use a blue border on the header to visually
-	// indicate the pane is focused.
-	headerStyle := styles.PreviewHeader
 	if m.passthrough {
+		// --- Focused: two-tone band = blue identity chip + muted metrics band. ---
+		// Every band segment (and its separators/fill) carries the muted
+		// background so the fill tiles continuously with no ANSI-reset gaps,
+		// mirroring the sidebar's selected-row rendering.
+		bg := styles.ColorBgHover
+
+		// Identity chip: blue reverse-video, with the branch folded in.
+		chipText := " ▸ " + projectName
+		if s.GitBranch != "" {
+			chipText += sepStr + s.GitBranch
+		}
+		chipText += " "
+		// Cap the identity chip so the metrics band always keeps room on
+		// narrow panes; the final truncate below is the last-resort guard.
+		if maxChip := contentWidth - 12; maxChip >= 8 && lipgloss.Width(chipText) > maxChip {
+			chipText = truncateDisplay(chipText, maxChip)
+		}
+		chip := styles.PaneTitleActive.Render(chipText)
+		bandWidth := contentWidth - lipgloss.Width(chip)
+		if bandWidth < 1 {
+			bandWidth = 1
+		}
+
+		bandSep := lipgloss.NewStyle().Foreground(styles.ColorGray).Background(bg).Render(sepStr)
+
+		// Left of band: status (semantic color), cache warning, tmux target.
+		statusFg := styles.ColorGray
+		switch s.Status {
+		case session.StatusActive:
+			statusFg = styles.ColorGreen
+		case session.StatusWaiting:
+			statusFg = styles.ColorAmber
+		}
+		var bandLeft []string
+		bandLeft = append(bandLeft, lipgloss.NewStyle().Foreground(statusFg).Background(bg).Bold(true).Render(statusLabel))
+		if cacheExpired(s, time.Now()) {
+			bandLeft = append(bandLeft, lipgloss.NewStyle().Foreground(styles.ColorRed).Background(bg).Bold(true).Render("cache expired"))
+		}
+		if s.TmuxTarget != "" {
+			bandLeft = append(bandLeft, lipgloss.NewStyle().Foreground(styles.ColorGray).Background(bg).Render(s.TmuxTarget))
+		}
+
+		// Right of band: metrics, values on the muted bg.
+		valStyle := lipgloss.NewStyle().Foreground(styles.ColorCyan).Background(bg)
+		var bandRight []string
+		for _, v := range rightPlain {
+			bandRight = append(bandRight, valStyle.Render(v))
+		}
+
+		// Connect the muted band to the blue identity chip with a separator dot
+		// so it reads "... branch • ACTIVE" instead of the name butting straight
+		// against the status. The chip supplies the leading space; the seam adds
+		// the dot on the muted background.
+		seam := lipgloss.NewStyle().Foreground(styles.ColorGray).Background(bg).Render("• ")
+		leftStr := seam + strings.Join(bandLeft, bandSep)
+		rightStr := strings.Join(bandRight, bandSep)
+		gap := bandWidth - lipgloss.Width(leftStr) - lipgloss.Width(rightStr)
+		if gap < 1 {
+			gap = 1
+		}
+		gapStr := lipgloss.NewStyle().Background(bg).Render(strings.Repeat(" ", gap))
+		bandInner := ansi.Truncate(leftStr+gapStr+rightStr, bandWidth, "")
+		band := lipgloss.NewStyle().Background(bg).Width(bandWidth).Render(bandInner)
+
+		// Hard single-line guard (mirrors the unfocused path): never let the
+		// composed bar exceed the content width and wrap into a second row.
+		headerLine = ansi.Truncate(chip+band, contentWidth, "")
 		headerStyle = styles.PreviewHeaderFocused
+	} else {
+		// --- Unfocused: flat dim, matching the inactive SESSIONS / CHANGED
+		// FILES titles. All fields render in DimText; the thin gray underline
+		// carries the (lack of) focus. ---
+		leftPlain := []string{projectName}
+		if s.GitBranch != "" {
+			leftPlain = append(leftPlain, s.GitBranch)
+		}
+		leftPlain = append(leftPlain, statusLabel)
+		if cacheExpired(s, time.Now()) {
+			leftPlain = append(leftPlain, "cache expired")
+		}
+		if s.TmuxTarget != "" {
+			leftPlain = append(leftPlain, s.TmuxTarget)
+		}
+		leftStr := strings.Join(leftPlain, sepStr)
+		rightStr := strings.Join(rightPlain, sepStr)
+		gap := contentWidth - lipgloss.Width(leftStr) - lipgloss.Width(rightStr)
+		if gap < 1 {
+			gap = 1
+		}
+		headerLine = ansi.Truncate(leftStr+strings.Repeat(" ", gap)+rightStr, contentWidth, "")
+		headerStyle = styles.PreviewHeader.Foreground(styles.ColorDimText)
 	}
+
 	return headerStyle.Width(maxWidth).Render(headerLine)
 }
 
