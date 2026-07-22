@@ -51,6 +51,12 @@ var SidebarPanel lipgloss.Style
 // passthrough mode -- blue right border to match mockup.
 var SidebarPanelFocused lipgloss.Style
 
+// RightSidebarPanel is the changed-files panel container (left border).
+var RightSidebarPanel lipgloss.Style
+
+// RightSidebarPanelFocused is the changed-files panel when it has focus.
+var RightSidebarPanelFocused lipgloss.Style
+
 // SidebarTitle is the "SESSIONS" header at the top of the sidebar.
 var SidebarTitle lipgloss.Style
 
@@ -317,6 +323,19 @@ func buildStyles(p Palette) {
 
 	SidebarPanelFocused = lipgloss.NewStyle().
 		BorderRight(true).
+		BorderStyle(lipgloss.NormalBorder()).
+		BorderForeground(ColorBlue)
+
+	// RightSidebarPanel is the changed-files panel container. It uses a LEFT
+	// border as its separator (mirror of SidebarPanel's right border).
+	RightSidebarPanel = lipgloss.NewStyle().
+		BorderLeft(true).
+		BorderStyle(lipgloss.NormalBorder()).
+		BorderForeground(ColorBorder)
+
+	// RightSidebarPanelFocused is the changed-files panel when it has focus.
+	RightSidebarPanelFocused = lipgloss.NewStyle().
+		BorderLeft(true).
 		BorderStyle(lipgloss.NormalBorder()).
 		BorderForeground(ColorBlue)
 

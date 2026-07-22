@@ -44,6 +44,10 @@ const (
 	// ModeResumePicker shows the session picker overlay used when resuming a
 	// closed session: it chooses which tmux session the resume opens in.
 	ModeResumePicker
+
+	// ModeChangedFiles gives focus to the right-hand changed-files panel: j/k
+	// navigate the edited files and Enter opens the selected file in $EDITOR.
+	ModeChangedFiles
 )
 
 // dirAction records which session-creation flow opened the directory picker, so
@@ -83,6 +87,8 @@ func (m Mode) String() string {
 		return "dir picker"
 	case ModeResumePicker:
 		return "resume picker"
+	case ModeChangedFiles:
+		return "changed files"
 	default:
 		return "unknown"
 	}

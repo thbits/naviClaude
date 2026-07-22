@@ -114,6 +114,7 @@ func breathingTickCmd() tea.Cmd {
 type Model struct {
 	// UI components
 	sidebar      ui.SidebarModel
+	rightSidebar ui.ChangedFilesModel
 	preview      ui.PreviewModel
 	statusbar    ui.StatusBarModel
 	search       ui.SearchModel
@@ -160,6 +161,10 @@ type Model struct {
 	currentMetrics   *session.SessionMetrics
 	metricsSessionID string // session ID the metrics belong to
 
+	// Changed-files right sidebar
+	rightPanelOpen        bool   // whether the changed-files sidebar is expanded
+	changedFilesSessionID string // session ID the loaded changed files belong to
+
 	// Session aliases (user-defined display names)
 	aliasStore *session.AliasStore
 
@@ -200,6 +205,7 @@ func New(version string) Model {
 	m := Model{
 		// UI
 		sidebar:      ui.NewSidebar(30, 24),
+		rightSidebar: ui.NewChangedFiles(30, 24),
 		preview:      ui.NewPreview(50, 24),
 		statusbar:    ui.NewStatusBar(80, version),
 		search:       ui.NewSearch(),
@@ -386,6 +392,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.metricsSessionID = msg.sessionID
 			m.sidebar.SetMetrics(msg.metrics)
 			m.preview.SetMetrics(msg.metrics)
+		}
+		return m, nil
+
+	case changedFilesMsg:
+		// Only apply if the changed files are still for the selected session
+		// (a slow read must not repaint after the user navigated away).
+		if sel := m.sidebar.SelectedSession(); sel != nil && sel.ID == msg.sessionID {
+			m.changedFilesSessionID = msg.sessionID
+			cwd := sel.CWD
+			m.rightSidebar.SetFiles(msg.files, cwd)
+		}
+		return m, nil
+
+	case editorDoneMsg:
+		// The $EDITOR process exited. Surface a launch/exit failure; otherwise
+		// there is nothing to do -- the preview tick repaints any on-disk change.
+		if msg.err != nil {
+			m.err = fmt.Errorf("editor: %w", msg.err)
+			m.statusbar.SetError(m.err.Error())
 		}
 		return m, nil
 
@@ -633,7 +658,8 @@ func (m Model) View() string {
 	}
 
 	sidebarWidth := m.sidebarWidth()
-	previewWidth := m.width - sidebarWidth
+	rightWidth := m.rightSidebarWidth()
+	previewWidth := m.width - sidebarWidth - rightWidth
 
 	// Render chrome first so we can measure their actual heights.
 	titleBar := m.renderTitleBar()
@@ -702,7 +728,25 @@ func (m Model) View() string {
 		MaxHeight(contentHeight).
 		Render(previewView)
 
-	mainContent := lipgloss.JoinHorizontal(lipgloss.Top, sidebarView, previewView)
+	columns := []string{sidebarView, previewView}
+
+	// The changed-files sidebar sits to the right of the preview, using a LEFT
+	// border as its separator (mirror of the left sidebar's right border).
+	if rightWidth > 0 {
+		m.rightSidebar.SetSize(rightWidth-1, contentHeight)
+		rightStyle := styles.RightSidebarPanel
+		if m.mode == ModeChangedFiles {
+			rightStyle = styles.RightSidebarPanelFocused
+		}
+		rightView := rightStyle.
+			Width(rightWidth - 1). // -1 for the border character
+			Height(contentHeight).
+			MaxHeight(contentHeight).
+			Render(m.rightSidebar.View())
+		columns = append(columns, rightView)
+	}
+
+	mainContent := lipgloss.JoinHorizontal(lipgloss.Top, columns...)
 
 	screen := lipgloss.JoinVertical(lipgloss.Left, titleBar, mainContent, statusView)
 
@@ -787,6 +831,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleDirPickerKey(msg)
 	case ModeResumePicker:
 		return m.handleResumePickerKey(msg)
+	case ModeChangedFiles:
+		return m.handleChangedFilesKey(msg)
 	}
 	return m, nil
 }
@@ -817,7 +863,7 @@ func (m Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.sidebar.ExpandAll() // show all groups including Closed during search
 		return m, nil
 
-	case KeyEnter, KeyTab:
+	case KeyEnter:
 		sess := m.sidebar.SelectedSession()
 		if sess == nil {
 			// Cursor is on a group header; delegate to sidebar for collapse/expand.
@@ -826,20 +872,17 @@ func (m Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 		if sess.Status == session.StatusClosed {
-			if key == KeyEnter {
-				// Enter resumes a closed session: open the target picker, then
-				// focus the resumed session in passthrough.
-				return m.openResumePicker(sess, false)
-			}
-			// Tab still shows the conversation history in the preview pane.
-			m.selectPreviewSession(sess)
-			return m, m.loadClosedPreviewCmd(sess)
+			// Enter resumes a closed session: open the target picker, then
+			// focus the resumed session in passthrough.
+			return m.openResumePicker(sess, false)
 		}
 		// Enter passthrough mode for active sessions.
-		m.mode = ModePassthrough
-		m.preview.SetPassthrough(true)
-		m.statusbar.SetMode(ModePassthrough.String())
-		return m, nil
+		return m, m.setFocus(ModePassthrough)
+
+	case KeyTab, KeyExitPassthrough3:
+		// Tab / Shift+Tab cycle focus across the visible panes (list, preview
+		// passthrough, changed-files) rather than only toggling passthrough.
+		return m, m.setFocus(m.nextFocusMode(key == KeyTab))
 
 	case m.keys.Jump:
 		sess := m.sidebar.SelectedSession()
@@ -879,6 +922,24 @@ func (m Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.statusbar.SetMode(ModeStats.String())
 		return m, m.computeStatsCmd()
 
+	case m.keys.ToggleChanged:
+		// Open the changed-files sidebar (if needed) and give it focus, loading
+		// the current selection's edited files. From the list this both opens a
+		// closed panel and re-focuses an already-open one.
+		sel := m.sidebar.SelectedSession()
+		if sel == nil {
+			return m, nil
+		}
+		wasOpen := m.rightPanelOpen
+		m.rightPanelOpen = true
+		cmd := m.setFocus(ModeChangedFiles)
+		if !wasOpen {
+			// Only the open transition changes the layout width.
+			m.resizeComponents()
+			m.resizePreviewedPane()
+		}
+		return m, cmd
+
 	case KeyThemePicker:
 		m.themePicker.Show(m.cfg.Theme)
 		m.mode = ModeThemePicker
@@ -906,6 +967,12 @@ func (m Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if cmd := m.reloadMetricsForSelection(sel); cmd != nil {
 				cmds = append(cmds, cmd)
 			}
+			// Refresh the changed-files list if the panel is open.
+			if m.rightPanelOpen {
+				if cmd := m.reloadChangedFilesForSelection(sel); cmd != nil {
+					cmds = append(cmds, cmd)
+				}
+			}
 			// Auto-load conversation preview for closed sessions.
 			if sel.Status == session.StatusClosed {
 				cmds = append(cmds, m.loadClosedPreviewCmd(sel))
@@ -915,8 +982,48 @@ func (m Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.selectPreviewSession(nil)
 			// Show group summary when hovering on a group header.
 			m.preview.SetGroupSummary(groupName, m.sidebar.GroupSessions(groupName))
+			// No session selected: clear the changed-files list.
+			if m.rightPanelOpen {
+				m.rightSidebar.Reset()
+				m.changedFilesSessionID = ""
+			}
 		}
 		return m, tea.Batch(cmds...)
+	}
+}
+
+// handleChangedFilesKey handles keys while the changed-files sidebar has focus.
+// The panel is non-modal: Esc/Tab drop focus back to the session list but leave
+// the panel open (so you keep working and it tracks the selection), the toggle
+// key collapses it, j/k/g/G navigate the list, and e/Enter open the selected
+// file in $EDITOR.
+func (m Model) handleChangedFilesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	key := msg.String()
+
+	switch key {
+	case m.keys.ToggleChanged:
+		// Collapse the panel entirely and return to the session list.
+		m.rightPanelOpen = false
+		cmd := m.setFocus(ModeList)
+		m.resizeComponents()
+		m.resizePreviewedPane()
+		return m, cmd
+
+	case KeyMenuCancel:
+		// Esc drops focus but keeps the panel open; width is unchanged.
+		return m, m.setFocus(ModeList)
+
+	case KeyTab, KeyExitPassthrough3:
+		// Tab / Shift+Tab cycle to the next / previous pane (panel stays open).
+		return m, m.setFocus(m.nextFocusMode(key == KeyTab))
+
+	case KeyEnter, "e":
+		return m, m.openInEditorCmd(m.rightSidebar.SelectedFile())
+
+	default:
+		var cmd tea.Cmd
+		m.rightSidebar, cmd = m.rightSidebar.Update(msg)
+		return m, cmd
 	}
 }
 
@@ -924,12 +1031,13 @@ func (m Model) handlePassthroughKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
 
 	switch key {
-	case KeyExitPassthrough, KeyExitPassthrough2, KeyExitPassthrough3:
-		m.mode = ModeList
-		m.preview.SetPassthrough(false)
-		m.pendingNewTarget = "" // stop forcing cursor to new session
-		m.statusbar.SetMode(ModeList.String())
-		return m, nil
+	case KeyExitPassthrough2:
+		// Ctrl+] always drops straight back to the session list.
+		return m, m.setFocus(ModeList)
+
+	case KeyExitPassthrough, KeyExitPassthrough3:
+		// Tab / Shift+Tab cycle to the next / previous pane.
+		return m, m.setFocus(m.nextFocusMode(key == KeyExitPassthrough))
 
 	case KeyJumpFromPT:
 		return m.jumpToPane()
@@ -2015,7 +2123,8 @@ func (m Model) loadClosedPreviewCmd(sess *session.Session) tea.Cmd {
 
 func (m *Model) resizeComponents() {
 	sidebarWidth := m.sidebarWidth()
-	previewWidth := m.width - sidebarWidth
+	rightWidth := m.rightSidebarWidth()
+	previewWidth := m.width - sidebarWidth - rightWidth
 
 	// Measure chrome heights dynamically to stay in sync with View().
 	titleHeight := lipgloss.Height(m.renderTitleBar())
@@ -2028,6 +2137,9 @@ func (m *Model) resizeComponents() {
 
 	m.sidebar.SetSize(sidebarWidth-1, contentHeight)
 	m.preview.SetSize(previewWidth, contentHeight)
+	if rightWidth > 0 {
+		m.rightSidebar.SetSize(rightWidth-1, contentHeight)
+	}
 	m.search.SetSize(sidebarWidth-1, contentHeight)
 	m.help.SetSize(m.width, m.height)
 	m.detail.SetSize(m.width, m.height)
@@ -2043,9 +2155,20 @@ func (m *Model) resizeComponents() {
 
 // previewPaneDimensions returns the width and height that managed tmux panes
 // should be resized to so their content fits the preview viewport exactly.
+// resizePreviewedPane re-resizes the currently previewed tmux pane to the
+// current preview width. Call it after the preview column changes width without
+// a WindowSizeMsg (e.g. toggling the changed-files panel) so captured content
+// keeps matching the viewport. Mirrors the WindowSizeMsg resize block.
+func (m *Model) resizePreviewedPane() {
+	if m.resizedWinTarget != "" {
+		paneW, _ := m.previewPaneDimensions()
+		m.tmuxClient.ResizeWindow(m.resizedWinTarget, paneW, 0)
+	}
+}
+
 func (m Model) previewPaneDimensions() (int, int) {
 	sidebarWidth := m.sidebarWidth()
-	previewWidth := m.width - sidebarWidth
+	previewWidth := m.width - sidebarWidth - m.rightSidebarWidth()
 	paneW := previewWidth - 2 // preview left/right padding
 	if paneW < 1 {
 		paneW = 1
@@ -2095,6 +2218,27 @@ func (m Model) sidebarWidth() int {
 	return w
 }
 
+// rightSidebarWidth returns the width of the changed-files panel, or 0 when it
+// is collapsed. It mirrors sidebarWidth's percentage-with-clamps shape but is
+// capped so the left sidebar and preview always keep room.
+func (m Model) rightSidebarWidth() int {
+	if !m.rightPanelOpen {
+		return 0
+	}
+	w := m.width * m.sidebarWidthPct / 100
+	if w < 24 {
+		w = 24
+	}
+	// Keep the left sidebar (>=20) plus a minimum preview (>=20) usable.
+	if max := m.width - m.sidebarWidth() - 20; w > max {
+		w = max
+	}
+	if w < 1 {
+		w = 0
+	}
+	return w
+}
+
 // ---------------------------------------------------------------------------
 // Session selection helper
 // ---------------------------------------------------------------------------
@@ -2125,6 +2269,76 @@ func (m *Model) reloadMetricsForSelection(sel *session.Session) tea.Cmd {
 	m.sidebar.SetMetrics(nil)
 	m.preview.SetMetrics(nil)
 	return loadMetricsCmd(sel)
+}
+
+// reloadChangedFilesForSelection clears the changed-files list and reloads it
+// when the selection differs from the one currently loaded. It returns the load
+// command (or nil when the selection is unchanged or has no ID). Only meaningful
+// while the right panel is open; callers guard on m.rightPanelOpen.
+func (m *Model) reloadChangedFilesForSelection(sel *session.Session) tea.Cmd {
+	if sel == nil || sel.ID == "" || sel.ID == m.changedFilesSessionID {
+		return nil
+	}
+	m.changedFilesSessionID = sel.ID
+	m.rightSidebar.SetFiles(nil, sel.CWD)
+	return loadChangedFilesCmd(sel)
+}
+
+// setFocus moves keyboard focus to the given pane, applying the passthrough
+// enter/leave side effects and syncing the status bar. Entering the changed-
+// files pane refreshes its list for the current selection. It returns any
+// command the transition needs run.
+func (m *Model) setFocus(target Mode) tea.Cmd {
+	if m.mode == ModePassthrough && target != ModePassthrough {
+		m.preview.SetPassthrough(false)
+		m.pendingNewTarget = ""
+	}
+	if target == ModePassthrough && m.mode != ModePassthrough {
+		m.preview.SetPassthrough(true)
+	}
+	m.mode = target
+	m.statusbar.SetMode(target.String())
+
+	if target == ModeChangedFiles {
+		if sel := m.sidebar.SelectedSession(); sel != nil {
+			return m.reloadChangedFilesForSelection(sel)
+		}
+	}
+	return nil
+}
+
+// nextFocusMode returns the pane to focus when cycling with Tab (forward) or
+// Shift+Tab (backward). The ring runs left-to-right across the layout -- the
+// session list, then the preview (only when the selection is an active session
+// that can receive passthrough keys), then the changed-files panel (only when
+// it is open) -- and wraps around. Unavailable panes are skipped, so with the
+// panel closed this reduces to the normal list<->passthrough toggle.
+func (m Model) nextFocusMode(forward bool) Mode {
+	sel := m.sidebar.SelectedSession()
+	canPassthrough := sel != nil && sel.Status != session.StatusClosed && sel.TmuxTarget != ""
+
+	ring := []Mode{ModeList}
+	if canPassthrough {
+		ring = append(ring, ModePassthrough)
+	}
+	if m.rightPanelOpen {
+		ring = append(ring, ModeChangedFiles)
+	}
+
+	idx := 0
+	for i, mode := range ring {
+		if mode == m.mode {
+			idx = i
+			break
+		}
+	}
+	n := len(ring)
+	if forward {
+		idx = (idx + 1) % n
+	} else {
+		idx = (idx - 1 + n) % n
+	}
+	return ring[idx]
 }
 
 // applyAliases overlays user-defined display-name aliases onto the given

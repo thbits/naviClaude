@@ -20,6 +20,7 @@ type KeyMap struct {
 	Detail         string
 	Stats          string
 	Help           string
+	ToggleChanged  string
 }
 
 // DefaultKeyMap returns the default key bindings.
@@ -36,6 +37,7 @@ func DefaultKeyMap() KeyMap {
 		Detail:         "d",
 		Stats:          "s",
 		Help:           "?",
+		ToggleChanged:  "F",
 	}
 }
 
@@ -64,6 +66,7 @@ func keyFieldBindings(kb config.KeyBindings, km *KeyMap) []keyFieldBinding {
 		{"detail", kb.Detail, &km.Detail},
 		{"stats", kb.Stats, &km.Stats},
 		{"help", kb.Help, &km.Help},
+		{"toggle_changed", kb.ToggleChanged, &km.ToggleChanged},
 	}
 }
 
@@ -88,17 +91,23 @@ type HelpBinding struct {
 // HelpBindings returns bindings for the help overlay, reflecting the current config.
 func (km KeyMap) HelpBindings() []HelpBinding {
 	return []HelpBinding{
+		// Move around
 		{"j/k", "Navigate sessions"},
-		{"Enter/Tab", "Focus / resume closed"},
-		{km.Jump, "Jump / fast-resume closed"},
+		{"Tab/Shift+Tab", "Cycle panes"},
 		{"Ctrl+U/Ctrl+D", "Scroll preview"},
 		{km.Search, "Search"},
+		// Act on the selected session
+		{"Enter", "Focus / resume closed"},
+		{km.Jump, "Jump / fast-resume closed"},
 		{km.NewSession, "New session"},
 		{km.NewTmuxSession, "New tmux session"},
-		{km.KillSession, "Kill session"},
 		{km.RenameSession, "Rename session"},
+		{km.KillSession, "Kill session"},
+		// Inspect the selected session
+		{km.ToggleChanged, "Changed files (e opens in $EDITOR)"},
 		{km.Detail, "Detail"},
 		{km.Stats, "Stats"},
+		// App
 		{KeyThemePicker, "Theme picker"},
 		{km.Help, "Help"},
 		{km.Quit, "Quit"},
@@ -108,15 +117,20 @@ func (km KeyMap) HelpBindings() []HelpBinding {
 // StatusHints returns the list-mode status bar hints reflecting the current config.
 func (km KeyMap) StatusHints() []HelpBinding {
 	return []HelpBinding{
+		// Move around / find
+		{km.Search, "search"},
+		// Act on the selected session
 		{"Enter", "focus/resume"},
 		{km.Jump, "jump"},
-		{km.Search, "search"},
 		{km.NewSession, "new"},
 		{km.NewTmuxSession, "new tmux session"},
-		{km.KillSession, "kill"},
 		{km.RenameSession, "rename"},
+		{km.KillSession, "kill"},
+		// Inspect the selected session
+		{km.ToggleChanged, "changed files"},
 		{km.Detail, "detail"},
 		{km.Stats, "stats"},
+		// App
 		{km.Help, "help"},
 	}
 }

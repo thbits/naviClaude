@@ -35,6 +35,7 @@ type Config struct {
 	GroupSortOrder     string      `yaml:"group_sort_order"`     // "name" (alphabetical, default) or "activity"
 	SessionSortOrder   string      `yaml:"session_sort_order"`   // "name" (alphabetical, default) or "activity"
 	CheckForUpdates    bool        `yaml:"check_for_updates"`    // check GitHub for a newer release on startup (default true)
+	Editor             string      `yaml:"editor"`               // editor for opening changed files; empty falls back to $EDITOR, then vi
 }
 
 // KeyBindings maps user-facing actions to key names (tea.KeyMsg.String() format).
@@ -50,6 +51,7 @@ type KeyBindings struct {
 	Stats          string `yaml:"stats"`
 	Help           string `yaml:"help"`
 	Quit           string `yaml:"quit"`
+	ToggleChanged  string `yaml:"toggle_changed"`
 }
 
 // DefaultConfig returns the default configuration matching Phase 1 behavior.
@@ -67,6 +69,7 @@ func DefaultConfig() Config {
 			Stats:          "s",
 			Help:           "?",
 			Quit:           "q",
+			ToggleChanged:  "F",
 		},
 		SidebarWidth:       30,
 		RefreshInterval:    "200ms",

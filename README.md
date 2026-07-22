@@ -15,6 +15,7 @@ layers on top of your existing tmux setup instead of replacing it.
 - **Context usage bar** -- shows current token usage vs context window limit
 - **Breathing status dots** -- active sessions pulse green, waiting sessions pulse amber
 - **Passthrough mode** -- type directly into a session without leaving the TUI
+- **Changed-files sidebar** -- a right-hand panel listing the files the selected session edited, with per-file `+/-` counts (live `git diff` while uncommitted, a persistent transcript estimate afterwards); open any file in your editor
 - **Fuzzy search** -- filter sessions by name
 - **Session management** -- create new sessions, kill existing ones, and resume closed sessions into any tmux session (or a brand-new one) via a target picker
 - **Detail popup** -- view session metadata (model, project, cost, token counts)
@@ -68,19 +69,22 @@ naviclaude
 | Key | Action |
 |---|---|
 | `j` / `k` | Navigate sessions |
-| `Enter` / `Tab` | Focus an active session (passthrough mode). On a closed session, `Enter` opens the resume picker (`Tab` shows its history) |
-| `Tab` / `Shift+Tab` / `Ctrl+]` | Exit passthrough mode |
+| `Tab` / `Shift+Tab` | Cycle focus across the visible panes (session list -> preview passthrough -> changed files) |
+| `Ctrl+]` | Exit passthrough straight to the session list |
+| `Ctrl+U` / `Ctrl+D` | Scroll preview |
+| `/` | Search |
+| `Enter` | Focus an active session (passthrough mode); on a closed session, open the resume picker |
 | `f` | Jump to pane. On a closed session, fast-resume into the current tmux session |
 | `Ctrl+F` | Jump to pane (from passthrough) |
-| `/` | Search |
 | `n` | New session (same tmux session) |
 | `N` | New tmux session (prompts for name) |
-| `K` | Kill session |
 | `r` | Rename session |
+| `K` | Kill session |
+| `F` | Toggle the changed-files sidebar and focus it (`Esc` drops focus but keeps it open) |
+| `e` / `Enter` | In the changed-files sidebar, open the selected file in your editor |
 | `d` | Detail popup |
 | `s` | Statistics popup |
 | `T` | Theme picker |
-| `Ctrl+U` / `Ctrl+D` | Scroll preview |
 | `?` | Help overlay |
 | `q` | Quit |
 
@@ -104,6 +108,7 @@ keys:
   rename_session: "r"
   detail: "d"
   stats: "s"
+  toggle_changed: "F"
   help: "?"
 
 sidebar_width: 30
@@ -121,6 +126,7 @@ cpu_active_threshold: 5
 theme: "tokyo-night"
 claude_command: "claude"
 check_for_updates: true
+# editor: "cursor"   # falls back to $EDITOR, then vi
 # new_session_dir: "~/projects"
 ```
 
@@ -141,6 +147,7 @@ check_for_updates: true
 | `theme` | `tokyo-night` | Color theme name |
 | `claude_command` | `claude` | Command to start Claude (sent via send-keys, supports aliases) |
 | `check_for_updates` | `true` | Check GitHub on startup for a newer release and show "update available" in the status bar |
+| `editor` | `$EDITOR`, else `vi` | Editor for opening changed files from the changed-files sidebar; may include flags. GUI editors (`cursor`, `code`, `zed`, ...) open in their own window; terminal editors (`vim`, `nvim`, `nano`, ...) take over the TUI and return on exit |
 | `new_session_dir` | `~` | Working directory for new tmux sessions created with `N` |
 
 ## Themes
