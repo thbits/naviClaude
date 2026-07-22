@@ -47,8 +47,8 @@ var (
 // SidebarPanel is the sidebar container with right border separator.
 var SidebarPanel lipgloss.Style
 
-// SidebarPanelFocused is the sidebar container when the preview is in
-// passthrough mode -- blue right border to match mockup.
+// SidebarPanelFocused is the sidebar container when the session list has
+// keyboard focus -- a thick blue right border marks the active pane's edge.
 var SidebarPanelFocused lipgloss.Style
 
 // RightSidebarPanel is the changed-files panel container (left border).
