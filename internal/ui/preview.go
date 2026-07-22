@@ -298,9 +298,10 @@ func (m PreviewModel) renderHeader() string {
 
 		// Connect the muted band to the blue identity chip with a separator dot
 		// so it reads "... branch • ACTIVE" instead of the name butting straight
-		// against the status. The chip supplies the leading space; the seam adds
-		// the dot on the muted background.
-		seam := lipgloss.NewStyle().Foreground(styles.ColorGray).Background(bg).Render("• ")
+		// against the status. The chip supplies one trailing space; the seam adds
+		// an extra leading space + the dot so the identity chip isn't cramped
+		// against the status label on the muted background.
+		seam := lipgloss.NewStyle().Foreground(styles.ColorGray).Background(bg).Render(" • ")
 		leftStr := seam + strings.Join(bandLeft, bandSep)
 		rightStr := strings.Join(bandRight, bandSep)
 		gap := bandWidth - lipgloss.Width(leftStr) - lipgloss.Width(rightStr)
