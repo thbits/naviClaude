@@ -406,8 +406,10 @@ git commit -m "feat(ui): lit title + dimmed content for sidebar focus state"
 ### Task 3: Changed-files focus rendering (lit title, dim rows/stats)
 
 **Files:**
-- Modify: `internal/ui/changedfiles.go` (struct lines 19-26; `NewChangedFiles` lines 29-36; new `SetFocused`; `renderRow` lines 137-159; `renderStats` lines 165-180; `View` lines 195-202)
+- Modify: `internal/ui/changedfiles.go` (struct lines 19-26; `NewChangedFiles` lines 29-36; new `SetFocused`; `renderRow` lines 152-179; `renderStats` lines 185-200; `View` lines 215-222)
 - Test: `internal/ui/changedfiles_focus_test.go` (new)
+
+> NOTE (re-synced 2026-07-22): a later commit (`5d8eff1`) rewrote `renderRow` to truncate the path from the LEFT via `truncateDisplayLeft` (so the +/- counts are never cut off) and uses `inner := m.width - 2`. The Step 4 code below is written against that CURRENT `renderRow`, not the original. `SetFiles` now also preserves cursor position — unrelated to focus, leave it alone.
 
 **Interfaces:**
 - Consumes: `styles.PaneTitleActive`, `styles.PaneTitleInactive`, `styles.ColorDimText`.
@@ -472,7 +474,7 @@ In `internal/ui/changedfiles.go`, add to `ChangedFilesModel` (after `vp` around 
 
 `NewChangedFiles` leaves it at the zero value `false` (the panel is unfocused until opened) — no change needed to the struct literal.
 
-Add the method after `Reset` (around line 67):
+Add the method after `Reset` (around line 78):
 
 ```go
 // SetFocused marks whether the changed-files pane has keyboard focus, re-rendering
@@ -488,22 +490,27 @@ func (m *ChangedFilesModel) SetFocused(focused bool) {
 
 - [ ] **Step 4: Dim rows when unfocused; thread focus into stats**
 
-Replace `renderRow` (lines 137-159) with:
+Replace the CURRENT `renderRow` (lines 152-179) with the version below. It keeps the existing left-truncation logic (`truncateDisplayLeft`, `inner := m.width - 2`) exactly and only adds the focus-dimming branch and the dim flag to `renderStats`:
 
 ```go
 func (m ChangedFilesModel) renderRow(f session.ChangedFile, selected bool) string {
 	stats := m.renderStats(f, !m.focused)
 	statsWidth := lipgloss.Width(stats)
 
-	// -1 leaves a trailing space; the selection style adds a 1-col left border,
-	// so both selected and unselected rows reserve one leading column.
-	nameWidth := m.width - statsWidth - 2
-	if nameWidth < 1 {
-		nameWidth = 1
+	// Content occupies m.width minus the two columns the row style adds (left
+	// padding, or the selection bar + padding on the selected row).
+	inner := m.width - 2
+	if inner < 1 {
+		inner = 1
 	}
-	name := truncateDisplay(m.relPath(f.Path), nameWidth)
 
-	gap := m.width - lipgloss.Width(name) - statsWidth - 2
+	nameWidth := inner - statsWidth - 1 // -1 for the gap before the counts
+	var name string
+	if nameWidth >= 1 {
+		name = truncateDisplayLeft(m.relPath(f.Path), nameWidth)
+	}
+
+	gap := inner - lipgloss.Width(name) - statsWidth
 	if gap < 1 {
 		gap = 1
 	}
@@ -514,13 +521,14 @@ func (m ChangedFilesModel) renderRow(f session.ChangedFile, selected bool) strin
 		return styles.SidebarItemSelected.Render(content)
 	}
 	if !m.focused {
+		// SidebarItem has PaddingLeft(2); match it so width is unchanged.
 		return lipgloss.NewStyle().Foreground(styles.ColorDimText).PaddingLeft(2).Render(content)
 	}
 	return styles.SidebarItem.Render(content)
 }
 ```
 
-Replace `renderStats` (lines 165-180) signature and body with:
+Replace `renderStats` (lines 185-200) signature and body with:
 
 ```go
 // renderStats renders "+A" in green and "-R" in red, omitting a zero side. When
@@ -551,7 +559,7 @@ func (m ChangedFilesModel) renderStats(f session.ChangedFile, dim bool) string {
 
 - [ ] **Step 5: Render the lit/dim title bar in View**
 
-Replace the header construction in `View` (lines 196-202) with:
+Replace the header construction in `View` (lines 215-222) with:
 
 ```go
 	countText := fmt.Sprintf("%d files", len(m.files))
@@ -575,7 +583,7 @@ Replace the header construction in `View` (lines 196-202) with:
 	}
 ```
 
-The two later `return lipgloss.JoinVertical(...)` lines (207, 210) stay as-is.
+The two later `return lipgloss.JoinVertical(...)` lines (~227, ~230) stay as-is.
 
 - [ ] **Step 6: Run the changed-files focus tests plus the existing suite**
 
