@@ -677,6 +677,14 @@ func (m Model) View() string {
 	// Pass spinner view to sidebar for the loading/empty state.
 	m.sidebar.SetSpinnerView(m.spinner.View())
 
+	// Focus drives all three pane signals. Tell the sidebar and changed-files
+	// panes their focus state (they re-render only when it changes) before they
+	// render below. The preview owns no edge, so preview-focus shows via its
+	// header chip + the neighbors dimming, handled in preview.go / their dim paths.
+	fp := m.focusedPane()
+	m.sidebar.SetFocused(fp == PaneList)
+	m.rightSidebar.SetFocused(fp == PaneFiles)
+
 	// Build the sidebar column. If search or name input is active, stack
 	// the input above the sidebar.
 	var sidebarView string
@@ -715,9 +723,10 @@ func (m Model) View() string {
 	previewView := m.preview.View()
 
 	// Apply the SidebarPanel style with right border as the separator.
-	// In passthrough mode the border is blue; otherwise default border color.
+	// When the session list has focus the border lights thick-blue; otherwise
+	// it uses the default border color.
 	sidebarStyle := styles.SidebarPanel
-	if m.mode == ModePassthrough {
+	if fp == PaneList {
 		sidebarStyle = styles.SidebarPanelFocused
 	}
 	sidebarView = sidebarStyle.
@@ -740,7 +749,7 @@ func (m Model) View() string {
 	if rightWidth > 0 {
 		m.rightSidebar.SetSize(rightWidth-1, contentHeight)
 		rightStyle := styles.RightSidebarPanel
-		if m.mode == ModeChangedFiles {
+		if fp == PaneFiles {
 			rightStyle = styles.RightSidebarPanelFocused
 		}
 		rightView := rightStyle.
