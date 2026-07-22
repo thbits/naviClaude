@@ -46,19 +46,19 @@ func TestDefaultConfig(t *testing.T) {
 
 func TestDefaultConfigViewStateFlags(t *testing.T) {
 	cfg := DefaultConfig()
-	if cfg.FocusLastSession != false {
-		t.Errorf("FocusLastSession default = %v, want false", cfg.FocusLastSession)
+	if cfg.FocusLastSession != true {
+		t.Errorf("FocusLastSession default = %v, want true", cfg.FocusLastSession)
 	}
-	if cfg.RememberGroupState != false {
-		t.Errorf("RememberGroupState default = %v, want false", cfg.RememberGroupState)
+	if cfg.RememberGroupState != true {
+		t.Errorf("RememberGroupState default = %v, want true", cfg.RememberGroupState)
 	}
 }
 
-func TestLoadViewStateFlags(t *testing.T) {
+// A config that omits the flags keeps the (true) defaults.
+func TestLoadViewStateFlagsDefaultWhenAbsent(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
-	yaml := "focus_last_session: true\nremember_group_state: true\n"
-	if err := os.WriteFile(path, []byte(yaml), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte("theme: \"tokyo-night\"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := Load(path)
@@ -66,10 +66,30 @@ func TestLoadViewStateFlags(t *testing.T) {
 		t.Fatalf("Load error: %v", err)
 	}
 	if !cfg.FocusLastSession {
-		t.Error("FocusLastSession = false, want true")
+		t.Error("FocusLastSession = false, want true (default when absent)")
 	}
 	if !cfg.RememberGroupState {
-		t.Error("RememberGroupState = false, want true")
+		t.Error("RememberGroupState = false, want true (default when absent)")
+	}
+}
+
+// An explicit false in the file must override the true default.
+func TestLoadViewStateFlagsExplicitFalse(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	yaml := "focus_last_session: false\nremember_group_state: false\n"
+	if err := os.WriteFile(path, []byte(yaml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if cfg.FocusLastSession {
+		t.Error("FocusLastSession = true, want false (explicit)")
+	}
+	if cfg.RememberGroupState {
+		t.Error("RememberGroupState = true, want false (explicit)")
 	}
 }
 

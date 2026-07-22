@@ -67,7 +67,8 @@ func TestRestoreFallsBackWhenSessionGone(t *testing.T) {
 }
 
 func TestRestoreDisabledByConfig(t *testing.T) {
-	cfg := config.DefaultConfig() // FocusLastSession = false
+	cfg := config.DefaultConfig()
+	cfg.FocusLastSession = false // explicitly disabled
 	m := newTestModel(t, cfg, session.ViewState{LastSessionID: "second"})
 	m.sidebar.SetSessions(viewStateTestSessions())
 

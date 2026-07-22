@@ -36,8 +36,8 @@ type Config struct {
 	SessionSortOrder   string      `yaml:"session_sort_order"`   // "name" (alphabetical, default) or "activity"
 	CheckForUpdates    bool        `yaml:"check_for_updates"`    // check GitHub for a newer release on startup (default true)
 	Editor             string      `yaml:"editor"`               // editor for opening changed files; empty falls back to $EDITOR, then vi
-	FocusLastSession   bool        `yaml:"focus_last_session"`   // re-select the last focused session on startup (default false)
-	RememberGroupState bool        `yaml:"remember_group_state"` // restore manually-toggled group open/closed state on startup (default false)
+	FocusLastSession   bool        `yaml:"focus_last_session"`   // re-select the last focused session on startup (default true)
+	RememberGroupState bool        `yaml:"remember_group_state"` // restore manually-toggled group open/closed state on startup (default true)
 }
 
 // KeyBindings maps user-facing actions to key names (tea.KeyMsg.String() format).
@@ -88,6 +88,8 @@ func DefaultConfig() Config {
 		GroupSortOrder:     "name",
 		SessionSortOrder:   "name",
 		CheckForUpdates:    true,
+		FocusLastSession:   true,
+		RememberGroupState: true,
 	}
 }
 
