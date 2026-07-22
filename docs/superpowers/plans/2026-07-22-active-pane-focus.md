@@ -693,8 +693,10 @@ git commit -m "feat(ui): lit focus chip in preview header on passthrough"
 
 **Files:**
 - Create: `internal/app/focus.go`
-- Modify: `internal/app/app.go` `View` (separator selection lines 713-747; add `SetFocused` calls before rendering the panes)
+- Modify: `internal/app/app.go` `View` (separator selection lines 717-752; add `SetFocused` calls before rendering the panes)
 - Test: `internal/app/focus_test.go` (new)
+
+> NOTE (re-synced 2026-07-22): commit `5d8eff1` changed `app.go` OUTSIDE `View()` (changed-files refresh handlers), so `View()` itself is unchanged — the code blocks below still match verbatim; only line numbers shifted by ~5. The `currently reads` snippets are the reliable anchors.
 
 **Interfaces:**
 - Consumes: `(*ui.SidebarModel).SetFocused`, `(*ui.ChangedFilesModel).SetFocused` (Tasks 2, 3); `styles.SidebarPanelFocused`, `styles.RightSidebarPanelFocused` (Task 1).
@@ -781,9 +783,9 @@ Expected: PASS.
 
 - [ ] **Step 5a: Tell the panes their focus state BEFORE they render**
 
-Ordering matters: `sidebarView` is built by calling `m.sidebar.View()` inside the sidebar block (lines 677-708), which is *earlier* than the sidebar style block. The sidebar's title bar reads `m.focused` at `View()` time and its rows are laid out by `syncViewport`, so focus must be set before that block runs. `SetFocused` re-renders only on change, and it operates on the per-frame `Model` copy (View has a value receiver), so it is cheap and self-correcting.
+Ordering matters: `sidebarView` is built by calling `m.sidebar.View()` inside the sidebar block (lines ~682-713), which is *earlier* than the sidebar style block. The sidebar's title bar reads `m.focused` at `View()` time and its rows are laid out by `syncViewport`, so focus must be set before that block runs. `SetFocused` re-renders only on change, and it operates on the per-frame `Model` copy (View has a value receiver), so it is cheap and self-correcting.
 
-In `internal/app/app.go` `View`, immediately after `m.sidebar.SetSpinnerView(m.spinner.View())` (line 673) and before the sidebar-building block, insert:
+In `internal/app/app.go` `View`, immediately after `m.sidebar.SetSpinnerView(m.spinner.View())` (line ~678) and before the sidebar-building block, insert:
 
 ```go
 	// Focus drives all three pane signals. Tell the sidebar and changed-files
@@ -797,7 +799,7 @@ In `internal/app/app.go` `View`, immediately after `m.sidebar.SetSpinnerView(m.s
 
 - [ ] **Step 5b: Light the active pane's separator edge**
 
-Replace the sidebar style block (lines 713-722) — which currently reads `sidebarStyle := styles.SidebarPanel; if m.mode == ModePassthrough { sidebarStyle = styles.SidebarPanelFocused }` — with a version keyed off `fp` (the old passthrough trigger is removed; the sidebar edge now lights for List focus):
+Replace the sidebar style block (lines ~719-727) — which currently reads `sidebarStyle := styles.SidebarPanel; if m.mode == ModePassthrough { sidebarStyle = styles.SidebarPanelFocused }` — with a version keyed off `fp` (the old passthrough trigger is removed; the sidebar edge now lights for List focus):
 
 ```go
 	sidebarStyle := styles.SidebarPanel
@@ -811,7 +813,7 @@ Replace the sidebar style block (lines 713-722) — which currently reads `sideb
 		Render(sidebarView)
 ```
 
-Then in the changed-files block (lines 735-747), replace the style selection so it keys off `fp`:
+Then in the changed-files block (lines ~740-752), replace the style selection so it keys off `fp`:
 
 ```go
 	if rightWidth > 0 {
@@ -829,7 +831,7 @@ Then in the changed-files block (lines 735-747), replace the style selection so 
 	}
 ```
 
-Note the removed old logic: `if m.mode == ModePassthrough { sidebarStyle = styles.SidebarPanelFocused }` is gone — the sidebar edge now lights for List focus, not passthrough. The `m.sidebar.SetSize(...)` calls earlier in View (lines 685/694/703/706) already run before this block; `SetFocused` here re-renders the sidebar's viewport when focus changes, so ordering is fine (SetFocused's syncViewport uses the size already set).
+Note the removed old logic: `if m.mode == ModePassthrough { sidebarStyle = styles.SidebarPanelFocused }` is gone — the sidebar edge now lights for List focus, not passthrough. The `m.sidebar.SetSize(...)` calls earlier in View (lines ~690/699/708/711) run in the sidebar-building block; because Step 5a placed `SetFocused` BEFORE that block, `SetFocused`'s `syncViewport` uses the previous frame's size — stable frame-to-frame, self-correcting on the next tick after a resize.
 
 - [ ] **Step 6: Build and run the full app test suite**
 
