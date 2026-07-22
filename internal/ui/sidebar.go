@@ -552,6 +552,28 @@ func (m *SidebarModel) ExpandGroup(name string) {
 	m.restoreCursor(m.trackedID, m.trackedTarget, m.trackedGroup)
 }
 
+// ToggledGroups returns the collapsed state of every group the user has manually
+// toggled, keyed by group name. Used to persist group open/closed state.
+func (m *SidebarModel) ToggledGroups() map[string]bool {
+	out := make(map[string]bool, len(m.userToggled))
+	for name := range m.userToggled {
+		out[name] = m.collapsed[name]
+	}
+	return out
+}
+
+// SeedToggledGroups pre-loads persisted group state so restored groups are
+// treated exactly as if the user had toggled them: they render at the seeded
+// collapsed value and are exempt from auto-collapse. Must be called before the
+// first SetSessions so rebuildGroups honors the seeded state. Entries for groups
+// that no longer exist are harmless -- rebuildGroups only iterates live groups.
+func (m *SidebarModel) SeedToggledGroups(groups map[string]bool) {
+	for name, collapsed := range groups {
+		m.userToggled[name] = true
+		m.collapsed[name] = collapsed
+	}
+}
+
 // FlatItem is a public wrapper for flat list items to allow external iteration.
 type FlatItem struct {
 	IsGroup bool
