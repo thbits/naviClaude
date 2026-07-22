@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/thbits/naviClaude/internal/config"
 	"github.com/thbits/naviClaude/internal/session"
 	"github.com/thbits/naviClaude/internal/ui"
@@ -77,6 +78,40 @@ func TestRestoreDisabledByConfig(t *testing.T) {
 	sel := m.sidebar.SelectedSession()
 	if sel == nil || sel.ID != "first" {
 		t.Fatalf("disabled restore should leave first-session cursor; got %v", sel)
+	}
+}
+
+// Reproduces the regression where a late (history-driven) restore stole focus
+// after the user had already created/selected a new session. The one-shot guard
+// must be tripped by the first user action, not only by list navigation.
+func TestFirstKeyCancelsPendingRestore(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.FocusLastSession = true
+	m := newTestModel(t, cfg, session.ViewState{LastSessionID: "second"})
+	m.keys = KeyMapFromConfig(config.DefaultConfig().Keys)
+	m.statusbar = ui.NewStatusBar(80, "test")
+	m.help = ui.NewHelp()
+	m.mode = ModeList
+	m.sidebar.SetSessions(viewStateTestSessions()) // default cursor on "first"
+
+	// Precondition: startup restore was deferred (e.g. the fast active scan had
+	// not yet surfaced the remembered session), so the guard is still false.
+	if m.restoredLastSession {
+		t.Fatal("precondition: guard should be false before any user action")
+	}
+
+	// User presses a key (opens help) before the deferred restore runs.
+	updated, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+	m = updated.(Model)
+
+	if !m.restoredLastSession {
+		t.Fatal("first user key must cancel any pending startup restore")
+	}
+
+	// A late history-driven restore must now be a no-op and NOT steal focus.
+	m.maybeRestoreLastSession()
+	if sel := m.sidebar.SelectedSession(); sel == nil || sel.ID != "first" {
+		t.Fatalf("late restore stole focus after user action; selected %v", sel)
 	}
 }
 

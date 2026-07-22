@@ -834,6 +834,11 @@ func (m Model) View() string {
 
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.statusbar.ClearError()
+	// The last-session restore only establishes the initial selection at startup.
+	// Any user keystroke means the user is now in control, so cancel any pending
+	// (deferred, history-driven) restore -- otherwise a late restore would steal
+	// focus from a session the user just created, jumped to, or selected.
+	m.restoredLastSession = true
 	key := msg.String()
 
 	// Global quit — but in passthrough mode Ctrl+C is forwarded to the pane.
@@ -998,9 +1003,6 @@ func (m Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	default:
-		// Once the user navigates, never auto-restore (avoids yanking the cursor
-		// if a late history scan resolves the stored session).
-		m.restoredLastSession = true
 		// Navigation keys: delegate to sidebar.
 		var cmd tea.Cmd
 		var cmds []tea.Cmd
@@ -1322,6 +1324,10 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	if m.modalActive() {
 		return m, nil
 	}
+
+	// A mouse interaction also means the user is in control; cancel any pending
+	// startup restore so it cannot later steal focus (mirrors handleKey).
+	m.restoredLastSession = true
 
 	sidebarWidth := m.sidebarWidth()
 	rightWidth := m.rightSidebarWidth()
