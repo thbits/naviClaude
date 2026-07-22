@@ -104,8 +104,9 @@ func (m *ChangedFilesModel) SelectedFile() string {
 // Init satisfies the tea.Model interface.
 func (m ChangedFilesModel) Init() tea.Cmd { return nil }
 
-// Update handles navigation keys (j/k/g/G). Opening the selected file and
-// closing the panel are handled by the app, which owns $EDITOR and mode state.
+// Update handles navigation keys (j/k/g/G) and mouse wheel events. Opening the
+// selected file and closing the panel are handled by the app, which owns $EDITOR
+// and mode state.
 func (m ChangedFilesModel) Update(msg tea.Msg) (ChangedFilesModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
@@ -127,6 +128,19 @@ func (m ChangedFilesModel) Update(msg tea.Msg) (ChangedFilesModel, tea.Cmd) {
 			m.syncViewport()
 		case "g":
 			m.cursor = 0
+			m.syncViewport()
+		}
+	case tea.MouseMsg:
+		switch msg.Type {
+		case tea.MouseWheelUp:
+			if m.cursor > 0 {
+				m.cursor--
+			}
+			m.syncViewport()
+		case tea.MouseWheelDown:
+			if m.cursor < len(m.files)-1 {
+				m.cursor++
+			}
 			m.syncViewport()
 		}
 	}
