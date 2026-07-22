@@ -23,6 +23,8 @@ type ChangedFilesModel struct {
 	width  int
 	height int
 	vp     viewport.Model
+
+	focused bool // whether the changed-files pane currently has keyboard focus
 }
 
 // NewChangedFiles creates a ChangedFilesModel with the given dimensions.
@@ -74,6 +76,16 @@ func (m *ChangedFilesModel) Reset() {
 	m.files = nil
 	m.cwd = ""
 	m.cursor = 0
+	m.syncViewport()
+}
+
+// SetFocused marks whether the changed-files pane has keyboard focus, re-rendering
+// on change so the lit title and row dimming update immediately.
+func (m *ChangedFilesModel) SetFocused(focused bool) {
+	if m.focused == focused {
+		return
+	}
+	m.focused = focused
 	m.syncViewport()
 }
 
@@ -150,7 +162,7 @@ func (m *ChangedFilesModel) syncViewport() {
 // basename and extension stay visible. This guarantees the counts are never
 // cut off, no matter how long the path.
 func (m ChangedFilesModel) renderRow(f session.ChangedFile, selected bool) string {
-	stats := m.renderStats(f)
+	stats := m.renderStats(f, !m.focused)
 	statsWidth := lipgloss.Width(stats)
 
 	// Content occupies m.width minus the two columns the row style adds (left
@@ -173,18 +185,27 @@ func (m ChangedFilesModel) renderRow(f session.ChangedFile, selected bool) strin
 	content := name + strings.Repeat(" ", gap) + stats
 
 	if selected {
+		// Cursor row stays bright even when unfocused so its position is visible.
 		return styles.SidebarItemSelected.Render(content)
+	}
+	if !m.focused {
+		// SidebarItem has PaddingLeft(2); match it so width is unchanged.
+		return lipgloss.NewStyle().Foreground(styles.ColorDimText).PaddingLeft(2).Render(content)
 	}
 	return styles.SidebarItem.Render(content)
 }
 
-// renderStats renders "+A" in green and "-R" in red, omitting a zero side.
-// Estimated counts (no live git diff, e.g. already committed) render faintly.
-// Styles are built per render from the active theme's colors so they follow
-// theme switches (the package-level color vars are reassigned by ApplyTheme).
-func (m ChangedFilesModel) renderStats(f session.ChangedFile) string {
-	added := lipgloss.NewStyle().Foreground(styles.ColorGreen)
-	removed := lipgloss.NewStyle().Foreground(styles.ColorRed)
+// renderStats renders "+A" in green and "-R" in red, omitting a zero side. When
+// dim is true (pane unfocused) both sides render in DimText instead. Estimated
+// counts (no live git diff) render faintly. Styles are built per render from the
+// active theme's colors so they follow theme switches.
+func (m ChangedFilesModel) renderStats(f session.ChangedFile, dim bool) string {
+	addColor, remColor := styles.ColorGreen, styles.ColorRed
+	if dim {
+		addColor, remColor = styles.ColorDimText, styles.ColorDimText
+	}
+	added := lipgloss.NewStyle().Foreground(addColor)
+	removed := lipgloss.NewStyle().Foreground(remColor)
 	if f.Estimated {
 		added = added.Faint(true)
 		removed = removed.Faint(true)
@@ -213,13 +234,25 @@ func (m ChangedFilesModel) relPath(path string) string {
 // View renders the panel: a header plus the scrollable file list (or an empty
 // state when the session edited nothing).
 func (m ChangedFilesModel) View() string {
-	title := styles.SidebarTitle.Render("CHANGED FILES")
-	countStr := styles.SidebarTitleCount.Render(fmt.Sprintf("%d files", len(m.files)))
-	gap := m.width - lipgloss.Width(title) - lipgloss.Width(countStr) - 2
-	if gap < 1 {
-		gap = 1
+	countText := fmt.Sprintf("%d files", len(m.files))
+	var header string
+	if m.focused {
+		titleText := "▸ CHANGED FILES"
+		gap := m.width - lipgloss.Width(titleText) - lipgloss.Width(countText) - 2
+		if gap < 1 {
+			gap = 1
+		}
+		inner := " " + titleText + strings.Repeat(" ", gap) + countText + " "
+		header = styles.PaneTitleActive.Width(m.width).Render(inner)
+	} else {
+		title := styles.PaneTitleInactive.Render("CHANGED FILES")
+		countStr := lipgloss.NewStyle().Foreground(styles.ColorDimText).Render(countText)
+		gap := m.width - lipgloss.Width(title) - lipgloss.Width(countStr) - 2
+		if gap < 1 {
+			gap = 1
+		}
+		header = title + strings.Repeat(" ", gap) + countStr + " "
 	}
-	header := title + strings.Repeat(" ", gap) + countStr + " "
 
 	if len(m.files) == 0 {
 		body := lipgloss.Place(m.width, m.vp.Height, lipgloss.Center, lipgloss.Center,
