@@ -44,6 +44,35 @@ func TestDefaultConfig(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigViewStateFlags(t *testing.T) {
+	cfg := DefaultConfig()
+	if cfg.FocusLastSession != false {
+		t.Errorf("FocusLastSession default = %v, want false", cfg.FocusLastSession)
+	}
+	if cfg.RememberGroupState != false {
+		t.Errorf("RememberGroupState default = %v, want false", cfg.RememberGroupState)
+	}
+}
+
+func TestLoadViewStateFlags(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	yaml := "focus_last_session: true\nremember_group_state: true\n"
+	if err := os.WriteFile(path, []byte(yaml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if !cfg.FocusLastSession {
+		t.Error("FocusLastSession = false, want true")
+	}
+	if !cfg.RememberGroupState {
+		t.Error("RememberGroupState = false, want true")
+	}
+}
+
 func TestLoadNonexistentFile(t *testing.T) {
 	cfg, err := Load("/nonexistent/path/config.yaml")
 	if err != nil {
