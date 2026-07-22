@@ -187,6 +187,9 @@ type Model struct {
 	currentTmuxWin     string        // "session:window" target of naviClaude's window
 	isPopup            bool          // true when running inside tmux display-popup
 	refreshInterval    time.Duration // preview capture tick interval
+
+	viewState           *session.ViewStateStore // persisted last-focused session + group state
+	restoredLastSession bool                     // one-shot guard: restore the focused session only once at startup
 }
 
 // New creates a fully-wired Model ready to be passed to tea.NewProgram.
@@ -232,6 +235,9 @@ func New(version string) Model {
 		// Session aliases
 		aliasStore: session.NewAliasStore(""),
 
+		// View state (last focused session + group open/closed state)
+		viewState: session.NewViewStateStore(""),
+
 		// Stats cache
 		statsCache: stats.NewCache(),
 
@@ -259,6 +265,12 @@ func New(version string) Model {
 	m.sidebar.SetCollapseAfterHours(cfg.CollapseAfterHours)
 	m.sidebar.SetGroupSortOrder(cfg.GroupSortOrder)
 	m.sidebar.SetSessionSortOrder(cfg.SessionSortOrder)
+
+	// Seed persisted group open/closed state before the first SetSessions so
+	// auto-collapse honors the user's remembered toggles.
+	if cfg.RememberGroupState {
+		m.sidebar.SeedToggledGroups(m.viewState.Get().CollapsedGroups)
+	}
 
 	// Wire dynamic key labels into help and status bar.
 	helpBindings := keys.HelpBindings()
@@ -435,13 +447,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.sidebar.SetSessions(active)
 				}
 			}
+			// Restore the last focused session if enabled (may be active).
+			restoreCmd := m.maybeRestoreLastSession()
 			if sel := m.sidebar.SelectedSession(); sel != nil {
 				m.preview.SetSession(sel)
 				// Fire metrics load for the initially selected session.
 				if sel.ID != "" && sel.ID != m.metricsSessionID {
 					m.metricsSessionID = sel.ID
-					return m, tea.Batch(m.refreshHistoryCmd(), loadMetricsCmd(sel))
+					return m, tea.Batch(m.refreshHistoryCmd(), loadMetricsCmd(sel), restoreCmd)
 				}
+			}
+			if restoreCmd != nil {
+				return m, tea.Batch(m.refreshHistoryCmd(), restoreCmd)
 			}
 		}
 		// Fire the slower history scan.
@@ -472,8 +489,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.sidebar.SetSessions(m.search.Results())
 			}
 
+			// Restore the last focused session if enabled (may be a closed
+			// session that only appears after the history scan). After history has
+			// loaded, all sessions are known: if the stored session is still
+			// absent, the default first-session cursor stands (the fallback).
+			restoreCmd := m.maybeRestoreLastSession()
+			m.restoredLastSession = true
 			if sel := m.sidebar.SelectedSession(); sel != nil {
 				m.preview.SetSession(sel)
+			}
+			if restoreCmd != nil {
+				return m, restoreCmd
 			}
 		}
 		return m, nil
@@ -549,6 +575,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// to it and quit naviClaude), so it opens at full terminal size like
 			// jumping to an already-open session -- no passthrough focus.
 			m.pendingResumeJump = false
+			m.persistViewState()
 			m.restorePreviewedPane()
 			_ = m.tmuxClient.SwitchClient(msg.tmuxTarget)
 			_ = m.tmuxClient.SelectPane(msg.tmuxTarget)
@@ -811,6 +838,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// Global quit — but in passthrough mode Ctrl+C is forwarded to the pane.
 	if key == KeyCtrlC && m.mode != ModePassthrough {
+		m.persistViewState()
 		m.restorePreviewedPane()
 		return m, tea.Quit
 	}
@@ -856,6 +884,7 @@ func (m Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch key {
 	case m.keys.Quit:
+		m.persistViewState()
 		m.restorePreviewedPane()
 		return m, tea.Quit
 
@@ -969,6 +998,9 @@ func (m Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	default:
+		// Once the user navigates, never auto-restore (avoids yanking the cursor
+		// if a late history scan resolves the stored session).
+		m.restoredLastSession = true
 		// Navigation keys: delegate to sidebar.
 		var cmd tea.Cmd
 		var cmds []tea.Cmd
@@ -1017,6 +1049,7 @@ func (m Model) handleChangedFilesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch key {
 	case m.keys.Quit:
 		// The quit key still quits from the focused panel (matches list mode).
+		m.persistViewState()
 		m.restorePreviewedPane()
 		return m, tea.Quit
 
@@ -1282,33 +1315,42 @@ func (m Model) handleHelpKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // ---------------------------------------------------------------------------
 
 func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	// Ignore mouse input while a modal overlay, picker, or inline input owns the
+	// screen -- a click must not silently re-focus a pane hidden underneath it.
+	// Search is intentionally excluded (see modalActive): it stacks above the
+	// list and keeps list focus, so a sidebar click during search is normal.
+	if m.modalActive() {
+		return m, nil
+	}
+
 	sidebarWidth := m.sidebarWidth()
+	rightWidth := m.rightSidebarWidth()
+	rightPaneLeft := m.width - rightWidth // left edge of the changed-files region
 
 	switch msg.Type {
 	case tea.MouseLeft:
-		if msg.X < sidebarWidth {
-			// Click in sidebar area. Delegate to sidebar for item selection.
-			// Simple approximation: compute which flat item was clicked.
-			var cmd tea.Cmd
-			m.sidebar, cmd = m.sidebar.Update(msg)
-			if sel := m.sidebar.SelectedSession(); sel != nil {
-				m.selectPreviewSession(sel)
-			}
+		switch {
+		case msg.X < sidebarWidth:
+			cmd := m.setFocus(ModeList)
 			return m, cmd
+		case rightWidth > 0 && msg.X >= rightPaneLeft:
+			cmd := m.setFocus(ModeChangedFiles)
+			return m, cmd
+		default:
+			// Preview band: focus passthrough only if the selection can receive
+			// forwarded keys (mirrors nextFocusMode's canPassthrough); otherwise
+			// leave focus unchanged.
+			sel := m.sidebar.SelectedSession()
+			if sel != nil && sel.Status != session.StatusClosed && sel.TmuxTarget != "" {
+				cmd := m.setFocus(ModePassthrough)
+				return m, cmd
+			}
+			return m, nil
 		}
-		// Click in preview area: enter passthrough.
-		sess := m.sidebar.SelectedSession()
-		if sess != nil && sess.Status != session.StatusClosed {
-			m.mode = ModePassthrough
-			m.preview.SetPassthrough(true)
-			m.statusbar.SetMode(ModePassthrough.String())
-		}
-		return m, nil
 
 	case tea.MouseRight:
 		if msg.X < sidebarWidth {
-			sess := m.sidebar.SelectedSession()
-			if sess != nil {
+			if sess := m.sidebar.SelectedSession(); sess != nil {
 				m.contextMenu.Show(msg.X, msg.Y, sess)
 				m.mode = ModeContextMenu
 				m.statusbar.SetMode(ModeContextMenu.String())
@@ -1317,18 +1359,38 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.MouseWheelUp, tea.MouseWheelDown:
-		if msg.X < sidebarWidth {
+		switch {
+		case rightWidth > 0 && msg.X >= rightPaneLeft:
 			var cmd tea.Cmd
-			m.sidebar, cmd = m.sidebar.Update(msg)
+			m.rightSidebar, cmd = m.rightSidebar.Update(msg)
+			return m, cmd
+		case msg.X < sidebarWidth:
+			// The session list does not scroll on wheel; no-op.
+			return m, nil
+		default:
+			var cmd tea.Cmd
+			m.preview, cmd = m.preview.Update(msg)
 			return m, cmd
 		}
-		// Scroll in preview area.
-		var cmd tea.Cmd
-		m.preview, cmd = m.preview.Update(msg)
-		return m, cmd
 	}
 
 	return m, nil
+}
+
+// modalActive reports whether a modal overlay, picker, or inline input owns the
+// screen, in which case mouse clicks must not re-focus panes underneath it.
+// Search is deliberately excluded: it keeps list focus, so clicks stay valid.
+func (m Model) modalActive() bool {
+	return m.confirmKill ||
+		m.help.IsVisible() ||
+		m.statsModel.IsVisible() ||
+		m.themePicker.IsVisible() ||
+		m.dirPicker.IsVisible() ||
+		m.resumePicker.IsVisible() ||
+		m.detail.IsVisible() ||
+		m.contextMenu.IsVisible() ||
+		m.nameInput.IsActive() ||
+		m.renameInput.IsActive()
 }
 
 // ---------------------------------------------------------------------------
@@ -1340,6 +1402,7 @@ func (m Model) jumpToPane() (tea.Model, tea.Cmd) {
 	if sess == nil || sess.TmuxTarget == "" {
 		return m, nil
 	}
+	m.persistViewState()
 	m.restorePreviewedPane()
 	// Switch tmux client to the session's pane.
 	_ = m.tmuxClient.SwitchClient(sess.TmuxTarget)
@@ -2574,6 +2637,47 @@ func overlayString(base, overlay string, width, height int) string {
 	}
 
 	return strings.Join(baseLines, "\n")
+}
+
+// maybeRestoreLastSession re-selects the session focused when the app last
+// closed, if focus_last_session is enabled and it has not already run. It is
+// safe to call repeatedly: it does nothing once the session is restored or the
+// user has navigated. Returns a metrics-load Cmd for the restored session, or
+// nil. If the stored session is not present, the default first-session cursor is
+// left untouched (the historical fallback behavior).
+func (m *Model) maybeRestoreLastSession() tea.Cmd {
+	if m.restoredLastSession || !m.cfg.FocusLastSession || m.viewState == nil {
+		return nil
+	}
+	id := m.viewState.Get().LastSessionID
+	if id == "" {
+		return nil
+	}
+	if !m.sidebar.SelectByID(id) {
+		// Not present yet; a later scan (history) may still contain it.
+		return nil
+	}
+	m.restoredLastSession = true
+	sel := m.sidebar.SelectedSession()
+	if sel == nil {
+		return nil
+	}
+	m.selectPreviewSession(sel)
+	return m.reloadMetricsForSelection(sel)
+}
+
+// persistViewState writes the current focused session and manually-toggled group
+// state to disk. Called at quit. The full state is always written; each field is
+// applied on startup only if its config toggle is on.
+func (m Model) persistViewState() {
+	if m.viewState == nil {
+		return
+	}
+	vs := session.ViewState{CollapsedGroups: m.sidebar.ToggledGroups()}
+	if sel := m.sidebar.SelectedSession(); sel != nil {
+		vs.LastSessionID = sel.ID
+	}
+	_ = m.viewState.Save(vs)
 }
 
 // Ensure Model satisfies tea.Model at compile time.
