@@ -2,11 +2,11 @@ package session
 
 import "time"
 
-// SessionStatus represents the lifecycle state of a Claude session.
+// SessionStatus represents the lifecycle state of an agent session.
 type SessionStatus int
 
 const (
-	StatusActive  SessionStatus = iota // Claude process is running in a tmux pane
+	StatusActive  SessionStatus = iota // agent is working
 	StatusIdle                         // Process running but no recent activity
 	StatusWaiting                      // Waiting for user input
 	StatusClosed                       // Session has ended; data from .jsonl only
@@ -28,8 +28,8 @@ func (s SessionStatus) String() string {
 	}
 }
 
-// Session holds all metadata about a single Claude Code session, whether it is
-// currently running in tmux or was discovered from a .jsonl history file.
+// Session holds all metadata about a single agent session, whether it is
+// currently running in tmux or was discovered from the harness's history.
 type Session struct {
 	// ID is the UUID from the .jsonl filename, or derived from tmux pane info
 	// for sessions whose file has not been found yet.
@@ -81,14 +81,14 @@ type Session struct {
 	// Derived by matching the model ID string in assistant-type records.
 	Model string
 
-	// Version is the Claude Code CLI version string (e.g. "2.1.73").
+	// Version is the agent CLI version string (e.g. "2.1.73").
 	Version string
 
 	// DisplayName is a user-set override for the session title.
 	// When non-empty it takes precedence over Slug and ProjectName in the sidebar.
 	DisplayName string
 
-	// Subprocess is true when Claude is running inside another program (e.g.
+	// Subprocess is true when the agent is running inside another program (e.g.
 	// neovim's embedded terminal). The tmux pane belongs to the parent app,
 	// so preview capture and pane resize are not meaningful.
 	Subprocess bool
@@ -96,18 +96,15 @@ type Session struct {
 	// SubprocessParent is the name of the parent program (e.g. "nvim").
 	SubprocessParent string
 
-	// nativeStatus is Claude Code's own status string from
-	// ~/.claude/sessions/<pid>.json (busy|waiting|idle|shell), captured in
-	// buildSession. Empty for Claude versions that predate the status field;
-	// resolveStatus then falls back to signal-based detection. Package-private:
-	// an implementation detail of status resolution, not part of the UI model.
-	nativeStatus string
+	// Harness names the agent CLI that owns this session (e.g. "claude").
+	Harness string
+}
 
-	// nativeStatusAt is the epoch-millisecond timestamp (statusUpdatedAt) of the
-	// native status, captured in buildSession. Zero when the field is absent
-	// (older Claude versions). Informational only: resolveStatus does NOT gate
-	// trust on it, because Claude writes statusUpdatedAt only when the status
-	// changes (event-driven, not a heartbeat), so a stable session legitimately
-	// carries an old timestamp. Retained for diagnostics and possible future use.
-	nativeStatusAt int64
+// Key identifies a session across harnesses. Claude sessions keep their bare ID
+// so existing alias and view-state files stay valid.
+func (s *Session) Key() string {
+	if s.Harness == "" || s.Harness == "claude" || s.ID == "" {
+		return s.ID
+	}
+	return s.Harness + ":" + s.ID
 }

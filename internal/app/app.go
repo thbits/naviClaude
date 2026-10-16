@@ -14,6 +14,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/thbits/naviClaude/internal/config"
+	"github.com/thbits/naviClaude/internal/harness"
+	"github.com/thbits/naviClaude/internal/harness/claude"
 	"github.com/thbits/naviClaude/internal/preview"
 	"github.com/thbits/naviClaude/internal/session"
 	"github.com/thbits/naviClaude/internal/stats"
@@ -65,19 +67,21 @@ type closedPreviewMsg struct {
 	err     error
 }
 
-// newSessionMsg carries the result of creating a new Claude session.
+// newSessionMsg carries the result of creating a new agent session.
 type newSessionMsg struct {
 	tmuxTarget  string
 	tmuxSession string
 	cwd         string
+	harness     string
 	err         error
 }
 
-// newTmuxSessionMsg carries the result of creating a new tmux session with Claude.
+// newTmuxSessionMsg carries the result of creating a new tmux session with an agent.
 type newTmuxSessionMsg struct {
 	tmuxTarget  string
 	tmuxSession string
 	cwd         string
+	harness     string
 	err         error
 }
 
@@ -129,13 +133,12 @@ type Model struct {
 	resumePicker ui.SessionPickerModel
 
 	// Backend services
-	tmuxClient     *tmux.Client
-	detector       *session.Detector
-	historyScanner *session.HistoryScanner
-	manager        *session.Manager
-	captureEngine  *preview.CaptureEngine
-	passthrough    *preview.Passthrough
-	statusDetector *preview.StatusDetector
+	tmuxClient    *tmux.Client
+	registry      *harness.Registry
+	detector      *harness.Detector
+	manager       *session.Manager
+	captureEngine *preview.CaptureEngine
+	passthrough   *preview.Passthrough
 
 	// Application state
 	mode                 Mode
@@ -149,7 +152,7 @@ type Model struct {
 	pendingNewTarget     string             // tmux target of a just-created session; kept until detected
 	pendingNewTmuxCWD    string             // CWD for the tmux session being named
 	pendingDirAction     dirAction          // which flow opened the directory picker
-	pendingDirTmux       string             // target tmux session for the new-Claude (n) flow
+	pendingDirTmux       string             // target tmux session for the new-agent (n) flow
 	renameSessionID      string             // session ID being renamed
 	pendingResumeSession *session.Session   // closed session awaiting a resume-target choice
 	pendingResumeJump    bool               // when true, jump to the resumed pane (f) instead of focusing it in passthrough (Enter)
@@ -189,7 +192,7 @@ type Model struct {
 	refreshInterval    time.Duration // preview capture tick interval
 
 	viewState           *session.ViewStateStore // persisted last-focused session + group state
-	restoredLastSession bool                     // one-shot guard: restore the focused session only once at startup
+	restoredLastSession bool                    // one-shot guard: restore the focused session only once at startup
 }
 
 // New creates a fully-wired Model ready to be passed to tea.NewProgram.
@@ -204,7 +207,10 @@ func New(version string) Model {
 	}
 
 	tc := tmux.New()
-	hs, _ := session.NewHistoryScanner("")
+	registry := harness.NewRegistry(claude.New(claude.Options{
+		Command:      cfg.ClaudeCommand,
+		ProcessNames: cfg.ProcessNames,
+	}))
 
 	m := Model{
 		// UI
@@ -224,13 +230,12 @@ func New(version string) Model {
 		resumePicker: ui.NewSessionPicker(),
 
 		// Backend
-		tmuxClient:     tc,
-		detector:       session.NewDetector(tc, cfg.ProcessNames, cfg.ActiveWindowSecs, cfg.CPUActiveThreshold),
-		historyScanner: hs,
-		manager:        session.NewManager(tc),
-		captureEngine:  preview.NewCaptureEngine(tc),
-		passthrough:    preview.NewPassthrough(tc),
-		statusDetector: preview.NewStatusDetector(),
+		tmuxClient:    tc,
+		registry:      registry,
+		detector:      harness.NewDetector(tc, registry, cfg.ActiveWindowSecs, cfg.CPUActiveThreshold),
+		manager:       session.NewManager(tc),
+		captureEngine: preview.NewCaptureEngine(tc),
+		passthrough:   preview.NewPassthrough(tc),
 
 		// Session aliases
 		aliasStore: session.NewAliasStore(""),
@@ -254,6 +259,13 @@ func New(version string) Model {
 		isPopup:            os.Getenv("TMUX_POPUP") != "",
 		refreshInterval:    refreshInterval,
 	}
+
+	ttls := make(map[string]time.Duration)
+	for _, h := range registry.All() {
+		ttls[h.Info().Name] = h.Info().PromptCacheTTL
+	}
+	ttls[""] = registry.Default().Info().PromptCacheTTL
+	m.preview.SetCacheTTLs(ttls)
 
 	// Initialize loading spinner.
 	s := spinner.New()
@@ -454,7 +466,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// Fire metrics load for the initially selected session.
 				if sel.ID != "" && sel.ID != m.metricsSessionID {
 					m.metricsSessionID = sel.ID
-					return m, tea.Batch(m.refreshHistoryCmd(), loadMetricsCmd(sel), restoreCmd)
+					return m, tea.Batch(m.refreshHistoryCmd(), loadMetricsCmd(m.harnessFor(sel), sel), restoreCmd)
 				}
 			}
 			if restoreCmd != nil {
@@ -555,7 +567,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			TmuxSession:  msg.tmuxSession,
 			TmuxTarget:   msg.tmuxTarget,
 			CWD:          msg.cwd,
-			ProjectName:  "claude",
+			ProjectName:  msg.harness,
+			Harness:      msg.harness,
 			Status:       session.StatusActive,
 			LastActivity: time.Now(),
 		}
@@ -596,6 +609,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			DisplayName:  src.DisplayName,
 			Slug:         src.Slug,
 			Model:        src.Model,
+			Harness:      src.Harness,
+			SessionFile:  src.SessionFile,
 			Status:       session.StatusActive,
 			LastActivity: src.LastActivity,
 		}
@@ -616,11 +631,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			TmuxTarget:   msg.tmuxTarget,
 			CWD:          msg.cwd,
 			ProjectName:  filepath.Base(msg.cwd),
+			Harness:      msg.harness,
 			Status:       session.StatusActive,
 			LastActivity: time.Now(), // prevent auto-collapse of the new group
 		}
 		if placeholder.ProjectName == "" || placeholder.ProjectName == "." {
-			placeholder.ProjectName = "claude"
+			placeholder.ProjectName = msg.harness
 		}
 		m.sessions = append([]*session.Session{placeholder}, m.sessions...)
 		m.sidebar.SetSessions(m.sessions)
@@ -962,7 +978,7 @@ func (m Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.detail.Show(sess)
 		m.mode = ModeDetail
 		m.statusbar.SetMode(ModeDetail.String())
-		return m, loadDetailDataCmd(sess)
+		return m, loadDetailDataCmd(m.harnessFor(sess), sess)
 
 	case m.keys.Stats:
 		m.statsModel.Show()
@@ -1223,7 +1239,7 @@ func (m Model) startRenameSession() (tea.Model, tea.Cmd) {
 	if sess == nil {
 		return m, nil
 	}
-	m.renameSessionID = sess.ID
+	m.renameSessionID = sess.Key()
 	m.mode = ModeRenameSession
 	m.renameInput.SetSize(m.sidebarWidth())
 	// Pre-fill with current display name.
@@ -1357,7 +1373,7 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	case tea.MouseRight:
 		if msg.X < sidebarWidth {
 			if sess := m.sidebar.SelectedSession(); sess != nil {
-				m.contextMenu.Show(msg.X, msg.Y, sess)
+				m.contextMenu.Show(msg.X, msg.Y, sess, m.menuCaps(sess))
 				m.mode = ModeContextMenu
 				m.statusbar.SetMode(ModeContextMenu.String())
 			}
@@ -1466,31 +1482,37 @@ func (m Model) killSessionCmd(sess *session.Session) tea.Cmd {
 	}
 }
 
-// forkResumeCmd runs manager.ForkResume off the event loop, emitting an errMsg
-// on failure.
+// forkResumeCmd runs a harness fork-resume off the event loop, emitting an
+// errMsg on failure.
 func (m Model) forkResumeCmd(sess *session.Session, target string) tea.Cmd {
-	manager := m.manager
-	return func() tea.Msg {
-		if err := manager.ForkResume(sess, target); err != nil {
-			return errMsg{err: fmt.Errorf("fork-resume: %w", err)}
-		}
-		return nil
-	}
+	return m.runResumeCmd(sess, target, true, "fork-resume")
 }
 
-// resumeCmd runs manager.Resume off the event loop, emitting an errMsg on
+// resumeCmd runs a harness resume off the event loop, emitting an errMsg on
 // failure.
 func (m Model) resumeCmd(sess *session.Session, target string) tea.Cmd {
+	return m.runResumeCmd(sess, target, false, "resume")
+}
+
+func (m Model) runResumeCmd(sess *session.Session, target string, fork bool, label string) tea.Cmd {
 	manager := m.manager
+	h := m.harnessFor(sess)
 	return func() tea.Msg {
-		if err := manager.Resume(sess, target); err != nil {
-			return errMsg{err: fmt.Errorf("resume: %w", err)}
+		cmd, err := resumeCommandFor(h, sess, fork)
+		if err == nil {
+			err = manager.Resume(sess, target, cmd)
+		}
+		if err != nil {
+			return errMsg{err: fmt.Errorf("%s: %w", label, err)}
 		}
 		return nil
 	}
 }
 
 func (m Model) resumeSession(sess *session.Session) (tea.Model, tea.Cmd) {
+	if !m.menuCaps(sess).CanResume {
+		return m, nil
+	}
 	target := m.currentTmuxSession
 	if target == "" {
 		m.err = fmt.Errorf("resume: cannot determine current tmux session")
@@ -1511,6 +1533,9 @@ func (m Model) resumeSession(sess *session.Session) (tea.Model, tea.Cmd) {
 // tmux client switches to it and naviClaude quits, like jumping to an open
 // session); when false it is focused in passthrough.
 func (m Model) openResumePicker(sess *session.Session, jump bool) (tea.Model, tea.Cmd) {
+	if !m.menuCaps(sess).CanResume {
+		return m, nil
+	}
 	names := sessionNamesByRecency(m.tmuxClient.ListSessions())
 	m.pendingResumeSession = sess
 	m.pendingResumeJump = jump
@@ -1568,8 +1593,13 @@ func (m Model) handleResumePickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // it) or an error on failure.
 func (m Model) resumeInSessionCmd(sess *session.Session, targetName string) tea.Cmd {
 	manager := m.manager
+	h := m.harnessFor(sess)
 	return func() tea.Msg {
-		target, err := manager.ResumeInSession(sess, targetName)
+		cmd, err := resumeCommandFor(h, sess, false)
+		if err != nil {
+			return resumeMsg{err: fmt.Errorf("resume: %w", err)}
+		}
+		target, err := manager.ResumeInSession(sess, targetName, cmd)
 		if err != nil {
 			return resumeMsg{err: fmt.Errorf("resume: %w", err)}
 		}
@@ -1591,7 +1621,7 @@ func sessionNamesByRecency(infos []tmux.SessionInfo) []string {
 }
 
 // resolveNewSessionTarget determines the tmux session and starting directory a
-// new Claude session should use, based on the sidebar cursor. Resolution order:
+// new agent session should use, based on the sidebar cursor. Resolution order:
 //
 //  1. The hovered session -- its tmux session and cwd. Closed sessions carry
 //     no tmux session (only live pane detection assigns one), so they resolve
@@ -1633,7 +1663,7 @@ func (m Model) createNewSession() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// Open the directory picker; the Claude window is created once a directory
+	// Open the directory picker; the agent window is created once a directory
 	// is chosen (Enter). The current dir is preselected, so Enter keeps the
 	// previous behavior of opening in the highlighted session's directory.
 	base := cwd
@@ -1642,22 +1672,22 @@ func (m Model) createNewSession() (tea.Model, tea.Cmd) {
 			base = home
 		}
 	}
-	m.pendingDirAction = dirActionNewClaude
+	m.pendingDirAction = dirActionNewAgent
 	m.pendingDirTmux = tmuxSess
-	return m.openDirPicker(base, "New Claude session directory")
+	return m.openDirPicker(base, "New "+m.defaultInfo().Label+" session directory")
 }
 
-// createClaudeSessionIn launches a new Claude window in tmuxSess rooted at cwd.
-func (m Model) createClaudeSessionIn(cwd, tmuxSess string) (tea.Model, tea.Cmd) {
+// createAgentSessionIn launches a new default-harness window in tmuxSess rooted at cwd.
+func (m Model) createAgentSessionIn(cwd, tmuxSess string) (tea.Model, tea.Cmd) {
 	if tmuxSess == "" {
 		m.err = fmt.Errorf("new session: cannot determine target tmux session")
 		m.statusbar.SetError("cannot determine target tmux session")
 		return m, nil
 	}
 	manager := m.manager
-	claudeCmd := m.cfg.ClaudeCommand
+	h := m.registry.Default()
 	return m, func() tea.Msg {
-		target, err := manager.CreateNewWithTarget(cwd, tmuxSess, claudeCmd)
+		target, err := manager.CreateNewWithTarget(cwd, tmuxSess, h.StartCommand(), h.Info().Name)
 		if err != nil {
 			return newSessionMsg{err: err}
 		}
@@ -1665,6 +1695,7 @@ func (m Model) createClaudeSessionIn(cwd, tmuxSess string) (tea.Model, tea.Cmd) 
 			tmuxTarget:  target,
 			tmuxSession: tmuxSess,
 			cwd:         cwd,
+			harness:     h.Info().Name,
 		}
 	}
 }
@@ -1746,7 +1777,7 @@ func (m Model) handleDirPickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // confirmDirSelection dispatches the chosen directory to the flow that opened
-// the picker: create a Claude window (n), or continue to the name input for a
+// the picker: create an agent window (n), or continue to the name input for a
 // new tmux session (N).
 func (m Model) confirmDirSelection(dir string) (tea.Model, tea.Cmd) {
 	action := m.pendingDirAction
@@ -1760,12 +1791,12 @@ func (m Model) confirmDirSelection(dir string) (tea.Model, tea.Cmd) {
 	}
 
 	switch action {
-	case dirActionNewClaude:
+	case dirActionNewAgent:
 		tmuxSess := m.pendingDirTmux
 		m.pendingDirTmux = ""
 		m.mode = ModeList
 		m.statusbar.SetMode(ModeList.String())
-		return m.createClaudeSessionIn(dir, tmuxSess)
+		return m.createAgentSessionIn(dir, tmuxSess)
 
 	case dirActionNewTmux:
 		m.pendingNewTmuxCWD = dir
@@ -1785,10 +1816,10 @@ func (m Model) confirmDirSelection(dir string) (tea.Model, tea.Cmd) {
 func (m Model) confirmNewTmuxSession(name string) (tea.Model, tea.Cmd) {
 	cwd := m.pendingNewTmuxCWD
 	manager := m.manager
-	claudeCmd := m.cfg.ClaudeCommand
+	h := m.registry.Default()
 	sessionName := strings.TrimSpace(name)
 	return m, func() tea.Msg {
-		tmuxSess, target, err := manager.CreateNewTmuxSession(cwd, claudeCmd, sessionName)
+		tmuxSess, target, err := manager.CreateNewTmuxSession(cwd, h.StartCommand(), sessionName, h.Info().Name)
 		if err != nil {
 			return newTmuxSessionMsg{err: err}
 		}
@@ -1796,6 +1827,7 @@ func (m Model) confirmNewTmuxSession(name string) (tea.Model, tea.Cmd) {
 			tmuxTarget:  target,
 			tmuxSession: tmuxSess,
 			cwd:         cwd,
+			harness:     h.Info().Name,
 		}
 	}
 }
@@ -1853,7 +1885,7 @@ func (m Model) executeContextAction(action string, sess *session.Session) (tea.M
 		m.detail.Show(sess)
 		m.mode = ModeDetail
 		m.statusbar.SetMode(ModeDetail.String())
-		return m, loadDetailDataCmd(sess)
+		return m, loadDetailDataCmd(m.harnessFor(sess), sess)
 
 	case "copy_id":
 		// Best-effort clipboard copy; silently ignore errors.
@@ -1891,61 +1923,71 @@ func buildActiveIDSet(active []*session.Session) map[string]bool {
 	return ids
 }
 
-// enrichActiveSummaries fills in each active session's Summary from the history
-// index (first prompt) when the session doesn't already carry one. No-op when
-// scanner is nil.
-func enrichActiveSummaries(scanner *session.HistoryScanner, active []*session.Session) {
-	if scanner == nil {
-		return
-	}
-	historyIndex, _ := scanner.LoadHistoryIndex()
-	for _, s := range active {
-		if s.ID != "" {
-			if display, ok := historyIndex[s.ID]; ok && s.Summary == "" {
-				s.Summary = display
+// enrichActiveSummaries fills in each active session's Summary from its
+// harness's history index (first prompt) when the session doesn't already
+// carry one. No-op when reg is nil.
+func enrichActiveSummaries(reg *harness.Registry, active []*session.Session) {
+	byHarness := partitionByHarness(reg, active)
+	for name, list := range byHarness {
+		h, _ := reg.Get(name)
+		hp, ok := harness.AsHistory(h)
+		if !ok {
+			continue
+		}
+		historyIndex, _ := hp.Summaries()
+		for _, s := range list {
+			if s.ID != "" {
+				if display, ok := historyIndex[s.ID]; ok && s.Summary == "" {
+					s.Summary = display
+				}
 			}
 		}
 	}
 }
 
 // scanClosedAndAllSessions returns the time-windowed closed sessions and the
-// full closed-session list, excluding active IDs. It uses the session package's
-// combined ScanClosedAndAll, which globs and parses every session file once and
-// derives both views from that single pass (the closed set is a subset of all),
-// avoiding the previous double Glob + double per-file parse. No-op (nil,nil)
-// when scanner is nil.
-func scanClosedAndAllSessions(scanner *session.HistoryScanner, closedHours float64, activeIDs map[string]bool) (closed, all []*session.Session) {
-	if scanner == nil {
+// full closed-session list from every history-capable harness, excluding each
+// harness's active IDs. Each provider derives both views from a single pass.
+func scanClosedAndAllSessions(reg *harness.Registry, closedHours float64, active []*session.Session) (closed, all []*session.Session) {
+	if reg == nil {
 		return nil, nil
 	}
-	closed, all, _ = scanner.ScanClosedAndAll(closedHours, activeIDs)
+	byHarness := partitionByHarness(reg, active)
+	for _, h := range reg.All() {
+		hp, ok := harness.AsHistory(h)
+		if !ok {
+			continue
+		}
+		c, a, _ := hp.ScanClosedAndAll(closedHours, buildActiveIDSet(byHarness[h.Info().Name]))
+		closed = append(closed, c...)
+		all = append(all, a...)
+	}
 	return closed, all
 }
 
 // refreshActiveCmd performs the fast active-session scan only (no history).
 func (m Model) refreshActiveCmd() tea.Cmd {
 	detector := m.detector
-	scanner := m.historyScanner
+	reg := m.registry
 
 	return func() tea.Msg {
 		active, err := detector.Detect()
 		if err != nil {
 			return activeSessionsMsg{err: err}
 		}
-		enrichActiveSummaries(scanner, active)
+		enrichActiveSummaries(reg, active)
 		return activeSessionsMsg{active: active}
 	}
 }
 
 // refreshHistoryCmd performs the slower closed/history scan.
 func (m Model) refreshHistoryCmd() tea.Cmd {
-	scanner := m.historyScanner
+	reg := m.registry
 	closedHours := m.closedSessionHours
 	activeSessions := m.activeSessions
 
 	return func() tea.Msg {
-		activeIDs := buildActiveIDSet(activeSessions)
-		closed, all := scanClosedAndAllSessions(scanner, closedHours, activeIDs)
+		closed, all := scanClosedAndAllSessions(reg, closedHours, activeSessions)
 		return historySessionsMsg{
 			closed: closed,
 			all:    all,
@@ -1956,7 +1998,7 @@ func (m Model) refreshHistoryCmd() tea.Cmd {
 // refreshSessionsCmd performs the full combined refresh (used by periodic ticker).
 func (m Model) refreshSessionsCmd() tea.Cmd {
 	detector := m.detector
-	scanner := m.historyScanner
+	reg := m.registry
 	closedHours := m.closedSessionHours
 
 	return func() tea.Msg {
@@ -1965,9 +2007,8 @@ func (m Model) refreshSessionsCmd() tea.Cmd {
 			return sessionRefreshMsg{err: err}
 		}
 
-		activeIDs := buildActiveIDSet(active)
-		closed, all := scanClosedAndAllSessions(scanner, closedHours, activeIDs)
-		enrichActiveSummaries(scanner, active)
+		closed, all := scanClosedAndAllSessions(reg, closedHours, active)
+		enrichActiveSummaries(reg, active)
 
 		return sessionRefreshMsg{
 			active: active,
@@ -2062,14 +2103,18 @@ func (m *Model) selectPreviewSession(s *session.Session) {
 			if parent == "" {
 				parent = "another program"
 			}
+			label := "The agent"
+			if h := m.harnessFor(s); h != nil {
+				label = h.Info().Label
+			}
 			dim := lipgloss.NewStyle().Foreground(styles.ColorGray)
 			accent := lipgloss.NewStyle().Foreground(styles.ColorBlue)
 			hint := lipgloss.NewStyle().Foreground(styles.ColorAmber)
 			m.preview.SetContent(fmt.Sprintf(
 				"\n\n%s\n\n%s\n%s\n\n%s",
 				dim.Italic(true).Render("  Preview unavailable"),
-				dim.Render("  Claude is running inside "+accent.Render(parent)+dim.Render(".")),
-				dim.Render("  The tmux pane belongs to "+accent.Render(parent)+dim.Render(", not Claude.")),
+				dim.Render("  "+label+" is running inside "+accent.Render(parent)+dim.Render(".")),
+				dim.Render("  The tmux pane belongs to "+accent.Render(parent)+dim.Render(", not "+label+".")),
 				hint.Render("  Press "+accent.Render(m.keys.Jump)+" to jump to the pane"),
 			))
 		}
@@ -2129,10 +2174,10 @@ func (m Model) capturePreviewCmd() tea.Cmd {
 	}
 
 	target := sess.TmuxTarget
-	pid := sess.PID
 	sessionID := sess.ID
+	statusSess := *sess
+	h := m.harnessFor(sess)
 	captureEngine := m.captureEngine
-	statusDetector := m.statusDetector
 	// Compute the capture width here (on the event-loop goroutine, where the
 	// dimensions are stable) and pass it to Capture, rather than relying on a
 	// shared mutable field on the engine that the capture goroutine would race
@@ -2151,12 +2196,11 @@ func (m Model) capturePreviewCmd() tea.Cmd {
 			return previewCaptureMsg{err: err, target: target, sessionID: sessionID}
 		}
 
-		// Claude Code's own native status is authoritative when available; fall
-		// back to screen-content classification only when it is not, so the fast
-		// preview path never overrides a reliable native status with a guess.
-		status, ok := session.NativeStatus(pid, sessionID)
-		if !ok {
-			status = statusDetector.DetectFromContent(target, content)
+		// The harness's native status is authoritative when available; content
+		// classification is only the fallback, so a guess never overrides it.
+		status := session.StatusActive
+		if h != nil {
+			status = harness.PreviewStatus(h, &statusSess, content)
 		}
 
 		return previewCaptureMsg{
@@ -2171,8 +2215,14 @@ func (m Model) capturePreviewCmd() tea.Cmd {
 // loadClosedPreviewCmd loads conversation history from a closed session's .jsonl
 // and formats it for display in the preview pane with colored styling.
 func (m Model) loadClosedPreviewCmd(sess *session.Session) tea.Cmd {
+	h := m.harnessFor(sess)
 	return func() tea.Msg {
-		entries, err := session.LoadConversation(sess, 100)
+		cp, ok := harness.AsConversation(h)
+		if h == nil || !ok {
+			return closedPreviewMsg{content: "  No conversation history found."}
+		}
+		assistantLabel := h.Info().AssistantLabel
+		entries, err := cp.LoadConversation(sess, 100)
 		if err != nil {
 			return closedPreviewMsg{err: err}
 		}
@@ -2194,7 +2244,7 @@ func (m Model) loadClosedPreviewCmd(sess *session.Session) tea.Cmd {
 					b.WriteString("  " + styles.ConversationUserText.Render("  "+line) + "\n")
 				}
 			} else {
-				b.WriteString("\n  " + styles.ConversationAssistantLabel.Render("Claude") + "\n")
+				b.WriteString("\n  " + styles.ConversationAssistantLabel.Render(assistantLabel) + "\n")
 				lines := strings.Split(e.Text, "\n")
 				for _, line := range lines {
 					b.WriteString("  " + styles.ConversationAssistantText.Render("  "+line) + "\n")
@@ -2339,7 +2389,7 @@ func (m *Model) selectSessionInSidebar(target *session.Session) {
 	if target == nil {
 		return
 	}
-	m.sidebar.SelectByID(target.ID)
+	m.sidebar.SelectByID(target.Key())
 	m.preview.SetSession(target)
 }
 
@@ -2356,7 +2406,7 @@ func (m *Model) reloadMetricsForSelection(sel *session.Session) tea.Cmd {
 	m.metricsSessionID = sel.ID
 	m.sidebar.SetMetrics(nil)
 	m.preview.SetMetrics(nil)
-	return loadMetricsCmd(sel)
+	return loadMetricsCmd(m.harnessFor(sel), sel)
 }
 
 // reloadChangedFilesForSelection clears the changed-files list and reloads it
@@ -2370,12 +2420,12 @@ func (m *Model) reloadChangedFilesForSelection(sel *session.Session) tea.Cmd {
 	m.changedFilesSessionID = sel.ID
 	m.changedFilesMtime = time.Time{} // pending load; suppress live refresh until it lands
 	m.rightSidebar.SetFiles(nil, sel.CWD)
-	return loadChangedFilesCmd(sel)
+	return loadChangedFilesCmd(m.harnessFor(sel), sel)
 }
 
 // maybeRefreshChangedFilesCmd returns a reload command when the open changed-
 // files panel is stale: the selected session's transcript has been written to
-// since the last load (Claude edited more files). It stats the transcript --
+// since the last load (the agent edited more files). It stats the transcript --
 // cheap enough to run on every session tick -- and only triggers the heavier
 // transcript scan + git diff when the mtime actually advanced. The cursor is
 // preserved across the reload by SetFiles. Returns nil when the panel is
@@ -2391,15 +2441,11 @@ func (m *Model) maybeRefreshChangedFilesCmd() tea.Cmd {
 	if m.changedFilesMtime.IsZero() {
 		return nil // initial (or post-switch) load still in flight
 	}
-	path := changedFilesTranscriptPath(sel)
-	if path == "" {
+	cf, ok := harness.AsChangedFiles(m.harnessFor(sel))
+	if !ok || !cf.ChangeStamp(sel).After(m.changedFilesMtime) {
 		return nil
 	}
-	fi, err := os.Stat(path)
-	if err != nil || !fi.ModTime().After(m.changedFilesMtime) {
-		return nil
-	}
-	return loadChangedFilesCmd(sel)
+	return loadChangedFilesCmd(m.harnessFor(sel), sel)
 }
 
 // setFocus moves keyboard focus to the given pane, applying the passthrough
@@ -2468,7 +2514,7 @@ func (m *Model) applyAliases(list []*session.Session) {
 		return
 	}
 	for _, s := range list {
-		if name, ok := aliases[s.ID]; ok {
+		if name, ok := aliases[s.Key()]; ok {
 			s.DisplayName = name
 		}
 	}
@@ -2681,7 +2727,7 @@ func (m Model) persistViewState() {
 	}
 	vs := session.ViewState{CollapsedGroups: m.sidebar.ToggledGroups()}
 	if sel := m.sidebar.SelectedSession(); sel != nil {
-		vs.LastSessionID = sel.ID
+		vs.LastSessionID = sel.Key()
 	}
 	_ = m.viewState.Save(vs)
 }

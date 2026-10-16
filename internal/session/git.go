@@ -105,5 +105,16 @@ func fileLineCount(path string) int {
 	if err != nil {
 		return 0
 	}
-	return len(splitLines(string(data)))
+	return len(SplitLines(string(data)))
+}
+
+// SplitLines splits s into lines, treating a single trailing newline as a line
+// terminator rather than introducing a trailing empty line. An empty string is
+// zero lines.
+func SplitLines(s string) []string {
+	if s == "" {
+		return nil
+	}
+	s = strings.TrimSuffix(s, "\n")
+	return strings.Split(s, "\n")
 }

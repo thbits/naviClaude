@@ -2,62 +2,6 @@ package session
 
 import "testing"
 
-// TestParseResumeFlagInlineEquals_EdgeCases complements TestParseResumeFlagInlineForm
-// in fixes_owned_test.go. It targets fix (1): the --resume=<uuid> inline form must
-// split on the FIRST '=' only, must lose to nothing when the value is empty, and
-// must keep working when surrounded by unrelated flags.
-func TestParseResumeFlagInlineEquals_EdgeCases(t *testing.T) {
-	tests := []struct {
-		name    string
-		cmdLine string
-		want    string
-	}{
-		{
-			name:    "value itself contains an equals sign",
-			cmdLine: "claude --resume=a=b=c",
-			want:    "a=b=c",
-		},
-		{
-			name:    "inline form is the very first token",
-			cmdLine: "--resume=only-token",
-			want:    "only-token",
-		},
-		{
-			name:    "inline form preferred when it appears before a space form",
-			cmdLine: "claude --resume=first --resume second",
-			want:    "first",
-		},
-		{
-			name:    "space form wins when it appears first",
-			cmdLine: "claude --resume spaced --extra=ignored",
-			want:    "spaced",
-		},
-		{
-			name:    "no resume flag at all",
-			cmdLine: "claude --continue --verbose",
-			want:    "",
-		},
-		{
-			name:    "resume-like prefix is not matched (must be exactly --resume=)",
-			cmdLine: "claude --resumed=nope",
-			want:    "",
-		},
-		{
-			name:    "trailing whitespace around inline value is trimmed by Fields",
-			cmdLine: "  claude   --resume=padded   ",
-			want:    "padded",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := parseResumeFlag(tt.cmdLine); got != tt.want {
-				t.Errorf("parseResumeFlag(%q) = %q, want %q", tt.cmdLine, got, tt.want)
-			}
-		})
-	}
-}
-
 // TestShellSingleQuote_CombinedMetacharacters complements TestShellSingleQuoteEscaping.
 // It targets fix (2): a single path that combines a space, $, and backtick (the
 // exact trio called out by the task) must be wrapped in one shell-safe single-quoted

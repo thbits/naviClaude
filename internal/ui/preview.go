@@ -13,15 +13,10 @@ import (
 	"github.com/thbits/naviClaude/internal/styles"
 )
 
-// cacheExpiryThreshold is how long a live session can sit idle before Claude's
-// prompt cache is assumed to have expired. Past this point, resuming the
-// session re-processes its whole context as uncached input tokens, so the next
-// message costs far more than a cached resume would.
-const cacheExpiryThreshold = time.Hour
-
 // PreviewModel is the right panel that shows captured terminal content for the
 // selected session.
 type PreviewModel struct {
+	cacheTTLs    map[string]time.Duration // harness name -> prompt-cache TTL; "" = default harness
 	content      string
 	session      *session.Session
 	metrics      *session.SessionMetrics
@@ -31,6 +26,10 @@ type PreviewModel struct {
 	width        int
 	height       int
 }
+
+// SetCacheTTLs sets each harness's prompt-cache lifetime (keyed by harness
+// name, "" for unstamped sessions); harnesses without one show no expiry chip.
+func (m *PreviewModel) SetCacheTTLs(ttls map[string]time.Duration) { m.cacheTTLs = ttls }
 
 // NewPreview creates a PreviewModel with the given dimensions.
 func NewPreview(width, height int) PreviewModel {
@@ -282,7 +281,7 @@ func (m PreviewModel) renderHeader() string {
 		}
 		var bandLeft []string
 		bandLeft = append(bandLeft, lipgloss.NewStyle().Foreground(statusFg).Background(bg).Bold(true).Render(statusLabel))
-		if cacheExpired(s, time.Now()) {
+		if cacheExpired(s, time.Now(), m.cacheTTLs[s.Harness]) {
 			bandLeft = append(bandLeft, lipgloss.NewStyle().Foreground(styles.ColorRed).Background(bg).Bold(true).Render("cache expired"))
 		}
 		if s.TmuxTarget != "" {
@@ -325,7 +324,7 @@ func (m PreviewModel) renderHeader() string {
 			leftPlain = append(leftPlain, s.GitBranch)
 		}
 		leftPlain = append(leftPlain, statusLabel)
-		if cacheExpired(s, time.Now()) {
+		if cacheExpired(s, time.Now(), m.cacheTTLs[s.Harness]) {
 			leftPlain = append(leftPlain, "cache expired")
 		}
 		if s.TmuxTarget != "" {
@@ -344,15 +343,15 @@ func (m PreviewModel) renderHeader() string {
 	return headerStyle.Width(maxWidth).Render(headerLine)
 }
 
-// cacheExpired reports whether a session has been idle long enough that
-// Claude's prompt cache will have expired. Closed sessions warn too: resuming
-// one re-sends the whole conversation, so a cold cache still means a costly
-// re-process. Sessions with no known last-activity time never warn.
-func cacheExpired(s *session.Session, now time.Time) bool {
-	if s == nil || s.LastActivity.IsZero() {
+// cacheExpired reports whether a session has been idle for at least ttl, so
+// its prompt cache has expired and the next message re-processes the whole
+// context uncached. Closed sessions warn too (resuming re-sends everything).
+// A zero ttl or unknown last activity never warns.
+func cacheExpired(s *session.Session, now time.Time, ttl time.Duration) bool {
+	if s == nil || ttl <= 0 || s.LastActivity.IsZero() {
 		return false
 	}
-	return now.Sub(s.LastActivity) >= cacheExpiryThreshold
+	return now.Sub(s.LastActivity) >= ttl
 }
 
 // SetGroupSummary renders a summary view for a tmux session group.

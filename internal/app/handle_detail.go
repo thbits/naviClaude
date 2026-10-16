@@ -4,6 +4,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/thbits/naviClaude/internal/harness"
 	"github.com/thbits/naviClaude/internal/session"
 )
 
@@ -16,25 +17,19 @@ type detailDataMsg struct {
 	startTime    time.Time
 }
 
-// loadDetailDataCmd reads the .jsonl file to count conversational turns and
-// extract the start time. It delegates to session.LoadMetrics so the detail
-// popup and the preview header report the same message count.
-func loadDetailDataCmd(sess *session.Session) tea.Cmd {
+// loadDetailDataCmd counts conversational turns and finds the start time via
+// the harness's metrics, so the detail popup and the preview header agree.
+func loadDetailDataCmd(h harness.Harness, sess *session.Session) tea.Cmd {
 	sessionID := sess.ID
 	return func() tea.Msg {
-		filePath := sess.SessionFile
-		if filePath == "" && sess.ID != "" && sess.CWD != "" {
-			filePath = session.SessionFilePath(sess.ID, sess.CWD)
-		}
-		if filePath == "" {
+		mp, ok := harness.AsMetrics(h)
+		if h == nil || !ok {
 			return detailDataMsg{sessionID: sessionID}
 		}
 
-		// Model family only affects the context limit, which the detail popup
-		// does not use, so the default ("") is fine here. A scan error still
-		// yields useful partial counts, so only a nil result (open failure) is
-		// treated as "no data".
-		m, _ := session.LoadMetrics(filePath, "")
+		// A scan error still yields useful partial counts, so only a nil result
+		// (open failure) is treated as "no data".
+		m, _ := mp.LoadMetrics(sess)
 		if m == nil {
 			return detailDataMsg{sessionID: sessionID}
 		}

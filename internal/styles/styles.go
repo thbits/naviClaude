@@ -238,7 +238,7 @@ var LoadingStyle lipgloss.Style
 // ConversationUserLabel styles the "You" role header.
 var ConversationUserLabel lipgloss.Style
 
-// ConversationAssistantLabel styles the "Claude" role header.
+// ConversationAssistantLabel styles the assistant role header.
 var ConversationAssistantLabel lipgloss.Style
 
 // ConversationUserText styles the user message body.

@@ -38,7 +38,7 @@ const (
 	ModeRenameSession
 
 	// ModeDirPicker shows the directory picker overlay used when creating a new
-	// Claude (n) or tmux (N) session.
+	// agent (n) or tmux (N) session.
 	ModeDirPicker
 
 	// ModeResumePicker shows the session picker overlay used when resuming a
@@ -56,7 +56,7 @@ type dirAction int
 
 const (
 	dirActionNone dirAction = iota
-	dirActionNewClaude
+	dirActionNewAgent
 	dirActionNewTmux
 )
 

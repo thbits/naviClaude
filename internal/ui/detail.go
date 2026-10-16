@@ -72,12 +72,7 @@ func (m DetailModel) View() string {
 		{"Tmux Target", s.TmuxTarget},
 	}
 
-	// Session file path.
-	sessionFile := s.SessionFile
-	if sessionFile == "" && s.ID != "" && s.CWD != "" {
-		sessionFile = session.SessionFilePath(s.ID, s.CWD)
-	}
-	rows = append(rows, detailRow{"Session File", sessionFile})
+	rows = append(rows, detailRow{"Session File", s.SessionFile})
 	rows = append(rows, detailRow{"Slug", s.Slug})
 	rows = append(rows, detailRow{"Model", s.Model})
 	rows = append(rows, detailRow{"Version", s.Version})

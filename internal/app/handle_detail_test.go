@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/thbits/naviClaude/internal/harness/claude"
 	"github.com/thbits/naviClaude/internal/session"
 )
 
@@ -26,7 +27,7 @@ func TestLoadDetailDataCmd(t *testing.T) {
 		}
 
 		sess := &session.Session{ID: "abc", SessionFile: filePath}
-		msg := loadDetailDataCmd(sess)()
+		msg := loadDetailDataCmd(claude.New(claude.Options{}), sess)()
 
 		data, ok := msg.(detailDataMsg)
 		if !ok {

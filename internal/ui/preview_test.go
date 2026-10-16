@@ -105,9 +105,17 @@ func TestCacheExpired(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := cacheExpired(tt.s, now); got != tt.want {
+			if got := cacheExpired(tt.s, now, time.Hour); got != tt.want {
 				t.Errorf("cacheExpired() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestCacheExpiredZeroTTLNeverWarns(t *testing.T) {
+	now := time.Now()
+	s := &session.Session{Status: session.StatusIdle, LastActivity: now.Add(-5 * time.Hour)}
+	if cacheExpired(s, now, 0) {
+		t.Error("a harness without a prompt cache (ttl 0) must never show the chip")
 	}
 }

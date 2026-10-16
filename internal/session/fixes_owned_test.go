@@ -5,52 +5,6 @@ import (
 	"time"
 )
 
-// TestParseResumeFlagInlineForm covers the --resume=<uuid> form added alongside
-// the existing space-separated --resume <uuid> form. (The space-separated cases
-// are exercised by TestParseResumeFlag in detector_test.go.)
-func TestParseResumeFlagInlineForm(t *testing.T) {
-	tests := []struct {
-		name    string
-		cmdLine string
-		want    string
-	}{
-		{
-			name:    "inline equals form",
-			cmdLine: "claude --resume=abc-123-def",
-			want:    "abc-123-def",
-		},
-		{
-			name:    "inline form with other args",
-			cmdLine: "/usr/bin/claude --verbose --resume=my-session-id --json",
-			want:    "my-session-id",
-		},
-		{
-			name:    "inline form empty value",
-			cmdLine: "claude --resume=",
-			want:    "",
-		},
-		{
-			name:    "inline form with uuid containing no extra equals",
-			cmdLine: "claude --resume=11111111-2222-3333-4444-555555555555",
-			want:    "11111111-2222-3333-4444-555555555555",
-		},
-		{
-			name:    "space form still works after adding inline",
-			cmdLine: "claude --resume space-id",
-			want:    "space-id",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := parseResumeFlag(tt.cmdLine)
-			if got != tt.want {
-				t.Errorf("parseResumeFlag(%q) = %q, want %q", tt.cmdLine, got, tt.want)
-			}
-		})
-	}
-}
-
 // TestShellSingleQuoteEscaping verifies the cwd quoting helper produces a single
 // shell token that suppresses expansion of $, backticks, and backslashes, and
 // that embedded single quotes are escaped with the close-escape-reopen sequence.
@@ -135,43 +89,5 @@ func TestStatusTrackerPruneEmptyActiveClearsAll(t *testing.T) {
 	st.Prune(nil)
 	if len(st.lastWorking) != 0 {
 		t.Errorf("prune(nil) on empty tracker: %d entries, want 0", len(st.lastWorking))
-	}
-}
-
-// TestNativeStatusTrustedRegardlessOfTimestampAge is a regression test for a
-// false-WAITING bug. Claude writes statusUpdatedAt only when the status CHANGES
-// (event-driven), not as a heartbeat, so a session sitting stably idle or busy
-// legitimately has an old timestamp -- an actively-busy session was observed
-// with a 156s-old timestamp. resolveStatus must therefore honor a present
-// native status regardless of its timestamp age; otherwise a stable session is
-// demoted to the content-classification fallback, which can false-positive
-// WAITING on idle pane content (the input box / leftover scrollback).
-func TestNativeStatusTrustedRegardlessOfTimestampAge(t *testing.T) {
-	d := NewDetector(nil, nil, 0, 0)
-	emptyTree := &ProcessTree{
-		children: map[int][]int{},
-		names:    map[int]string{},
-		ppid:     map[int]int{},
-		cpu:      map[int]float64{},
-		rss:      map[int]float64{},
-	}
-	// A timestamp far older than any plausible cutoff, with no tmux target so
-	// resolveStatus never captures pane content -- the ONLY thing that can yield
-	// a non-idle result is the trusted native status.
-	staleMs := time.Now().Add(-30 * time.Minute).UnixMilli()
-	cases := []struct {
-		native string
-		want   SessionStatus
-	}{
-		{"busy", StatusActive},
-		{"idle", StatusIdle},
-		{"waiting", StatusWaiting},
-	}
-	for _, c := range cases {
-		s := &Session{nativeStatus: c.native, nativeStatusAt: staleMs}
-		if got := d.resolveStatus(s, emptyTree); got != c.want {
-			t.Errorf("native %q with a 30m-old timestamp: resolveStatus = %v, want %v "+
-				"(native status must be trusted regardless of age)", c.native, got, c.want)
-		}
 	}
 }

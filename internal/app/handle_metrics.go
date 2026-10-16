@@ -2,6 +2,7 @@ package app
 
 import (
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/thbits/naviClaude/internal/harness"
 	"github.com/thbits/naviClaude/internal/session"
 )
 
@@ -11,20 +12,17 @@ type metricsMsg struct {
 	metrics   *session.SessionMetrics
 }
 
-// loadMetricsCmd loads metrics from a session's JSONL file asynchronously.
-func loadMetricsCmd(sess *session.Session) tea.Cmd {
+// loadMetricsCmd loads a session's metrics asynchronously via its harness.
+func loadMetricsCmd(h harness.Harness, sess *session.Session) tea.Cmd {
 	return func() tea.Msg {
-		filePath := sess.SessionFile
-		if filePath == "" && sess.ID != "" && sess.CWD != "" {
-			filePath = session.SessionFilePath(sess.ID, sess.CWD)
-		}
-		if filePath == "" {
+		mp, ok := harness.AsMetrics(h)
+		if h == nil || !ok {
 			return metricsMsg{sessionID: sess.ID}
 		}
 		// A scan error (e.g. a transcript line over the scanner buffer) still
 		// yields useful partial metrics, so only a nil result -- an outright
 		// open failure -- is treated as "no data".
-		m, _ := session.LoadMetrics(filePath, sess.Model)
+		m, _ := mp.LoadMetrics(sess)
 		if m == nil {
 			return metricsMsg{sessionID: sess.ID}
 		}

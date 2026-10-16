@@ -1,8 +1,8 @@
 package app
 
 import (
-	"os"
-	"path/filepath"
+	"fmt"
+	"github.com/thbits/naviClaude/internal/harness"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -88,53 +88,38 @@ type statsComputeMsg struct {
 	err   error
 }
 
-// statsCacheKey combines the session-file count with a freshness fingerprint
-// (the latest .jsonl modification time, truncated to seconds) so the stats
-// cache is invalidated when existing files grow even though the file count is
-// unchanged. The stats.Cache compares this value for equality; folding the
-// freshness signal into the int it stores keeps the cache benefit for the
-// truly-unchanged case (same count and same newest mtime) without editing the
-// stats package.
-func statsCacheKey() int {
-	fileCount := stats.CountSessionFiles("")
-
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return fileCount
+// statsProvider returns the first registered harness that computes stats.
+func (m Model) statsProvider() (harness.StatsProvider, bool) {
+	if m.registry == nil {
+		return nil, false
 	}
-	pattern := filepath.Join(home, ".claude", "projects", "*", "*.jsonl")
-	files, err := filepath.Glob(pattern)
-	if err != nil {
-		return fileCount
-	}
-	var maxMod int64
-	for _, f := range files {
-		if info, err := os.Stat(f); err == nil {
-			if mod := info.ModTime().Unix(); mod > maxMod {
-				maxMod = mod
-			}
+	for _, h := range m.registry.All() {
+		if sp, ok := harness.AsStats(h); ok {
+			return sp, true
 		}
 	}
-	// Combine count and newest mtime into one comparison key. The shift keeps the
-	// file count from colliding with the mtime component for any realistic count.
-	return fileCount + int(maxMod<<20)
+	return nil, false
 }
 
-// computeStatsCmd runs stats.Compute in the background.
+// computeStatsCmd computes stats in the background via the stats provider.
 func (m Model) computeStatsCmd() tea.Cmd {
 	activeCount := len(m.activeSessions)
 	filter := m.statsModel.FilterString()
 	cache := m.statsCache
+	sp, ok := m.statsProvider()
 
 	return func() tea.Msg {
-		// Check cache first. The key incorporates both the file count and the
-		// newest .jsonl mtime so content growth invalidates a stale entry.
-		cacheKey := statsCacheKey()
+		if !ok {
+			return statsComputeMsg{err: fmt.Errorf("no harness provides stats")}
+		}
+		// The key changes when the provider's underlying data changes, so a
+		// stale entry is never served.
+		cacheKey := sp.StatsKey()
 		if cached := cache.Load(cacheKey); cached != nil && cached.Filter == filter {
 			return statsComputeMsg{stats: cached}
 		}
 
-		s, err := stats.Compute("", activeCount, filter)
+		s, err := sp.ComputeStats(activeCount, filter)
 		if err != nil {
 			return statsComputeMsg{err: err}
 		}

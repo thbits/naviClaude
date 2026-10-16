@@ -506,11 +506,11 @@ func (m *SidebarModel) GroupSessions(name string) []*session.Session {
 	return nil
 }
 
-// SelectByID moves the cursor to the session with the given ID.
+// SelectByID moves the cursor to the session whose Key() matches key.
 // Returns true if the session was found.
-func (m *SidebarModel) SelectByID(id string) bool {
+func (m *SidebarModel) SelectByID(key string) bool {
 	for i, item := range m.flatItems {
-		if !item.isGroup && item.session != nil && item.session.ID == id {
+		if !item.isGroup && item.session != nil && item.session.Key() == key {
 			m.cursor = i
 			m.updateTracked()
 			m.syncViewport()

@@ -34,13 +34,13 @@ func NewContextMenu() ContextMenuModel {
 }
 
 // Show positions the menu and builds items based on the session status.
-func (m *ContextMenuModel) Show(x, y int, s *session.Session) {
+func (m *ContextMenuModel) Show(x, y int, s *session.Session, caps MenuCaps) {
 	m.visible = true
 	m.x = x
 	m.y = y
 	m.session = s
 	m.cursor = 0
-	m.items = m.buildItems(s)
+	m.items = m.buildItems(s, caps)
 	m.skipSeparators(1) // ensure cursor is on a real item
 }
 
@@ -139,21 +139,34 @@ func (m *ContextMenuModel) skipSeparators(dir int) {
 	}
 }
 
-func (m *ContextMenuModel) buildItems(s *session.Session) []MenuItem {
+// MenuCaps is what the session's harness supports.
+type MenuCaps struct {
+	CanResume bool
+	CanFork   bool
+}
+
+func (m *ContextMenuModel) buildItems(s *session.Session, caps MenuCaps) []MenuItem {
 	if s == nil {
 		return nil
 	}
 
 	if s.Status == session.StatusClosed {
-		return []MenuItem{
-			{Label: "Resume", Shortcut: "Enter", Action: "resume"},
-			{Label: "Fork & Resume", Shortcut: "", Action: "fork_resume"},
-			{IsSep: true},
-			{Label: "Detail", Shortcut: "d", Action: "detail"},
-			{IsSep: true},
-			{Label: "Copy session ID", Action: "copy_id"},
-			{Label: "Copy project path", Action: "copy_path"},
+		var items []MenuItem
+		if caps.CanResume {
+			items = append(items, MenuItem{Label: "Resume", Shortcut: "Enter", Action: "resume"})
 		}
+		if caps.CanFork {
+			items = append(items, MenuItem{Label: "Fork & Resume", Shortcut: "", Action: "fork_resume"})
+		}
+		if len(items) > 0 {
+			items = append(items, MenuItem{IsSep: true})
+		}
+		return append(items,
+			MenuItem{Label: "Detail", Shortcut: "d", Action: "detail"},
+			MenuItem{IsSep: true},
+			MenuItem{Label: "Copy session ID", Action: "copy_id"},
+			MenuItem{Label: "Copy project path", Action: "copy_path"},
+		)
 	}
 
 	return []MenuItem{
