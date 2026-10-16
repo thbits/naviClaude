@@ -47,6 +47,7 @@ type sessionMetadata struct {
 	Name            string `json:"name"`
 	NameSource      string `json:"nameSource"`      // "derived" = auto placeholder
 	Status          string `json:"status"`          // busy|waiting|idle|shell
+	WaitingFor      string `json:"waitingFor"`      // why it is waiting, e.g. "permission prompt"
 	StatusUpdatedAt int64  `json:"statusUpdatedAt"` // epoch ms
 }
 
@@ -150,6 +151,26 @@ func nativeStatusString(pid int, sessionID string) string {
 	}
 	s, _ := readSessionStatusByID(sessionID)
 	return s
+}
+
+// NativeState is Claude Code's own UI state for a running session.
+type NativeState struct {
+	Status     string // busy|waiting|idle|shell
+	WaitingFor string // set while Status is "waiting"
+	UpdatedAt  int64  // epoch ms of the last status change
+}
+
+// ReadNativeState returns the session's native state, trying the per-PID file
+// before a sessionId scan. ok is false when no file carries a status.
+func ReadNativeState(pid int, sessionID string) (NativeState, bool) {
+	m := readSessionMetadata(pid)
+	if m.Status == "" || (sessionID != "" && m.SessionID != sessionID) {
+		m, _ = readSessionMetadataByID(sessionID)
+	}
+	if m.Status == "" {
+		return NativeState{}, false
+	}
+	return NativeState{Status: m.Status, WaitingFor: m.WaitingFor, UpdatedAt: m.StatusUpdatedAt}, true
 }
 
 // NativeStatus reads Claude Code's own status for a session and maps it to a

@@ -368,3 +368,26 @@ func TestSaveCreatesDirectories(t *testing.T) {
 		t.Fatal("expected file to be created")
 	}
 }
+
+func TestNotificationsPartialOverride(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	body := "notifications:\n  done_sound: none\n  volume: 7\n  cooldown: nope\n  waiting_marker: \"\"\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := cfg.Notifications
+	d := DefaultConfig().Notifications
+	if n.DoneSound != "none" {
+		t.Errorf("DoneSound = %q", n.DoneSound)
+	}
+	if !n.Enabled || !n.WindowMarker {
+		t.Error("unset bools lost their true defaults")
+	}
+	if n.Volume != d.Volume || n.Cooldown != d.Cooldown || n.WaitingMarker != d.WaitingMarker || n.DoneMarker != d.DoneMarker {
+		t.Errorf("invalid values not sanitized: %+v", n)
+	}
+}

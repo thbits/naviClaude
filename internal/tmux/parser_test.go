@@ -293,3 +293,17 @@ func TestParseCursorInfo(t *testing.T) {
 		})
 	}
 }
+
+func TestParsePaneLineWithPaneIDAndAttention(t *testing.T) {
+	p, err := parsePaneLine("main:1.0\x1fclaude\x1f42\x1f%7\x1fwaiting\x1f/Users/tom/my proj")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.PaneID != "%7" || p.Attention != "waiting" || p.CurrentPath != "/Users/tom/my proj" || p.PID != 42 {
+		t.Errorf("got %+v", p)
+	}
+	p, err = parsePaneLine("main:1.0\x1fclaude\x1f42\x1f%7\x1f\x1f/tmp")
+	if err != nil || p.Attention != "" || p.CurrentPath != "/tmp" {
+		t.Errorf("empty attention: got %+v, %v", p, err)
+	}
+}

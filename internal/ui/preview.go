@@ -211,8 +211,14 @@ func (m PreviewModel) renderHeader() string {
 		statusLabel = "ACTIVE"
 	case session.StatusWaiting:
 		statusLabel = "WAITING"
+		if s.WaitingFor != "" {
+			statusLabel += " · " + strings.ToUpper(s.WaitingFor)
+		}
 	case session.StatusIdle:
 		statusLabel = "IDLE"
+		if s.Attention == "done" {
+			statusLabel = "DONE"
+		}
 	}
 
 	// Right-side metrics as plain strings (styled per render path below).

@@ -26,6 +26,8 @@ type PaneInfo struct {
 	CurrentCommand string
 	PID            int
 	CurrentPath    string
+	PaneID         string // stable "%N" id
+	Attention      string // @naviclaude_attn pane option set by the Claude hooks
 }
 
 // ParsePanes parses the raw output of:
@@ -64,7 +66,7 @@ func parsePaneLine(line string) (PaneInfo, error) {
 	// There are exactly 4 separator-delimited tokens. We split into at most 4
 	// fields so any stray separator in the path is preserved rather than
 	// truncating the line.
-	fields := strings.SplitN(line, paneFieldSep, 4)
+	fields := strings.SplitN(line, paneFieldSep, 6)
 	if len(fields) < 4 {
 		return PaneInfo{}, fmt.Errorf("too few fields: %q", line)
 	}
@@ -72,7 +74,14 @@ func parsePaneLine(line string) (PaneInfo, error) {
 	targetStr := fields[0] // "session:window.pane"
 	command := fields[1]
 	pidStr := fields[2]
-	path := fields[3]
+	// Six fields carry pane_id and the attention option before the path; fewer
+	// is the legacy four-field form.
+	var paneID, attn, path string
+	if len(fields) == 6 && strings.HasPrefix(fields[3], "%") {
+		paneID, attn, path = fields[3], fields[4], fields[5]
+	} else {
+		path = strings.Join(fields[3:], paneFieldSep)
+	}
 
 	session, winIdx, paneIdx, err := parseTarget(targetStr)
 	if err != nil {
@@ -92,6 +101,8 @@ func parsePaneLine(line string) (PaneInfo, error) {
 		CurrentCommand: command,
 		PID:            pid,
 		CurrentPath:    path,
+		PaneID:         paneID,
+		Attention:      attn,
 	}, nil
 }
 

@@ -135,8 +135,19 @@ func (h *Harness) Enrich(s *session.Session) {
 
 // NativeStatus returns Claude Code's own status from ~/.claude/sessions,
 // trusted regardless of statusUpdatedAt age (it is event-driven, not a heartbeat).
+// It also records why the session is waiting on s.
 func (h *Harness) NativeStatus(s *session.Session) (session.SessionStatus, bool) {
-	return NativeStatus(s.PID, s.ID)
+	st, ok := ReadNativeState(s.PID, s.ID)
+	if !ok {
+		return session.StatusIdle, false
+	}
+	status, ok := mapNativeStatus(st.Status)
+	s.NativeStatus = ok
+	s.WaitingFor = ""
+	if status == session.StatusWaiting {
+		s.WaitingFor = st.WaitingFor
+	}
+	return status, ok
 }
 
 // ClassifyPane implements harness.Harness.

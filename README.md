@@ -13,7 +13,8 @@ layers on top of your existing tmux setup instead of replacing it.
 - **Live preview** -- real-time tmux pane capture of the selected session
 - **Activity sparklines** -- per-session message activity visualization on the selected item
 - **Context usage bar** -- shows current token usage vs context window limit
-- **Breathing status dots** -- active sessions pulse green, waiting sessions pulse amber
+- **Breathing status dots** -- active sessions pulse green, waiting sessions pulse amber, a blue `◉` marks a session that finished while you were away
+- **Attention alerts** -- a sound and a colored bell / check after the tmux window name when Claude needs you or finishes, even while naviClaude is closed (see [Notifications](#notifications))
 - **Passthrough mode** -- type directly into a session without leaving the TUI
 - **Changed-files sidebar** -- a right-hand panel listing the files the selected session edited, with per-file `+/-` counts (live `git diff` while uncommitted, a persistent transcript estimate afterwards); open any file in your editor
 - **Fuzzy search** -- filter sessions by name
@@ -153,6 +154,43 @@ remember_group_state: true
 | `remember_group_state` | `true` | On startup, restore the open/closed state of groups you manually toggled |
 | `editor` | `$EDITOR`, else `vi` | Editor for opening changed files from the changed-files sidebar; may include flags. GUI editors (`cursor`, `code`, `zed`, ...) open in their own window; terminal editors (`vim`, `nvim`, `nano`, ...) take over the TUI and return on exit |
 | `new_session_dir` | `~` | Working directory for new tmux sessions created with `N` |
+
+## Notifications
+
+naviClaude can ring a bell and mark the tmux window when a Claude session needs you. It works through Claude Code hooks, so it fires whether or not the dashboard is open:
+
+```sh
+naviclaude hooks install    # adds async hooks to ~/.claude/settings.json (backup in ~/Library/Caches/naviclaude)
+naviclaude hooks status
+naviclaude hooks uninstall
+```
+
+Restart running Claude sessions afterwards; hooks are read at session start. The hooks call this binary by absolute path, so re-run `install` if you move it.
+
+| Event | What happens |
+|---|---|
+| Permission prompt, question (`AskUserQuestion`), plan approval, MCP input | **request** sound, a yellow bell `` is appended to the window name -- the marker clears as soon as Claude stops waiting (answered, Esc, ...) or you switch to the pane |
+| Turn finished in a pane you are not looking at | **done** sound, a green check `` is appended until you visit it or send the next prompt |
+| Turn finished while you are looking at it | nothing (unless `done_sound_when_focused`) |
+
+Hooks are only triggers: before ringing, naviClaude confirms the state with Claude's own status file (`~/.claude/sessions/<pid>.json`), so prompts that auto mode approves instantly stay silent and the marker never sticks. Sounds respect a global cooldown so several sessions finishing together ring once. Outside tmux the hooks do nothing.
+
+The default sounds are herdr's (Apache-2.0). Preview them with `naviclaude sound request` / `naviclaude sound done`. To customize:
+
+```yaml
+notifications:
+  enabled: true
+  request_sound: ""                # "" = built-in, a file path (mp3/aiff/wav), or "none"
+  done_sound: "/System/Library/Sounds/Glass.aiff"
+  done_sound_when_focused: false
+  volume: 1                        # 0-1
+  cooldown: "2s"
+  window_marker: true
+  waiting_marker: "#[fg=yellow,bold]#[nobold]"   # nf-fa-bell; any text, tmux #[...] styles allowed
+  done_marker: "#[fg=green,bold]#[nobold]"      # nf-fa-check
+```
+
+The markers need a [Nerd Font](https://www.nerdfonts.com/); swap in plain text such as `!` / `+` if you do not use one. The marker is a suffix, so your `window-status-format` colors after `#W` stay intact; the original name and its `automatic-rename` setting are restored when it clears. If you rename the window while it is marked, your new name is kept. To debug, `touch ~/Library/Caches/naviclaude/hook.log` and watch it.
 
 ## Themes
 

@@ -13,6 +13,7 @@ import (
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/thbits/naviClaude/internal/attention"
 	"github.com/thbits/naviClaude/internal/config"
 	"github.com/thbits/naviClaude/internal/harness"
 	"github.com/thbits/naviClaude/internal/harness/claude"
@@ -523,7 +524,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.applySessionRefresh(msg)
 		}
-		return m, nil
+		return m, m.clearSeenAttentionCmd()
 
 	case previewCaptureMsg:
 		// Discard stale results: if the user navigated away while the capture
@@ -1426,6 +1427,9 @@ func (m Model) jumpToPane() (tea.Model, tea.Cmd) {
 	}
 	m.persistViewState()
 	m.restorePreviewedPane()
+	if sess.Attention != "" {
+		attention.Clear(m.cfg.Notifications, sess.TmuxPaneID)
+	}
 	// Switch tmux client to the session's pane.
 	_ = m.tmuxClient.SwitchClient(sess.TmuxTarget)
 	_ = m.tmuxClient.SelectPane(sess.TmuxTarget)
@@ -2073,6 +2077,34 @@ func (m *Model) applySessionRefresh(msg sessionRefreshMsg) {
 	// Update the preview header for the currently selected session.
 	if sel := m.sidebar.SelectedSession(); sel != nil {
 		m.selectPreviewSession(sel)
+	}
+}
+
+// clearSeenAttentionCmd drops hook markers the user no longer needs: the
+// session being previewed counts as seen, and a "waiting" marker is stale once
+// Claude's own status says it is no longer waiting.
+func (m *Model) clearSeenAttentionCmd() tea.Cmd {
+	sel := m.sidebar.SelectedSession()
+	var panes []string
+	for _, s := range m.activeSessions {
+		if s.Attention == "" || s.TmuxPaneID == "" {
+			continue
+		}
+		seen := sel != nil && sel.TmuxPaneID == s.TmuxPaneID
+		stale := s.Attention == attention.Waiting && s.NativeStatus && s.Status != session.StatusWaiting
+		if seen || stale {
+			panes = append(panes, s.TmuxPaneID)
+		}
+	}
+	if len(panes) == 0 {
+		return nil
+	}
+	cfg := m.cfg.Notifications
+	return func() tea.Msg {
+		for _, p := range panes {
+			attention.Clear(cfg, p)
+		}
+		return nil
 	}
 }
 

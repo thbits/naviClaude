@@ -856,7 +856,7 @@ func (m SidebarModel) renderSessionItem(s *session.Session, isCursor bool) []str
 		if isConfirmingKill {
 			selBg = styles.ColorBgHover
 		}
-		iconStyled := statusIconWithBg(s.Status, selBg, m.breathingFrame)
+		iconStyled := sessionIconWithBg(s, selBg, m.breathingFrame)
 		nameStyled := lipgloss.NewStyle().Foreground(styles.ColorBlue).Background(selBg).Bold(true).Render(displayName)
 		timeStyled := lipgloss.NewStyle().Foreground(styles.ColorGray).Background(selBg).Render(relTime)
 
@@ -943,7 +943,7 @@ func (m SidebarModel) renderSessionItem(s *session.Session, isCursor bool) []str
 
 	// Normal item. The status icon keeps its semantic color even when dimmed so
 	// session status stays glanceable across panes; only the text dims.
-	icon := statusIcon(s.Status, m.breathingFrame)
+	icon := sessionIcon(s, m.breathingFrame)
 	nameStyle := styles.SidebarProjectName
 	timeStyle := styles.SidebarTime
 	summaryStyle := styles.SidebarSummary
@@ -997,6 +997,25 @@ func statusIconProps(s session.SessionStatus, frame int) (lipgloss.Color, string
 func statusIcon(s session.SessionStatus, frame int) string {
 	fg, ch := statusIconProps(s, frame)
 	return lipgloss.NewStyle().Foreground(fg).Render(ch)
+}
+
+// sessionIconProps is statusIconProps plus the hook-raised "finished while you
+// were away" state, which only applies to an otherwise idle session.
+func sessionIconProps(s *session.Session, frame int) (lipgloss.Color, string) {
+	if s.Status == session.StatusIdle && s.Attention == "done" {
+		return styles.ColorBlue, styles.IconDone
+	}
+	return statusIconProps(s.Status, frame)
+}
+
+func sessionIcon(s *session.Session, frame int) string {
+	fg, ch := sessionIconProps(s, frame)
+	return lipgloss.NewStyle().Foreground(fg).Render(ch)
+}
+
+func sessionIconWithBg(s *session.Session, bg lipgloss.Color, frame int) string {
+	fg, ch := sessionIconProps(s, frame)
+	return lipgloss.NewStyle().Foreground(fg).Background(bg).Render(ch)
 }
 
 // statusIconWithBg renders a status icon with an explicit background color,

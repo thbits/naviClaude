@@ -18,26 +18,42 @@ var validSortOrders = map[string]bool{
 
 // Config holds all user-configurable settings for naviClaude.
 type Config struct {
-	Keys               KeyBindings `yaml:"keys"`
-	SidebarWidth       int         `yaml:"sidebar_width"`
-	RefreshInterval    string      `yaml:"refresh_interval"`
-	ClosedSessionHours float64     `yaml:"closed_session_hours"`
-	PopupWidth         int         `yaml:"popup_width"`
-	PopupHeight        int         `yaml:"popup_height"`
-	ResumeInCurrent    bool        `yaml:"resume_in_current_session"`
-	ProcessNames       []string    `yaml:"process_names"`
-	CollapseAfterHours float64     `yaml:"collapse_after_hours"` // auto-collapse groups idle longer than this (0 = disabled)
-	ActiveWindowSecs   int         `yaml:"active_window_secs"`   // seconds after last .jsonl write to keep session "active" (default 5)
-	CPUActiveThreshold float64     `yaml:"cpu_active_threshold"` // process-subtree CPU% above which a session counts as working (default 5)
-	Theme              string      `yaml:"theme"`                // color theme name (default "tokyo-night")
-	ClaudeCommand      string      `yaml:"claude_command"`       // command to start Claude in new sessions (default "claude")
-	NewSessionDir      string      `yaml:"new_session_dir"`      // working directory for new tmux sessions (default "~")
-	GroupSortOrder     string      `yaml:"group_sort_order"`     // "name" (alphabetical, default) or "activity"
-	SessionSortOrder   string      `yaml:"session_sort_order"`   // "name" (alphabetical, default) or "activity"
-	CheckForUpdates    bool        `yaml:"check_for_updates"`    // check GitHub for a newer release on startup (default true)
-	Editor             string      `yaml:"editor"`               // editor for opening changed files; empty falls back to $EDITOR, then vi
-	FocusLastSession   bool        `yaml:"focus_last_session"`   // re-select the last focused session on startup (default true)
-	RememberGroupState bool        `yaml:"remember_group_state"` // restore manually-toggled group open/closed state on startup (default true)
+	Keys               KeyBindings   `yaml:"keys"`
+	SidebarWidth       int           `yaml:"sidebar_width"`
+	RefreshInterval    string        `yaml:"refresh_interval"`
+	ClosedSessionHours float64       `yaml:"closed_session_hours"`
+	PopupWidth         int           `yaml:"popup_width"`
+	PopupHeight        int           `yaml:"popup_height"`
+	ResumeInCurrent    bool          `yaml:"resume_in_current_session"`
+	ProcessNames       []string      `yaml:"process_names"`
+	CollapseAfterHours float64       `yaml:"collapse_after_hours"` // auto-collapse groups idle longer than this (0 = disabled)
+	ActiveWindowSecs   int           `yaml:"active_window_secs"`   // seconds after last .jsonl write to keep session "active" (default 5)
+	CPUActiveThreshold float64       `yaml:"cpu_active_threshold"` // process-subtree CPU% above which a session counts as working (default 5)
+	Theme              string        `yaml:"theme"`                // color theme name (default "tokyo-night")
+	ClaudeCommand      string        `yaml:"claude_command"`       // command to start Claude in new sessions (default "claude")
+	NewSessionDir      string        `yaml:"new_session_dir"`      // working directory for new tmux sessions (default "~")
+	GroupSortOrder     string        `yaml:"group_sort_order"`     // "name" (alphabetical, default) or "activity"
+	SessionSortOrder   string        `yaml:"session_sort_order"`   // "name" (alphabetical, default) or "activity"
+	CheckForUpdates    bool          `yaml:"check_for_updates"`    // check GitHub for a newer release on startup (default true)
+	Editor             string        `yaml:"editor"`               // editor for opening changed files; empty falls back to $EDITOR, then vi
+	FocusLastSession   bool          `yaml:"focus_last_session"`   // re-select the last focused session on startup (default true)
+	RememberGroupState bool          `yaml:"remember_group_state"` // restore manually-toggled group open/closed state on startup (default true)
+	Notifications      Notifications `yaml:"notifications"`
+}
+
+// Notifications configures what the Claude Code hooks do when a session needs
+// attention or finishes. Sound paths are any file afplay can play; "" uses the
+// built-in sound and "none" silences that event.
+type Notifications struct {
+	Enabled              bool    `yaml:"enabled"`                 // master switch (default true)
+	RequestSound         string  `yaml:"request_sound"`           // played when Claude needs input
+	DoneSound            string  `yaml:"done_sound"`              // played when a turn finishes in the background
+	DoneSoundWhenFocused bool    `yaml:"done_sound_when_focused"` // also play done when you are already looking at the pane
+	Volume               float64 `yaml:"volume"`                  // afplay volume, 0-1 (default 1)
+	Cooldown             string  `yaml:"cooldown"`                // minimum gap between sounds across all sessions (default "2s")
+	WindowMarker         bool    `yaml:"window_marker"`           // suffix the tmux window name while a pane needs you (default true)
+	WaitingMarker        string  `yaml:"waiting_marker"`          // window-name suffix for "needs input"; may hold tmux #[...] styles
+	DoneMarker           string  `yaml:"done_marker"`             // window-name suffix for "finished, unseen"; may hold tmux #[...] styles
 }
 
 // KeyBindings maps user-facing actions to key names (tea.KeyMsg.String() format).
@@ -90,6 +106,14 @@ func DefaultConfig() Config {
 		CheckForUpdates:    true,
 		FocusLastSession:   true,
 		RememberGroupState: true,
+		Notifications: Notifications{
+			Enabled:       true,
+			Volume:        1,
+			Cooldown:      "2s",
+			WindowMarker:  true,
+			WaitingMarker: "#[fg=yellow,bold]\uf0f3#[nobold]", // nerd font bell
+			DoneMarker:    "#[fg=green,bold]\uf00c#[nobold]",  // nerd font check
+		},
 	}
 }
 
@@ -202,6 +226,20 @@ func sanitizeConfig(cfg *Config) {
 	// RefreshInterval must parse as a time.Duration; otherwise fall back.
 	if _, err := time.ParseDuration(cfg.RefreshInterval); err != nil {
 		cfg.RefreshInterval = d.RefreshInterval
+	}
+
+	n := &cfg.Notifications
+	if n.Volume <= 0 || n.Volume > 1 {
+		n.Volume = d.Notifications.Volume
+	}
+	if _, err := time.ParseDuration(n.Cooldown); err != nil {
+		n.Cooldown = d.Notifications.Cooldown
+	}
+	if n.WaitingMarker == "" {
+		n.WaitingMarker = d.Notifications.WaitingMarker
+	}
+	if n.DoneMarker == "" {
+		n.DoneMarker = d.Notifications.DoneMarker
 	}
 
 	// Sort-order enums must be one of the allowed values; otherwise fall back.

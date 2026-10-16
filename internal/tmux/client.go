@@ -61,6 +61,8 @@ func (c *Client) ListPanes() ([]PaneInfo, error) {
 	format := "#{session_name}:#{window_index}.#{pane_index}" + paneFieldSep +
 		"#{pane_current_command}" + paneFieldSep +
 		"#{pane_pid}" + paneFieldSep +
+		"#{pane_id}" + paneFieldSep +
+		"#{@naviclaude_attn}" + paneFieldSep +
 		"#{pane_current_path}"
 	out, err := exec.Command("tmux", "list-panes", "-a", "-F", format).Output()
 	if err != nil {

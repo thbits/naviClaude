@@ -105,6 +105,7 @@ const (
 	IconWaiting = "◎" // bullseye
 	IconIdle    = "○" // open circle
 	IconClosed  = "◌" // dotted circle
+	IconDone    = "◉" // fisheye: finished while you were away
 )
 
 // SidebarWaitingFlash is applied during the active->waiting transition flash.

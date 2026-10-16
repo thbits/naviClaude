@@ -51,6 +51,19 @@ type Session struct {
 	// Status is one of StatusActive / StatusIdle / StatusWaiting / StatusClosed.
 	Status SessionStatus
 
+	// NativeStatus is true when Status came from the harness's own state file
+	// rather than pane/CPU heuristics.
+	NativeStatus bool
+
+	// WaitingFor is the harness's reason while Waiting, e.g. "permission prompt".
+	WaitingFor string
+
+	// TmuxPaneID is the stable tmux pane id ("%12") for live sessions.
+	TmuxPaneID string
+
+	// Attention is the hook-set marker on the pane: "waiting", "done" or "".
+	Attention string
+
 	// LastActivity is the timestamp of the most recent record in the .jsonl file,
 	// or the time the tmux pane was last seen active for live sessions.
 	LastActivity time.Time

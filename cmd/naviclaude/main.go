@@ -14,11 +14,20 @@ import (
 var version = "dev"
 
 func main() {
+	// Subcommands run without tmux checks: hooks are invoked by Claude Code.
+	if len(os.Args) > 1 {
+		if handled, code := runSubcommand(os.Args[1:]); handled {
+			os.Exit(code)
+		}
+	}
+
 	// Parse flags with the stdlib flag package: -v/--version anywhere,
 	// -h/--help for usage, and graceful rejection of unknown flags.
 	fs := flag.NewFlagSet("naviclaude", flag.ContinueOnError)
 	fs.Usage = func() {
 		fmt.Fprintln(os.Stderr, "Usage: naviclaude [flags]")
+		fmt.Fprintln(os.Stderr, "       naviclaude hooks install|uninstall|status")
+		fmt.Fprintln(os.Stderr, "       naviclaude sound request|done")
 		fmt.Fprintln(os.Stderr, "\nA tmux-native dashboard for navigating Claude sessions.")
 		fmt.Fprintln(os.Stderr, "\nFlags:")
 		fs.PrintDefaults()

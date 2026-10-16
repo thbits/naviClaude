@@ -112,6 +112,8 @@ func (d *Detector) buildSession(h Harness, pane tmux.PaneInfo, pid int, tree *se
 	s := &session.Session{
 		TmuxSession:  pane.SessionName,
 		TmuxTarget:   pane.Target,
+		TmuxPaneID:   pane.PaneID,
+		Attention:    pane.Attention,
 		CWD:          pane.CurrentPath,
 		Status:       session.StatusIdle,
 		LastActivity: time.Now(),
@@ -134,6 +136,10 @@ func (d *Detector) buildSession(h Harness, pane tmux.PaneInfo, pid int, tree *se
 func (d *Detector) ResolveStatus(h Harness, s *session.Session, tree *session.ProcessTree) session.SessionStatus {
 	if status, ok := h.NativeStatus(s); ok {
 		return status
+	}
+	// Without a native status, a hook-raised prompt is the next best signal.
+	if s.Attention == "waiting" {
+		return session.StatusWaiting
 	}
 	now := time.Now()
 
