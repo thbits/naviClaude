@@ -305,6 +305,46 @@ func (c *Client) ResizeWindow(target string, w, h int) error {
 	return nil
 }
 
+// optPreSize records a window's own window-size option before naviClaude first
+// resized it ("auto" when it was inherited), so the restore survives a crash.
+const optPreSize = "@naviclaude_presize"
+
+func windowOption(target, name string) string {
+	out, _ := exec.Command("tmux", "show-options", "-wqv", "-t", target, name).Output()
+	return strings.TrimSpace(string(out))
+}
+
+// SaveWindowSize remembers how the window was sized before a preview resize.
+// resize-window pins window-size to manual, which RestoreWindowSize undoes.
+func (c *Client) SaveWindowSize(target string) {
+	if windowOption(target, optPreSize) != "" {
+		return // an earlier run never restored; keep the true original
+	}
+	pre := windowOption(target, "window-size")
+	if pre == "" {
+		pre = "auto"
+	}
+	exec.Command("tmux", "set-option", "-wq", "-t", target, optPreSize, pre).Run()
+}
+
+// RestoreWindowSize undoes a preview resize. A window that followed its
+// clients is re-fitted and left following them again; one with its own
+// window-size gets w x h and that setting back.
+func (c *Client) RestoreWindowSize(target string, w, h int) {
+	switch pre := windowOption(target, optPreSize); pre {
+	case "":
+		c.ResizeWindow(target, w, h)
+		return
+	case "auto":
+		exec.Command("tmux", "resize-window", "-A", "-t", target).Run()
+		exec.Command("tmux", "set-option", "-wqu", "-t", target, "window-size").Run()
+	default:
+		c.ResizeWindow(target, w, h)
+		exec.Command("tmux", "set-option", "-wq", "-t", target, "window-size", pre).Run()
+	}
+	exec.Command("tmux", "set-option", "-wqu", "-t", target, optPreSize).Run()
+}
+
 // WindowTarget extracts the "session:window" portion from a pane target
 // like "session:1.0", stripping the ".pane" suffix.
 func WindowTarget(paneTarget string) string {

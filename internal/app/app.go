@@ -159,7 +159,7 @@ type Model struct {
 	pendingResumeJump    bool               // when true, jump to the resumed pane (f) instead of focusing it in passthrough (Enter)
 	previewTarget        string             // tmux target currently shown in the preview panel
 	resizedWinTarget     string             // window target we resized for preview
-	origWinW             int                // width to restore the previewed window to when navigating away
+	origWinW, origWinH   int                // size to restore the previewed window to when navigating away
 
 	// Metrics for currently selected session
 	currentMetrics   *session.SessionMetrics
@@ -352,12 +352,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.resizeComponents()
-		// Re-resize the currently previewed pane's width at the new dimensions.
-		if m.resizedWinTarget != "" {
-			m.origWinW = msg.Width
-			paneW, _ := m.previewPaneDimensions()
-			m.tmuxClient.ResizeWindow(m.resizedWinTarget, paneW, 0)
-		}
+		// Re-fit the previewed pane to the new viewport; the saved original
+		// size is the window's, not ours, so it stays untouched.
+		m.resizePreviewedPane()
 		return m, nil
 
 	// -- Tickers -------------------------------------------------------------
@@ -2119,11 +2116,7 @@ func (m *Model) selectPreviewSession(s *session.Session) {
 	}
 
 	if target != m.previewTarget {
-		// Restore the previous window's width.
-		if m.resizedWinTarget != "" && m.origWinW > 0 {
-			m.tmuxClient.ResizeWindow(m.resizedWinTarget, m.origWinW, 0)
-			m.resizedWinTarget = ""
-		}
+		m.restorePreviewedPane()
 
 		m.previewTarget = target
 		m.preview.SetContent("")
@@ -2156,17 +2149,16 @@ func (m *Model) selectPreviewSession(s *session.Session) {
 		naviWinTarget := m.currentTmuxWin
 		if s != nil && s.TmuxTarget != "" && !s.Subprocess && tmux.WindowTarget(s.TmuxTarget) != naviWinTarget {
 			winTarget := tmux.WindowTarget(s.TmuxTarget)
-			// Save the original width so we can restore it when navigating away.
-			// Only resize width -- changing height disrupts TUI layout (cursor
-			// positioning, prompt duplication) in apps like Claude Code.
-			if w, _, err := m.tmuxClient.WindowSize(winTarget); err == nil {
-				m.origWinW = w
+			// Save the original size so we can restore it when navigating away.
+			if w, h, err := m.tmuxClient.WindowSize(winTarget); err == nil {
+				m.origWinW, m.origWinH = w, h
 			} else {
-				m.origWinW = m.width
+				m.origWinW, m.origWinH = m.width, m.height
 			}
 			m.resizedWinTarget = winTarget
-			paneW, _ := m.previewPaneDimensions()
-			m.tmuxClient.ResizeWindow(winTarget, paneW, 0)
+			m.tmuxClient.SaveWindowSize(winTarget)
+			paneW, paneH := m.previewPaneDimensions()
+			m.tmuxClient.ResizeWindow(winTarget, paneW, paneH)
 		}
 	}
 
@@ -2179,9 +2171,9 @@ func (m *Model) selectPreviewSession(s *session.Session) {
 // original size. Called on quit and when leaving naviClaude.
 func (m *Model) restorePreviewedPane() {
 	if m.resizedWinTarget != "" && m.origWinW > 0 {
-		m.tmuxClient.ResizeWindow(m.resizedWinTarget, m.origWinW, 0)
+		m.tmuxClient.RestoreWindowSize(m.resizedWinTarget, m.origWinW, m.origWinH)
 		m.resizedWinTarget = ""
-		m.origWinW = 0
+		m.origWinW, m.origWinH = 0, 0
 	}
 }
 
@@ -2325,14 +2317,13 @@ func (m *Model) resizeComponents() {
 
 // previewPaneDimensions returns the width and height that managed tmux panes
 // should be resized to so their content fits the preview viewport exactly.
-// resizePreviewedPane re-resizes the currently previewed tmux pane to the
-// current preview width. Call it after the preview column changes width without
-// a WindowSizeMsg (e.g. toggling the changed-files panel) so captured content
-// keeps matching the viewport. Mirrors the WindowSizeMsg resize block.
+// resizePreviewedPane fits the currently previewed tmux window to the preview
+// viewport. Call it whenever the preview area changes size (terminal resize,
+// toggling the changed-files panel) so captured content keeps matching it.
 func (m *Model) resizePreviewedPane() {
 	if m.resizedWinTarget != "" {
-		paneW, _ := m.previewPaneDimensions()
-		m.tmuxClient.ResizeWindow(m.resizedWinTarget, paneW, 0)
+		paneW, paneH := m.previewPaneDimensions()
+		m.tmuxClient.ResizeWindow(m.resizedWinTarget, paneW, paneH)
 	}
 }
 
