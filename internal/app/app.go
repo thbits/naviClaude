@@ -55,11 +55,13 @@ type sessionRefreshMsg struct {
 
 // previewCaptureMsg carries the result of an async preview capture.
 type previewCaptureMsg struct {
-	content   string
-	target    string
-	sessionID string
-	status    session.SessionStatus
-	err       error
+	content       string
+	target        string
+	sessionID     string
+	status        session.SessionStatus
+	forwardsWheel bool // the pane scrolls itself on wheel events
+	afterScroll   bool // captured by onPaneScrolled
+	err           error
 }
 
 // closedPreviewMsg carries formatted conversation history for a closed session.
@@ -215,6 +217,12 @@ type Model struct {
 	lastClickAt  time.Time        // when that press happened
 	pendingPress *mousePress      // left press on a session row awaiting release, for long-press
 	now          func() time.Time // clock override for tests; nil means time.Now
+
+	// Preview scroll forwarding (see forwardWheel).
+	wheelTarget           string       // pane the last capture found taking wheel events; "" scrolls locally
+	scroller              paneScroller // test override; nil means tmuxClient
+	scrollCaptureInFlight bool         // a post-scroll capture is running
+	scrollCaptureDirty    bool         // another scroll landed during it
 }
 
 // New creates a fully-wired Model ready to be passed to tea.NewProgram.
@@ -565,14 +573,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Batch(cmd, m.clearSeenAttentionCmd())
 
+	case paneScrolledMsg:
+		return m.onPaneScrolled(msg.target)
+
 	case previewCaptureMsg:
+		var follow tea.Cmd
+		if msg.afterScroll {
+			follow = m.finishScrollCapture()
+		}
 		// Discard stale results: if the user navigated away while the capture
 		// was in flight, the result belongs to a different session. Require BOTH
 		// the tmux target AND the session ID to match the current selection -- a
 		// reused pane target alone is not enough, since a different session can
 		// reuse the same target after the old one closed.
 		if sel := m.sidebar.SelectedSession(); sel == nil || sel.TmuxTarget != msg.target || sel.ID != msg.sessionID {
-			return m, nil
+			return m, follow
+		}
+		m.wheelTarget = ""
+		if msg.forwardsWheel && msg.err == nil {
+			m.wheelTarget = msg.target
+			// The capture is just the visible screen; keep it pinned.
+			m.preview.ResetScroll()
 		}
 		if msg.err != nil {
 			// Pane may have disappeared; not fatal.
@@ -593,7 +614,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.updateSessionStatus(msg.target, msg.status)
 			}
 		}
-		return m, nil
+		return m, follow
 
 	case newSessionMsg:
 		if msg.err != nil {
@@ -1055,10 +1076,16 @@ func (m Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "ctrl+u":
+		if cmd, ok := m.forwardPage(true); ok {
+			return m, cmd
+		}
 		m.preview.ScrollUp(m.preview.HalfViewHeight())
 		return m, nil
 
 	case "ctrl+d":
+		if cmd, ok := m.forwardPage(false); ok {
+			return m, cmd
+		}
 		m.preview.ScrollDown(m.preview.HalfViewHeight())
 		return m, nil
 
@@ -2206,6 +2233,7 @@ func (m Model) capturePreviewCmd() tea.Cmd {
 	statusSess := *sess
 	h := m.harnessFor(sess)
 	captureEngine := m.captureEngine
+	tc := m.tmuxClient
 	// Compute the capture width here (on the event-loop goroutine, where the
 	// dimensions are stable) and pass it to Capture, rather than relying on a
 	// shared mutable field on the engine that the capture goroutine would race
@@ -2219,6 +2247,12 @@ func (m Model) capturePreviewCmd() tea.Cmd {
 	showCursor := m.mode == ModePassthrough
 
 	return func() tea.Msg {
+		// Query the mouse mode alongside the capture rather than after it.
+		fwd := make(chan bool, 1)
+		go func() {
+			ok, _ := tc.WheelForwardable(target)
+			fwd <- ok
+		}()
 		content, err := captureEngine.Capture(target, showCursor, maxWidth)
 		if err != nil {
 			return previewCaptureMsg{err: err, target: target, sessionID: sessionID}
@@ -2232,10 +2266,11 @@ func (m Model) capturePreviewCmd() tea.Cmd {
 		}
 
 		return previewCaptureMsg{
-			content:   content,
-			target:    target,
-			sessionID: sessionID,
-			status:    status,
+			content:       content,
+			target:        target,
+			sessionID:     sessionID,
+			status:        status,
+			forwardsWheel: <-fwd,
 		}
 	}
 }

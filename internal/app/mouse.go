@@ -114,6 +114,9 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		case msg.X < sidebarWidth:
 			return m.wheelSidebar(msg.Button == tea.MouseButtonWheelUp)
 		default:
+			if cmd, ok := m.forwardWheel(msg.Button == tea.MouseButtonWheelUp, msg.X, msg.Y); ok {
+				return m, cmd
+			}
 			var cmd tea.Cmd
 			m.preview, cmd = m.preview.Update(msg)
 			return m, cmd
