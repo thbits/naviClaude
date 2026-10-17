@@ -61,6 +61,7 @@ var defaultListHints = []StatusHintInput{
 	{Key: "f", Desc: "jump"},
 	{Key: "n", Desc: "new"},
 	{Key: "/", Desc: "search"},
+	{Key: "F", Desc: "files"},
 	{Key: "K", Desc: "kill"},
 	{Key: "?", Desc: "more"},
 }
@@ -78,7 +79,7 @@ func TestStatusBar_HintsPerMode(t *testing.T) {
 		absent []string
 	}{
 		{"list", []string{"⏎  open", "f  jump", "n  new", "/  search", "K  kill", "?  more"}, []string{"rename", "stats", "detail"}},
-		{"passthrough", []string{"Tab  next pane", "Ctrl+]  list", "Ctrl+F  jump"}, []string{"more", "back to list"}},
+		{"passthrough", []string{"Shift+Tab  back", "Ctrl+]  list", "Ctrl+F  jump"}, []string{"more", "back to list"}},
 		{"help", []string{"any key  close"}, []string{"kill", "more"}},
 		{"changed files", []string{"⏎/e  open in editor", "Esc  back"}, []string{"kill", "more"}},
 		{"search", []string{"Esc  cancel", "⏎  select"}, []string{"kill"}},
@@ -106,8 +107,8 @@ func TestStatusBar_HintsPerMode(t *testing.T) {
 
 	sb := NewStatusBar(160, "1.0")
 	sb.SetKeyHints(defaultListHints)
-	if n := len(sb.hintsForMode()); n > 6 {
-		t.Errorf("list mode shows %d hints, want at most 6", n)
+	if n := len(sb.hintsForMode()); n > 7 {
+		t.Errorf("list mode shows %d hints, want at most 7", n)
 	}
 	if line := hintLine(sb); strings.Index(line, "more") < strings.Index(line, "kill") {
 		t.Errorf("help hint must come last; got %q", line)
@@ -117,7 +118,7 @@ func TestStatusBar_HintsPerMode(t *testing.T) {
 // Narrowing the bar drops whole hints from the low-priority end while the
 // pinned help hint stays, and never cuts a description.
 func TestStatusBar_NarrowDropsLowestPriority(t *testing.T) {
-	descs := []string{"open", "jump", "new", "search", "kill"}
+	descs := []string{"open", "jump", "new", "search", "files", "kill"}
 	prev := len(descs) + 1
 	for width := 120; width >= 12; width-- {
 		sb := NewStatusBar(width, "1.0")

@@ -987,7 +987,7 @@ func (m Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Enter passthrough mode for active sessions.
 		return m, m.setFocus(ModePassthrough)
 
-	case KeyTab, KeyExitPassthrough3:
+	case KeyTab, KeyCyclePanes:
 		// Tab / Shift+Tab cycle focus across the visible panes (list, preview
 		// passthrough, changed-files) rather than only toggling passthrough.
 		return m, m.setFocus(m.nextFocusMode(key == KeyTab))
@@ -1149,7 +1149,7 @@ func (m Model) handleChangedFilesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Esc drops focus but keeps the panel open; width is unchanged.
 		return m, m.setFocus(ModeList)
 
-	case KeyTab, KeyExitPassthrough3:
+	case KeyTab, KeyCyclePanes:
 		// Tab / Shift+Tab cycle to the next / previous pane (panel stays open).
 		return m, m.setFocus(m.nextFocusMode(key == KeyTab))
 
@@ -1167,13 +1167,13 @@ func (m Model) handlePassthroughKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
 
 	switch key {
-	case KeyExitPassthrough2:
+	case KeyExitPassthrough:
 		// Ctrl+] always drops straight back to the session list.
 		return m, m.setFocus(ModeList)
 
-	case KeyExitPassthrough, KeyExitPassthrough3:
-		// Tab / Shift+Tab cycle to the next / previous pane.
-		return m, m.setFocus(m.nextFocusMode(key == KeyExitPassthrough))
+	case KeyCyclePanes:
+		// Only Shift+Tab leaves; plain Tab is forwarded so it keeps working in the agent.
+		return m, m.setFocus(m.nextFocusMode(false))
 
 	case KeyJumpFromPT:
 		return m.jumpToPane()

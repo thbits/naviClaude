@@ -115,7 +115,7 @@ func (m HelpModel) View() string {
 	}
 
 	passthroughBindings := []helpBinding{
-		{"Tab/Shift+Tab", "Next / previous pane"},
+		{"Shift+Tab", "Back to previous pane"},
 		{"Ctrl+]", "Back to list"},
 		{"Ctrl+f", "Jump to pane"},
 	}

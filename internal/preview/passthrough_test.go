@@ -14,6 +14,7 @@ func TestTranslateKey(t *testing.T) {
 	}{
 		// Plain keys are unchanged.
 		{"plain enter", tea.KeyMsg{Type: tea.KeyEnter}, "Enter"},
+		{"tab", tea.KeyMsg{Type: tea.KeyTab}, "Tab"},
 		{"plain rune", tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}}, "f"},
 		{"plain backspace", tea.KeyMsg{Type: tea.KeyBackspace}, "BSpace"},
 		{"plain space", tea.KeyMsg{Type: tea.KeySpace}, "Space"},

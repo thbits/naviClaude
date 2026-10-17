@@ -6,7 +6,7 @@ import (
 )
 
 // Passthrough forwards Bubble Tea key events to a tmux pane via send-keys.
-// The intercepted keys Tab, Ctrl+], and Ctrl+f are NOT forwarded; callers are
+// The intercepted keys Shift+Tab, Ctrl+], and Ctrl+f are NOT forwarded; callers are
 // responsible for handling those before calling SendKey.
 type Passthrough struct {
 	tmuxClient *tmux.Client
@@ -96,6 +96,9 @@ func baseKey(msg tea.KeyMsg) string {
 
 	case tea.KeyInsert:
 		return "IC"
+
+	case tea.KeyTab:
+		return "Tab"
 
 	case tea.KeyShiftTab:
 		return "BTab"

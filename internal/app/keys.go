@@ -122,6 +122,7 @@ func (km KeyMap) StatusHints() []HelpBinding {
 		{km.Jump, "jump"},
 		{km.NewSession, "new"},
 		{km.Search, "search"},
+		{km.ToggleChanged, "files"},
 		{km.KillSession, "kill"},
 		{km.Help, "more"},
 	}
@@ -129,16 +130,15 @@ func (km KeyMap) StatusHints() []HelpBinding {
 
 // Non-configurable keys: passthrough exit, modal keys, navigation.
 const (
-	KeyTab              = "tab"
-	KeyEnter            = "enter"
-	KeyCtrlC            = "ctrl+c"
-	KeyExitPassthrough  = "tab"
-	KeyExitPassthrough2 = "ctrl+]"
-	KeyExitPassthrough3 = "shift+tab"
-	KeyJumpFromPT       = "ctrl+f"
-	KeyMenuCancel       = "esc"
-	KeyMenuSelect       = "enter"
-	KeyThemePicker      = "T"
+	KeyTab             = "tab"
+	KeyEnter           = "enter"
+	KeyCtrlC           = "ctrl+c"
+	KeyExitPassthrough = "ctrl+]"
+	KeyCyclePanes      = "shift+tab"
+	KeyJumpFromPT      = "ctrl+f"
+	KeyMenuCancel      = "esc"
+	KeyMenuSelect      = "enter"
+	KeyThemePicker     = "T"
 )
 
 // reservedKeyBindings returns the hardcoded keys that configured bindings must
@@ -148,13 +148,13 @@ const (
 // what reserves it, for clear conflict messages.
 func reservedKeyBindings() map[string]string {
 	return map[string]string{
-		KeyThemePicker:      "theme picker",
-		KeyTab:              "focus / passthrough exit",
-		KeyExitPassthrough2: "passthrough exit",
-		KeyExitPassthrough3: "passthrough exit",
-		KeyMenuCancel:       "menu cancel",
-		KeyCtrlC:            "force quit",
-		KeyJumpFromPT:       "jump from passthrough",
+		KeyThemePicker:     "theme picker",
+		KeyTab:             "pane cycling",
+		KeyExitPassthrough: "passthrough exit",
+		KeyCyclePanes:      "pane cycling / passthrough exit",
+		KeyMenuCancel:      "menu cancel",
+		KeyCtrlC:           "force quit",
+		KeyJumpFromPT:      "jump from passthrough",
 	}
 }
 

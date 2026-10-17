@@ -57,8 +57,8 @@ func TestValidateKeysReservedCollision(t *testing.T) {
 }
 
 func TestValidateKeysReservedTabAndEsc(t *testing.T) {
-	// tab and esc are hardcoded; binding an action to either must be flagged.
-	for _, key := range []string{KeyTab, KeyMenuCancel, KeyExitPassthrough2} {
+	// tab, shift+tab and esc are hardcoded; binding an action to any must be flagged.
+	for _, key := range []string{KeyTab, KeyCyclePanes, KeyMenuCancel, KeyExitPassthrough} {
 		kb := config.KeyBindings{Jump: key}
 		conflicts := ValidateKeys(kb)
 		if len(conflicts) != 1 {

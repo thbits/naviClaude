@@ -103,7 +103,7 @@ The title bar shows live counts (`● 2 working · ◎ 1 needs you · ◉ 1 done
 | Key | Action |
 |---|---|
 | `j` / `k` | Navigate sessions |
-| `Tab` / `Shift+Tab` | Cycle focus across the visible panes (session list -> preview passthrough -> changed files) |
+| `Tab` / `Shift+Tab` | Cycle focus across the visible panes (session list -> preview passthrough -> changed files). Inside passthrough `Tab` goes to the agent, so only `Shift+Tab` leaves |
 | `Ctrl+]` | Exit passthrough straight to the session list |
 | `Ctrl+U` / `Ctrl+D` | Scroll preview |
 | `/` | Search |

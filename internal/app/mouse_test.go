@@ -399,6 +399,7 @@ func TestHintKeyMsg(t *testing.T) {
 		{"Enter", "enter", true},
 		{"Esc", "esc", true},
 		{"Tab", "tab", true},
+		{"Shift+Tab", "shift+tab", true},
 		{"Ctrl+]", "ctrl+]", true},
 		{"Ctrl+f", "ctrl+f", true},
 		{"K", "K", true},

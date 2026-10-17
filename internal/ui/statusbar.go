@@ -255,9 +255,9 @@ func (m StatusBarModel) hintsForMode() []statusHint {
 	}
 	switch m.mode {
 	case "passthrough":
-		// Tab moves to the changed-files pane when it is open, else to the list.
+		// Tab is forwarded to the agent here, so only Shift+Tab leaves (to the list).
 		return []statusHint{
-			{key: "Tab", desc: "next pane"},
+			{key: "Shift+Tab", desc: "back"},
 			{key: "Ctrl+]", desc: "list"},
 			{key: "Ctrl+f", label: "Ctrl+F", desc: "jump"},
 		}
@@ -293,6 +293,7 @@ func (m StatusBarModel) hintsForMode() []statusHint {
 			{key: "f", desc: "jump"},
 			{key: "n", desc: "new"},
 			{key: "/", desc: "search"},
+			{key: "F", desc: "files"},
 			{key: "K", desc: "kill"},
 			{key: "?", desc: "more", pinned: true},
 		}

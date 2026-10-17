@@ -90,8 +90,8 @@ func TestTitleBarSummaryDegradesWhenNarrow(t *testing.T) {
 func TestStatusHintsFollowConfig(t *testing.T) {
 	km := KeyMapFromConfig(config.KeyBindings{Jump: "g", Help: "h"})
 	hints := km.StatusHints()
-	if len(hints) > 6 {
-		t.Fatalf("got %d list hints, want at most 6", len(hints))
+	if len(hints) > 7 {
+		t.Fatalf("got %d list hints, want at most 7", len(hints))
 	}
 	if hints[1].Key != "g" || hints[len(hints)-1].Key != "h" || hints[len(hints)-1].Desc != "more" {
 		t.Errorf("hints = %+v, want configured jump key and help last", hints)
