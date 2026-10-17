@@ -97,13 +97,12 @@ type Session struct {
 	// Version is the agent CLI version string (e.g. "2.1.73").
 	Version string
 
-	// DisplayName is a user-set override for the session title.
-	// When non-empty it takes precedence over Slug and ProjectName in the sidebar.
+	// DisplayName is the resolved title (alias, Claude's name or ai-title); when
+	// set it beats Slug and ProjectName in the sidebar.
 	DisplayName string
 
-	// Subprocess is true when the agent is running inside another program (e.g.
-	// neovim's embedded terminal). The tmux pane belongs to the parent app,
-	// so preview capture and pane resize are not meaningful.
+	// Subprocess is true when the agent runs inside another program (e.g. nvim's
+	// terminal), so its pane belongs to that app and isn't captured or resized.
 	Subprocess bool
 
 	// SubprocessParent is the name of the parent program (e.g. "nvim").

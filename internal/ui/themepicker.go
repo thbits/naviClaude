@@ -88,9 +88,8 @@ func (m *ThemePickerModel) SetSize(w, h int) {
 // Init satisfies tea.Model.
 func (m ThemePickerModel) Init() tea.Cmd { return nil }
 
-// Update handles j/k navigation. Enter and Esc are handled by the app.
-// Returns the newly highlighted theme key so the app can apply it live,
-// and a bool indicating whether the theme changed.
+// Update handles j/k navigation (the app owns Enter/Esc), returning the highlighted
+// theme key for live preview and whether it changed.
 func (m ThemePickerModel) Update(msg tea.Msg) (ThemePickerModel, string, bool) {
 	if !m.visible {
 		return m, "", false

@@ -78,12 +78,19 @@ func TestTmuxPaneID(t *testing.T) {
 	}
 }
 
-func TestProcessStartIsPast(t *testing.T) {
-	st := processStart(os.Getpid())
-	if st.IsZero() || st.After(time.Now()) {
-		t.Errorf("processStart(self) = %v, want a past time", st)
+func TestLookupProc(t *testing.T) {
+	p := lookupProc(os.Getpid())
+	if p.start.IsZero() || p.start.After(time.Now()) {
+		t.Errorf("lookupProc(self).start = %v, want a past time", p.start)
 	}
-	if !processStart(deadPID).IsZero() {
-		t.Error("a dead PID must have no start time")
+	if p.cmdLine == "" {
+		t.Error("lookupProc(self).cmdLine is empty")
+	}
+	procCache.Store(os.Getpid(), procInfo{cmdLine: "stale", fetched: time.Now().Add(-2 * procCacheTTL)})
+	if got := lookupProc(os.Getpid()); got.cmdLine == "stale" {
+		t.Error("lookupProc returned an expired cache entry")
+	}
+	if got := lookupProc(deadPID); got != (procInfo{}) {
+		t.Errorf("lookupProc(dead) = %+v, want zero", got)
 	}
 }

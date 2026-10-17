@@ -7,9 +7,8 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-// PlaceOverlay renders the fg string centered on top of the bg string,
-// preserving the background content outside the popup area.
-// Both strings should be pre-rendered (may contain ANSI codes).
+// PlaceOverlay renders the pre-rendered fg centered over bg, keeping bg content
+// outside the popup area.
 func PlaceOverlay(bg, fg string) string {
 	bgLines := strings.Split(bg, "\n")
 	fgLines := strings.Split(fg, "\n")
@@ -62,12 +61,8 @@ func PlaceOverlayAt(bg, fg string, x, y int) string {
 		left := ansi.Truncate(bgLine, startX, "")
 		right := ansi.TruncateLeft(bgLine, startX+fgW, "")
 
-		// A double-width rune straddling the popup's LEFT edge is dropped whole
-		// by ansi.Truncate, so `left` comes back one column short and the popup
-		// (and everything after it) shifts one column left. Pad the orphaned
-		// half-cell with a space so the popup always begins exactly at column
-		// startX. For ASCII, left is already exactly startX wide and no padding
-		// is added, so ASCII output is byte-for-byte unchanged.
+		// ansi.Truncate drops a wide rune straddling startX whole, leaving left one
+		// column short; pad it so the popup always starts exactly at startX.
 		if pad := startX - ansi.StringWidth(left); pad > 0 {
 			left += strings.Repeat(" ", pad)
 		}

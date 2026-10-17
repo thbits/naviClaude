@@ -14,25 +14,13 @@ import (
 // nonAlphanumRe matches any character that is not a letter, digit, or dash.
 var nonAlphanumRe = regexp.MustCompile(`[^a-zA-Z0-9-]`)
 
-// cwdSlug converts a CWD path into the directory slug used by Claude Code
-// under ~/.claude/projects/. Claude Code replaces all non-alphanumeric
-// characters (except dashes) with dashes.
-//
-// KNOWN AMBIGUITY: this mapping is non-injective. Distinct CWDs can collapse to
-// the same slug (e.g. "/a/b" and "/a-b" both become "-a-b"; "/a_b" and "/a/b"
-// both become "-a-b"). We intentionally do NOT change the output: it must match
-// Claude Code's own on-disk slug scheme so that SessionFilePath can locate the
-// .jsonl file under ~/.claude/projects/<slug>/. SessionFilePath relies on this
-// scheme staying byte-for-byte identical to Claude's; if Claude changes its
-// slugging, this must change in lockstep. Do not "improve" the encoding here.
+// cwdSlug mirrors Claude's ~/.claude/projects slug (non-alphanumerics but dash
+// become dashes). It is lossy, but must match Claude's scheme byte for byte.
 func cwdSlug(cwd string) string {
 	return nonAlphanumRe.ReplaceAllString(cwd, "-")
 }
 
-// claudeHomeDir returns the ~/.claude base directory, or an error if the user
-// home directory cannot be determined. Centralizes the UserHomeDir +
-// Join(".claude") computation so history.go and conversation.go agree on the
-// base path. (Named to avoid colliding with helpers in detector.go.)
+// claudeHomeDir returns ~/.claude, shared so every reader agrees on the base path.
 func claudeHomeDir() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -41,11 +29,8 @@ func claudeHomeDir() (string, error) {
 	return filepath.Join(home, ".claude"), nil
 }
 
-// LoadConversation reads a session's .jsonl file and extracts the user/assistant
-// conversation turns as displayable text. Returns at most maxTurns entries; when
-// the session has more than maxTurns text-bearing turns, the LAST maxTurns are
-// returned (the most recent activity), preserving chronological order
-// (oldest-to-newest) within that tail.
+// LoadConversation returns a transcript's text turns oldest first, keeping only
+// the last maxTurns so long sessions still show recent activity.
 func LoadConversation(sess *session.Session, maxTurns int) ([]session.ConversationEntry, error) {
 	sessionFile := sess.SessionFile
 	if sessionFile == "" {
@@ -109,9 +94,6 @@ func LoadConversation(sess *session.Session, maxTurns int) ([]session.Conversati
 		return nil, err
 	}
 
-	// Keep only the LAST maxTurns text-bearing turns so long sessions still
-	// surface recent activity. Order is preserved (oldest-to-newest) within
-	// the returned tail.
 	if maxTurns > 0 && len(entries) > maxTurns {
 		entries = entries[len(entries)-maxTurns:]
 	}
@@ -158,10 +140,8 @@ func extractMessageText(raw json.RawMessage) string {
 	return ""
 }
 
-// SessionFilePath constructs the .jsonl file path from a session ID and CWD,
-// using the same slug convention as Claude Code: CWD with "/" replaced by "-".
-// Returns empty string if sessionID or cwd is empty, or if home dir cannot be
-// determined. Does NOT check file existence.
+// SessionFilePath returns a session's expected .jsonl path without checking it
+// exists; "" when sessionID, cwd or the home dir is unknown.
 func SessionFilePath(sessionID, cwd string) string {
 	if sessionID == "" || cwd == "" {
 		return ""

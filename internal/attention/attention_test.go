@@ -124,6 +124,29 @@ func TestInstallUninstallRoundTrip(t *testing.T) {
 	}
 }
 
+func TestUninstallWithoutHooksLeavesFileAlone(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	dir := t.TempDir()
+	path := filepath.Join(dir, "settings.json")
+	if err := UninstallHooks(path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("uninstall created %s (err %v)", path, err)
+	}
+
+	orig := "{\n    \"model\": \"opus\"\n}\n"
+	if err := os.WriteFile(path, []byte(orig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := UninstallHooks(path); err != nil {
+		t.Fatal(err)
+	}
+	if data, _ := os.ReadFile(path); string(data) != orig {
+		t.Errorf("uninstall rewrote a file it had nothing to remove from:\n%s", data)
+	}
+}
+
 // fakeTmux models the panes and windows the engine touches.
 type fakeTmux struct {
 	mu       sync.Mutex

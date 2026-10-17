@@ -1,7 +1,6 @@
-// Package attention turns Claude Code hook events into notification sounds and
-// tmux window markers. Claude's own status file is the source of truth: hooks
-// only trigger a check, and a short-lived detached watcher clears the marker
-// once the session stops needing the user.
+// Package attention turns Claude Code hook events into sounds and tmux window
+// markers. Claude's status file is the truth: hooks only trigger a check, and a
+// short-lived detached watcher clears the marker once the user is no longer needed.
 package attention
 
 import (
@@ -64,14 +63,13 @@ func newEngine(cfg config.Notifications) *engine {
 		sleep:   time.Sleep,
 		lock:    fileLock,
 		logf:    debugLogf,
-		poll:    500 * time.Millisecond,
+		poll:    time.Second, // each poll forks tmux; the marker needn't clear faster
 		maxLife: 12 * time.Hour,
 	}
 }
 
-// confirm waits until Claude's own status matches want, giving the UI time to
-// draw the dialog (or auto-approve it). Without a status file it trusts the
-// event after the full window.
+// confirm waits for Claude's status to match want, giving the UI time to draw (or
+// auto-approve) the dialog; without a status file it trusts the event after window.
 func (e *engine) confirm(sessionID string, want func(status string) bool, window time.Duration) (claude.NativeState, bool) {
 	deadline := e.now().Add(window)
 	var st claude.NativeState
@@ -326,7 +324,6 @@ func (e *engine) syncWindow(window string) {
 
 // markedName appends the marker: a suffix needs no style reset, because tab
 // formats restyle whatever follows #W, while a prefix would bleed its color.
-// Names marked by older builds carried the marker as a prefix.
 func markedName(name, marker string) string { return name + " " + marker }
 
 // Clear drops the attention marker on a tmux pane id (e.g. "%12"). It is safe

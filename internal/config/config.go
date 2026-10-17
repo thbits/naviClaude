@@ -42,9 +42,8 @@ type Config struct {
 	Notifications      Notifications `yaml:"notifications"`
 }
 
-// Notifications configures what the Claude Code hooks do when a session needs
-// attention or finishes. Sound paths are any file afplay can play; "" uses the
-// built-in sound and "none" silences that event.
+// Notifications configures the Claude Code hooks. A sound is any file afplay can
+// play, "" for the built-in one, or "none" to silence that event.
 type Notifications struct {
 	Enabled              bool    `yaml:"enabled"`                 // master switch (default true)
 	RequestSound         string  `yaml:"request_sound"`           // played when Claude needs input
@@ -74,7 +73,7 @@ type KeyBindings struct {
 	ToggleChanged  string `yaml:"toggle_changed"`
 }
 
-// DefaultConfig returns the default configuration matching Phase 1 behavior.
+// DefaultConfig returns the default configuration.
 func DefaultConfig() Config {
 	return Config{
 		Keys: KeyBindings{
@@ -178,20 +177,12 @@ func Load(path string) (Config, error) {
 	return cfg, nil
 }
 
-// sanitizeConfig applies the zero==default semantics, validates fields, and
-// falls back to the corresponding DefaultConfig() value for any field that is
-// unset (zero), out of range (negative), or otherwise invalid. It sources every
-// fallback from DefaultConfig() rather than restating literals, so the defaults
-// live in exactly one place.
-//
-// Note: zero is still treated as "unset" for numeric fields (it is replaced by
-// the default), preserving the historical behavior — an explicit 0 is NOT
-// honored.
+// sanitizeConfig replaces unset (zero), negative or invalid fields with their
+// DefaultConfig value, so an explicit numeric 0 is never honored.
 func sanitizeConfig(cfg *Config) {
 	d := DefaultConfig()
 
-	// Numeric fields: treat zero or negative as "unset" and fall back to the
-	// default. (Zero==default semantics are intentional and unchanged.)
+	// Numeric fields: zero or negative means unset.
 	if cfg.SidebarWidth <= 0 {
 		cfg.SidebarWidth = d.SidebarWidth
 	}

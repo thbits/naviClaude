@@ -240,10 +240,8 @@ func (m StatusBarModel) spanAt(x int) (hintSpan, bool) {
 	return hintSpan{}, false
 }
 
-// renderBar applies the StatusBar style with a last-resort ANSI-aware
-// truncation: content wider than the bar (long error text, many hints on a
-// very narrow terminal) must be cut, never wrapped, because a taller status
-// bar breaks the app's content-height math.
+// renderBar applies the StatusBar style, truncating overflow because a wrapped,
+// taller status bar would break the app's content-height math.
 func (m StatusBarModel) renderBar(bar string) string {
 	return styles.StatusBar.Width(m.width).Render(ansi.Truncate(bar, m.width, ""))
 }

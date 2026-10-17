@@ -6,25 +6,18 @@ import (
 	"strings"
 )
 
-// classifyWindow is how many trailing non-empty lines we scan. A prompt box is
-// question + options + footer + the input line, so it can sit well above the
-// bottom of the screen -- 6 lines (the old window) was too small.
+// classifyWindow is how many trailing non-empty lines are scanned; a prompt box
+// (question, options, footer, input line) can sit well above the bottom.
 const classifyWindow = 25
 
-// selectionCursor matches the ❯ menu cursor followed by an option: "❯ 1.",
-// "❯ Yes", "❯ No". This distinguishes an active selection menu (waiting) from
-// the idle input box, which also shows ❯ but never directly before an option.
+// selectionCursor matches ❯ directly before an option ("❯ 1.", "❯ Yes"), which
+// tells a selection menu from the idle input box's ❯.
 var selectionCursor = regexp.MustCompile(`(?i)❯\s*(\d+\.|yes\b|no\b)`)
 
-// ClassifyPaneContent inspects captured pane content (ANSI sequences are
-// stripped internally) and returns the strongest signal it can find. A waiting
-// prompt always takes priority over the working footer.
+// ClassifyPaneContent returns the strongest signal in captured pane content
+// (ANSI is stripped internally); a waiting prompt beats the working footer.
 func ClassifyPaneContent(content string) session.PaneSignal {
-	// lastNNonEmptyLines yields the window bottom-to-top. The order does not
-	// matter here: the waiting/working scans below return on any match (so they
-	// are order-independent), and isSelectionMenu's adjacency check (±2 lines) is
-	// symmetric, so reversing to top-to-bottom screen order would not change any
-	// result. Pass it through directly.
+	// The window is bottom-to-top; every check below is order-independent.
 	lines := lastNNonEmptyLines(content, classifyWindow)
 
 	// Waiting takes priority: if a prompt is on screen, the session is blocked
@@ -38,9 +31,8 @@ func ClassifyPaneContent(content string) session.PaneSignal {
 		return session.SignalWaiting
 	}
 
-	// Working: the "to interrupt" footer is shown only while generating or
-	// running tools. We anchor on "to interrupt" rather than the spinner verb,
-	// which is randomized ("Cogitating…", "Forging…") and user-customizable.
+	// The "to interrupt" footer shows only while working; the spinner verb is
+	// randomized and user-customizable, so it can't be the anchor.
 	for _, line := range lines {
 		if strings.Contains(strings.ToLower(line), "to interrupt") {
 			return session.SignalWorking
@@ -50,11 +42,8 @@ func ClassifyPaneContent(content string) session.PaneSignal {
 	return session.SignalNone
 }
 
-// isSelectionMenu reports whether the window contains an interactive selection
-// menu awaiting a choice: the ❯ cursor before option text, with an adjacent
-// sibling option line. This catches free-form menus (Claude's question prompt)
-// whose options are arbitrary text, while excluding the idle input box (the ❯
-// there sits inside a bordered box) and a lone typed-in input line (no sibling).
+// isSelectionMenu reports a ❯ cursor option with a sibling option nearby, which
+// catches free-form menus but not the boxed input prompt or a lone typed line.
 func isSelectionMenu(lines []string) bool {
 	for i, line := range lines {
 		if !isCursorOptionLine(line) {
@@ -72,9 +61,8 @@ func isSelectionMenu(lines []string) bool {
 	return false
 }
 
-// isCursorOptionLine reports whether a line is a menu selection cursor: it
-// starts (after leading whitespace) with ❯ followed by option text, and is not
-// part of a bordered box (the idle input prompt).
+// isCursorOptionLine reports a line starting with ❯ plus option text, outside a
+// bordered box (the idle input prompt).
 func isCursorOptionLine(line string) bool {
 	if strings.ContainsRune(line, '│') {
 		return false
@@ -100,20 +88,11 @@ func isOptionLine(line string) bool {
 	if isCursorOptionLine(line) {
 		return true
 	}
-	// Indented option text: leading whitespace before content.
 	return line[0] == ' ' || line[0] == '\t'
 }
 
-// lineIsWaitingPrompt reports whether a single ANSI-stripped line indicates an
-// interactive prompt awaiting user input.
-//
-// NOTE: these are brittle heuristics. They match hard-coded English substrings
-// (e.g. "do you want to", "no, and tell claude what to do") and rely on the
-// blank-line-stripped adjacency of menu options. They are tightly coupled to
-// the exact wording and layout Claude Code uses for its prompts, so a CLI copy
-// change or a non-English locale can silently break Waiting detection. The
-// matching logic is intentionally left unchanged here; revisit it if Claude's
-// prompt wording changes.
+// lineIsWaitingPrompt reports whether an ANSI-stripped line shows a prompt. It
+// matches Claude's English wording, so a copy change or locale can break it.
 func lineIsWaitingPrompt(line string) bool {
 	lower := strings.ToLower(line)
 

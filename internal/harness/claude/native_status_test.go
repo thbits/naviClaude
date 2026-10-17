@@ -23,54 +23,39 @@ func writeSessionFixture(t *testing.T, home string, pid int, sessionID, status s
 	}
 }
 
-// TestNativeStatusByIDFallback covers the sessionId-based lookup that makes the
-// detector robust to the picked PID not owning the <pid>.json file (the CLI's
-// launcher/wrapper process layering).
-func TestNativeStatusByIDFallback(t *testing.T) {
+// TestReadNativeStateByID covers the sessionId lookup used when the matched PID
+// is a launcher that owns no <pid>.json.
+func TestReadNativeStateByID(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	live, other := os.Getpid(), os.Getppid()
+	writeSessionFixture(t, home, live, "uuid-idle", "idle")
+	writeSessionFixture(t, home, other, "uuid-busy", "busy")
 
-	// File is keyed by PID 12169 but the picked PID will be different (9999).
-	writeSessionFixture(t, home, 12169, "uuid-idle", "idle")
-	writeSessionFixture(t, home, 15319, "uuid-busy", "busy")
-
-	t.Run("readSessionStatusByID finds by sessionId", func(t *testing.T) {
-		got, ok := readSessionStatusByID("uuid-idle")
-		if !ok || got != "idle" {
-			t.Errorf("readSessionStatusByID(uuid-idle) = (%q,%v), want (idle,true)", got, ok)
+	t.Run("falls back to sessionId when the PID has no file", func(t *testing.T) {
+		st, ok := ReadNativeState(deadPID, "uuid-idle")
+		if !ok || st.Status != "idle" {
+			t.Errorf("ReadNativeState(dead, uuid-idle) = (%+v,%v), want idle", st, ok)
 		}
 	})
 
-	t.Run("unknown sessionId returns not found", func(t *testing.T) {
-		if got, ok := readSessionStatusByID("uuid-missing"); ok {
-			t.Errorf("readSessionStatusByID(uuid-missing) = (%q,true), want not found", got)
+	t.Run("uses the PID file when present", func(t *testing.T) {
+		st, ok := ReadNativeState(other, "")
+		if !ok || st.Status != "busy" {
+			t.Errorf("ReadNativeState(other, \"\") = (%+v,%v), want busy", st, ok)
 		}
 	})
 
-	t.Run("empty sessionId returns not found", func(t *testing.T) {
-		if _, ok := readSessionStatusByID(""); ok {
-			t.Error("readSessionStatusByID(\"\") should not be found")
+	t.Run("not found when neither matches", func(t *testing.T) {
+		if st, ok := ReadNativeState(deadPID, "uuid-missing"); ok {
+			t.Errorf("ReadNativeState(dead, uuid-missing) = (%+v,true), want not found", st)
 		}
 	})
 
-	t.Run("NativeStatus falls back to sessionId when PID file absent", func(t *testing.T) {
-		// PID 9999 has no file; the sessionId must drive the result.
-		got, ok := NativeStatus(9999, "uuid-idle")
-		if !ok || got != session.StatusIdle {
-			t.Errorf("NativeStatus(9999, uuid-idle) = (%v,%v), want (Idle,true)", got, ok)
-		}
-	})
-
-	t.Run("NativeStatus uses PID file when present", func(t *testing.T) {
-		got, ok := NativeStatus(15319, "")
-		if !ok || got != session.StatusActive {
-			t.Errorf("NativeStatus(15319, \"\") = (%v,%v), want (Active,true)", got, ok)
-		}
-	})
-
-	t.Run("NativeStatus not found when neither matches", func(t *testing.T) {
-		if got, ok := NativeStatus(9999, "uuid-missing"); ok {
-			t.Errorf("NativeStatus(9999, uuid-missing) = (%v,true), want not found", got)
+	t.Run("skips a file left behind by a dead process", func(t *testing.T) {
+		writeSessionFixture(t, home, deadPID, "uuid-crashed", "busy")
+		if st, ok := ReadNativeState(0, "uuid-crashed"); ok {
+			t.Errorf("ReadNativeState(0, uuid-crashed) = (%+v,true), want the stale file ignored", st)
 		}
 	})
 }
@@ -90,16 +75,13 @@ func writeNamedSessionFixture(t *testing.T, home string, pid int, sessionID, nam
 	}
 }
 
-// TestReadSessionMetadataByID covers the sessionId-based recovery of the full
-// metadata (name + status) used when the picked PID does not own the <pid>.json
-// file -- the fix that keeps Claude's live session name from going stale on a
-// PID/launcher mismatch (and after /clear, /new).
+// TestReadSessionMetadataByID covers recovering a live session's name by
+// sessionId when the matched PID is a launcher.
 func TestReadSessionMetadataByID(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
-	// File keyed by PID 15319, but the picked PID will differ (a wrapper).
-	writeNamedSessionFixture(t, home, 15319, "uuid-named", "squash-merge-session-status", "busy")
+	writeNamedSessionFixture(t, home, os.Getpid(), "uuid-named", "squash-merge-session-status", "busy")
 
 	t.Run("recovers name and status by sessionId", func(t *testing.T) {
 		m, ok := readSessionMetadataByID("uuid-named")
@@ -126,12 +108,6 @@ func TestReadSessionMetadataByID(t *testing.T) {
 		}
 	})
 
-	t.Run("readSessionStatusByID still delegates correctly", func(t *testing.T) {
-		got, ok := readSessionStatusByID("uuid-named")
-		if !ok || got != "busy" {
-			t.Errorf("readSessionStatusByID(uuid-named) = (%q,%v), want (busy,true)", got, ok)
-		}
-	})
 }
 
 func TestMapNativeStatus(t *testing.T) {

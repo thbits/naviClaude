@@ -17,9 +17,8 @@ type Info struct {
 	PromptCacheTTL time.Duration // idle time after which the prompt cache expires; 0 = none
 }
 
-// Harness is the required surface for recognizing live sessions and starting
-// new ones. Implementations are called from concurrent goroutines and must be
-// goroutine-safe.
+// Harness recognizes live sessions and starts new ones. It is called from
+// concurrent goroutines, so implementations must be goroutine-safe.
 type Harness interface {
 	Info() Info
 	// MatchProcess reports whether a process basename or tmux pane command

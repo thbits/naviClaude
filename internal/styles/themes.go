@@ -6,16 +6,11 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// Note on Palette over-specification: in several themes some roles are set to
-// the same color (e.g. Dim == Border in catppuccin-mocha, nord, dracula, etc.).
-// This is intentional redundancy for those palettes, not a bug. The Palette is
-// deliberately NOT restructured to dedupe these roles, because consumers depend
-// on each role existing as a distinct field.
+// Some themes repeat a color across roles (e.g. Dim == Border); that is intentional,
+// since consumers rely on every role being a distinct field.
 
-// fallbackThemeKey is the registry key used when a requested theme is missing.
-// Keep this in sync with the Themes map; referencing it by const (rather than a
-// bare string literal in Named) ensures a future rename surfaces as a compile
-// error instead of silently returning a zero-value Palette.
+// fallbackThemeKey is the theme Named returns for an unknown key; keep it in sync
+// with the Themes map, or Named silently returns a zero Palette.
 const fallbackThemeKey = "tokyo-night"
 
 // Palette defines the semantic color roles for a theme.

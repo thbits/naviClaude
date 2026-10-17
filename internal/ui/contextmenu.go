@@ -187,9 +187,8 @@ func (m ContextMenuModel) renderBox() string {
 	var rows []string
 	maxWidth := 0
 
-	// Measure widths in display columns (lipgloss.Width), not bytes, so the
-	// column math matches the lipgloss.Width-based placement clamp in Rect and
-	// stays correct for multibyte labels/shortcuts.
+	// Measure display columns, not bytes, to match Rect's placement clamp and
+	// stay correct for multibyte labels.
 	for _, item := range m.items {
 		w := lipgloss.Width(item.Label)
 		if item.Shortcut != "" {
@@ -208,7 +207,7 @@ func (m ContextMenuModel) renderBox() string {
 		}
 
 		isCursor := i == m.cursor
-		label := item.Label
+		var label string
 
 		if item.Shortcut != "" {
 			gap := maxWidth - lipgloss.Width(item.Label) - lipgloss.Width(item.Shortcut) - 2

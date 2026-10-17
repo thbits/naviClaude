@@ -88,10 +88,8 @@ type newTmuxSessionMsg struct {
 	err         error
 }
 
-// resumeMsg carries the result of resuming a closed session via the picker. It
-// holds the resumed pane's tmux target and the original closed session (used to
-// build a placeholder with the right metadata until the real session is
-// detected).
+// resumeMsg carries a picker resume's result: the resumed pane's target and
+// the closed session, whose metadata fills the placeholder until detection.
 type resumeMsg struct {
 	tmuxTarget  string
 	tmuxSession string
@@ -204,7 +202,6 @@ type Model struct {
 	keys               KeyMap
 	sidebarWidthPct    int
 	closedSessionHours float64
-	processNames       []string
 	currentTmuxSession string        // the tmux session naviClaude is running in
 	currentTmuxWin     string        // "session:window" target of naviClaude's window
 	refreshInterval    time.Duration // preview capture tick interval
@@ -227,7 +224,7 @@ type Model struct {
 
 // New creates a fully-wired Model ready to be passed to tea.NewProgram.
 func New(version string) Model {
-	cfg, _ := config.Load("")
+	cfg, cfgErr := config.Load("")
 	styles.ApplyTheme(styles.Named(cfg.Theme))
 	keys := KeyMapFromConfig(cfg.Keys)
 
@@ -280,7 +277,6 @@ func New(version string) Model {
 		mode:               ModeList,
 		sidebarWidthPct:    cfg.SidebarWidth,
 		closedSessionHours: cfg.ClosedSessionHours,
-		processNames:       cfg.ProcessNames,
 		currentTmuxSession: detectCurrentTmuxSession(),
 		currentTmuxWin:     detectCurrentTmuxWindow(),
 		refreshInterval:    refreshInterval,
@@ -326,7 +322,23 @@ func New(version string) Model {
 	}
 	m.statusbar.SetKeyHints(shi)
 
+	if cfgErr != nil {
+		m.fail(fmt.Errorf("config: %w (using defaults)", cfgErr))
+	} else if conflicts := ValidateKeys(cfg.Keys); len(conflicts) > 0 {
+		msgs := make([]string, len(conflicts))
+		for i, c := range conflicts {
+			msgs[i] = c.String()
+		}
+		m.fail(fmt.Errorf("keys: %s", strings.Join(msgs, "; ")))
+	}
+
 	return m
+}
+
+// fail records err and shows it in the status bar.
+func (m *Model) fail(err error) {
+	m.err = err
+	m.statusbar.SetError(err.Error())
 }
 
 // Init checks that tmux is available and starts the ticker commands.
@@ -429,9 +441,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmd, m.capturePreviewCmd())
 
 	case detailDataMsg:
-		// Only apply if the detail popup is still showing the same session the
-		// read was fired for; a slow read must not repaint after the user
-		// reopened the popup on a different session (mirrors metricsMsg).
+		// Drop a slow read if the popup has since moved to another session.
 		if sel := m.sidebar.SelectedSession(); sel != nil && sel.ID == msg.sessionID {
 			m.detail.SetData(msg.messageCount, msg.startTime)
 		}
@@ -443,7 +453,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if msg.err != nil {
-			m.err = fmt.Errorf("stats: %w", msg.err)
+			m.fail(fmt.Errorf("stats: %w", msg.err))
 			m.statsModel.Hide()
 			m.mode = ModeList
 			m.statusbar.SetMode(ModeList.String())
@@ -481,8 +491,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// The $EDITOR process exited. Surface a launch/exit failure; otherwise
 		// there is nothing to do -- the preview tick repaints any on-disk change.
 		if msg.err != nil {
-			m.err = fmt.Errorf("editor: %w", msg.err)
-			m.statusbar.SetError(m.err.Error())
+			m.fail(fmt.Errorf("editor: %w", msg.err))
 		}
 		return m, nil
 
@@ -493,9 +502,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			active := m.mergePendingPlaceholder(msg.active)
 			m.activeSessions = active
-			// Don't push active-only to the sidebar if we already have closed
-			// sessions -- it would temporarily remove them and destabilize the
-			// cursor. The combined list is rebuilt once history arrives.
+			// Pushing active-only would briefly drop closed sessions and jump the
+			// cursor; the combined list is rebuilt once history arrives.
 			if len(m.sessions) == 0 {
 				m.sessions = active
 				if m.mode != ModeSearch {
@@ -545,10 +553,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.sidebar.SetSessions(m.search.Results())
 			}
 
-			// Restore the last focused session if enabled (may be a closed
-			// session that only appears after the history scan). After history has
-			// loaded, all sessions are known: if the stored session is still
-			// absent, the default first-session cursor stands (the fallback).
+			// The last focused session may be closed and appear only after the history
+			// scan; if it is still absent then, the default cursor stands.
 			restoreCmd := m.maybeRestoreLastSession()
 			m.restoredLastSession = true
 			if restoreCmd != nil {
@@ -581,11 +587,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.afterScroll {
 			follow = m.finishScrollCapture()
 		}
-		// Discard stale results: if the user navigated away while the capture
-		// was in flight, the result belongs to a different session. Require BOTH
-		// the tmux target AND the session ID to match the current selection -- a
-		// reused pane target alone is not enough, since a different session can
-		// reuse the same target after the old one closed.
+		// Drop results for a session the user navigated away from; match the ID too,
+		// since a new session can reuse a closed one's pane target.
 		if sel := m.sidebar.SelectedSession(); sel == nil || sel.TmuxTarget != msg.target || sel.ID != msg.sessionID {
 			return m, follow
 		}
@@ -605,11 +608,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				m.preview.SetContent(msg.content)
 			}
-			// Only apply Waiting status from the preview path. Active/Idle are
-			// authoritative from the session detector; applying Active from
-			// captures causes flickering due to spinners and cursor blink. Apply
-			// Waiting regardless of content emptiness so a native "waiting" status
-			// is surfaced immediately even before the pane renders the prompt.
+			// Only Waiting comes from captures: the detector owns Active/Idle, and
+			// spinners/cursor blink would make Active flicker.
 			if msg.status == session.StatusWaiting {
 				m.updateSessionStatus(msg.target, msg.status)
 			}
@@ -618,10 +618,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case newSessionMsg:
 		if msg.err != nil {
-			m.err = fmt.Errorf("new session: %w", msg.err)
+			m.fail(fmt.Errorf("new session: %w", msg.err))
 			return m, nil
 		}
-		// Create a placeholder session and enter passthrough immediately.
 		// LastActivity=now keeps the (possibly stale) target group from
 		// auto-collapsing, which would hide the new row and drop focus.
 		placeholder := &session.Session{
@@ -640,14 +639,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case resumeMsg:
 		if msg.err != nil {
 			m.pendingResumeJump = false
-			m.err = msg.err
-			m.statusbar.SetError(msg.err.Error())
+			m.fail(msg.err)
 			return m, nil
 		}
 		if m.pendingResumeJump {
-			// f-style resume: jump to the resumed pane (switch the tmux client
-			// to it and quit naviClaude), so it opens at full terminal size like
-			// jumping to an already-open session -- no passthrough focus.
+			// f-style resume: jump to the resumed pane so it opens at full terminal
+			// size, like jumping to an open session.
 			m.pendingResumeJump = false
 			m.persistViewState()
 			m.restorePreviewedPane()
@@ -655,11 +652,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			_ = m.tmuxClient.SelectPane(msg.tmuxTarget)
 			return m, tea.Quit
 		}
-		// Enter-style resume: place a placeholder for the resumed pane (carrying
-		// the closed session's metadata so it shows the right name and
-		// last-message time) and focus it in passthrough, mirroring the
-		// new-session flow. The next refresh replaces it with the detected
-		// active session.
+		// Enter-style resume: focus a placeholder carrying the closed session's
+		// metadata; the next refresh swaps in the detected session.
 		src := msg.session
 		placeholder := &session.Session{
 			ID:           src.ID,
@@ -675,15 +669,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			Status:       session.StatusActive,
 			LastActivity: src.LastActivity,
 		}
-		// LastActivity stays the closed session's time so the row shows the right
-		// last-message time; enterNewSessionPassthrough expands the group so the
-		// row is visible regardless of that (possibly stale) time.
+		// LastActivity keeps the closed session's time for display;
+		// enterNewSessionPassthrough expands the group so the row stays visible.
 		m.enterNewSessionPassthrough(placeholder)
 		return m, tea.Batch(m.refreshSessionsCmd(), m.reloadMetricsForSelection(placeholder))
 
 	case newTmuxSessionMsg:
 		if msg.err != nil {
-			m.err = fmt.Errorf("new tmux session: %w", msg.err)
+			m.fail(fmt.Errorf("new tmux session: %w", msg.err))
 			return m, nil
 		}
 		// Create a placeholder session and select it in the sidebar.
@@ -726,13 +719,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case errMsg:
-		m.err = msg.err
+		m.fail(msg.err)
 		return m, nil
 
 	case killDoneMsg:
 		delete(m.killing, msg.target)
 		if msg.err != nil {
-			m.err = msg.err
+			m.fail(msg.err)
 		}
 		return m, m.refreshSessionsCmd()
 
@@ -745,11 +738,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleMouse(msg)
 	}
 
-	// Forward any message not handled above to the directory picker while it is
-	// open. The picker's async candidate-load result (dirCandidatesMsg) is an
-	// unexported ui-package type, so it can't be matched in the switch above;
-	// routing unhandled messages to the visible picker delivers it to
-	// dirPicker.Update, which applies the loaded candidates.
+	// Route unmatched messages to the open picker: its candidate-load result is
+	// an unexported ui type the switch above can't match.
 	if m.dirPicker.IsVisible() {
 		var cmd tea.Cmd
 		m.dirPicker, cmd = m.dirPicker.Update(msg)
@@ -788,10 +778,8 @@ func (m Model) View() string {
 	// Pass spinner view to sidebar for the loading/empty state.
 	m.sidebar.SetSpinnerView(m.spinner.View())
 
-	// Focus drives all three pane signals. Tell the sidebar and changed-files
-	// panes their focus state (they re-render only when it changes) before they
-	// render below. The preview owns no edge, so preview-focus shows via its
-	// header chip + the neighbors dimming, handled in preview.go / their dim paths.
+	// Sync pane focus before rendering; the preview has no border, so its focus
+	// shows via its header chip and the neighbors dimming.
 	fp := m.focusedPane()
 	m.sidebar.SetFocused(fp == PaneList)
 	m.rightSidebar.SetFocused(fp == PaneFiles)
@@ -833,9 +821,7 @@ func (m Model) View() string {
 
 	previewView := m.preview.View()
 
-	// Apply the SidebarPanel style with right border as the separator.
-	// When the session list has focus the border lights thick-blue; otherwise
-	// it uses the default border color.
+	// The sidebar's right border separates the panes and lights up on list focus.
 	sidebarStyle := styles.SidebarPanel
 	if fp == PaneList {
 		sidebarStyle = styles.SidebarPanelFocused
@@ -914,10 +900,8 @@ func (m Model) View() string {
 
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.statusbar.ClearError()
-	// The last-session restore only establishes the initial selection at startup.
-	// Any user keystroke means the user is now in control, so cancel any pending
-	// (deferred, history-driven) restore -- otherwise a late restore would steal
-	// focus from a session the user just created, jumped to, or selected.
+	// Any keystroke puts the user in control, so cancel a pending history-driven
+	// restore that would otherwise steal focus.
 	m.restoredLastSession = true
 	key := msg.String()
 
@@ -1016,8 +1000,7 @@ func (m Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case m.keys.Jump:
 		sess := m.sidebar.SelectedSession()
 		if sess != nil && sess.Status == session.StatusClosed {
-			// Resume a closed session via the picker, then jump to the resumed
-			// tmux window (like jumping to an already-open session) rather than
+			// Resume via the picker, then jump to the resumed window rather than
 			// focusing it in passthrough.
 			return m.openResumePicker(sess, true)
 		}
@@ -1052,9 +1035,7 @@ func (m Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.computeStatsCmd()
 
 	case m.keys.ToggleChanged:
-		// Open the changed-files sidebar (if needed) and give it focus, loading
-		// the current selection's edited files. From the list this both opens a
-		// closed panel and re-focuses an already-open one.
+		// Opens the panel if closed, or re-focuses it if already open.
 		sel := m.sidebar.SelectedSession()
 		if sel == nil {
 			return m, nil
@@ -1150,10 +1131,7 @@ func (m *Model) afterSelectionChange() tea.Cmd {
 }
 
 // handleChangedFilesKey handles keys while the changed-files sidebar has focus.
-// The panel is non-modal: Esc/Tab drop focus back to the session list but leave
-// the panel open (so you keep working and it tracks the selection), the toggle
-// key collapses it, j/k/g/G navigate the list, and e/Enter open the selected
-// file in $EDITOR.
+// The panel is non-modal: moving focus away leaves it open, tracking the selection.
 func (m Model) handleChangedFilesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
 
@@ -1472,9 +1450,8 @@ func (m Model) handleKillConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 }
 
-// killSessionCmd hides sess at once and runs manager.Kill off the event loop;
-// the agent's exit hooks can take seconds, so refreshes skip it until
-// killDoneMsg arrives.
+// killSessionCmd hides sess at once and kills it off the event loop; exit hooks
+// can take seconds, so refreshes skip it until killDoneMsg arrives.
 func (m *Model) killSessionCmd(sess *session.Session) tea.Cmd {
 	target := sess.TmuxTarget
 	if m.killing == nil {
@@ -1528,19 +1505,13 @@ func (m Model) resumeSession(sess *session.Session) (tea.Model, tea.Cmd) {
 		m.statusbar.SetError("cannot determine current tmux session")
 		return m, nil
 	}
-	// Run the resume exec in a Cmd so the tmux exec doesn't block the event
-	// loop, then trigger an immediate session refresh so the new pane is
-	// detected. Don't enter passthrough yet -- the new pane needs to be
-	// discovered first.
+	// Resume off the event loop and refresh at once; passthrough waits until
+	// the new pane is detected.
 	return m, tea.Batch(m.resumeCmd(sess, target), m.refreshSessionsCmd())
 }
 
-// openResumePicker opens the resume-target picker for a closed session. It lists
-// the live tmux sessions (most-recently-active first) and pre-highlights the
-// session naviClaude is running in. The actual resume happens on Enter in
-// handleResumePickerKey. When jump is true the resumed pane is jumped to (the
-// tmux client switches to it and naviClaude quits, like jumping to an open
-// session); when false it is focused in passthrough.
+// openResumePicker opens the resume-target picker for a closed session. With
+// jump the resumed pane is jumped to; otherwise it is focused in passthrough.
 func (m Model) openResumePicker(sess *session.Session, jump bool) (tea.Model, tea.Cmd) {
 	if !m.menuCaps(sess).CanResume {
 		return m, nil
@@ -1555,9 +1526,8 @@ func (m Model) openResumePicker(sess *session.Session, jump bool) (tea.Model, te
 	return m, m.resumePicker.Init()
 }
 
-// handleResumePickerKey drives the resume-target picker: typing filters,
-// arrows move, Enter resumes into the chosen (or typed-new) tmux session, Esc
-// cancels.
+// handleResumePickerKey drives the resume-target picker; Enter resumes into the
+// chosen (or typed-new) tmux session.
 func (m Model) handleResumePickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc":
@@ -1597,9 +1567,8 @@ func (m Model) handleResumePickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 }
 
-// resumeInSessionCmd runs manager.ResumeInSession off the event loop, emitting
-// a resumeMsg with the resumed pane's target on success (so the app can focus
-// it) or an error on failure.
+// resumeInSessionCmd runs manager.ResumeInSession off the event loop, reporting
+// the resumed pane's target in a resumeMsg.
 func (m Model) resumeInSessionCmd(sess *session.Session, targetName string) tea.Cmd {
 	manager := m.manager
 	h := m.harnessFor(sess)
@@ -1629,22 +1598,9 @@ func sessionNamesByRecency(infos []tmux.SessionInfo) []string {
 	return names
 }
 
-// resolveNewSessionTarget determines the tmux session and starting directory a
-// new agent session should use, based on the sidebar cursor. Resolution order:
-//
-//  1. The hovered session -- its tmux session and cwd. Closed sessions carry
-//     no tmux session (only live pane detection assigns one), so they resolve
-//     to the current tmux session while keeping their cwd for the dir picker.
-//  2. The selected group header. Groups are keyed by tmux session name, so the
-//     header name IS the tmux session name; the cwd comes from the group's first
-//     session. This reads the group model rather than the visible flat rows, so
-//     it works even when the group is collapsed (collapsed groups contribute no
-//     child rows). The closed-sessions group (ui.ClosedGroupName) is skipped --
-//     it is a pseudo-group, not a real tmux session.
-//  3. The tmux session naviClaude itself runs in.
-//
-// tmuxSess may be empty only when the app is not inside a tmux session; callers
-// treat that as an error. cwd may be empty (caller falls back to home).
+// resolveNewSessionTarget picks the tmux session and cwd for a new agent session:
+// the hovered session (closed ones have no tmux session, so use the current one),
+// else the selected group header (named after its tmux session), else our own.
 func (m Model) resolveNewSessionTarget() (tmuxSess, cwd string) {
 	if sel := m.sidebar.SelectedSession(); sel != nil {
 		if sel.TmuxSession != "" {
@@ -1672,9 +1628,8 @@ func (m Model) createNewSession() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// Open the directory picker; the agent window is created once a directory
-	// is chosen (Enter). The current dir is preselected, so Enter keeps the
-	// previous behavior of opening in the highlighted session's directory.
+	// The agent window is created once a directory is chosen; the current dir is
+	// preselected so Enter opens in the highlighted session's directory.
 	base := cwd
 	if base == "" {
 		if home, err := os.UserHomeDir(); err == nil {
@@ -1710,9 +1665,8 @@ func (m Model) createAgentSessionIn(cwd, tmuxSess string) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) createNewTmuxSession() (tea.Model, tea.Cmd) {
-	// Use the configured directory (or home) as the picker's starting base; the
-	// picker handles ~ expansion. After a directory is chosen the flow continues
-	// into the session-name input (see confirmDirSelection).
+	// The configured directory (or home) seeds the picker, which expands ~; the
+	// name input follows (see confirmDirSelection).
 	cwd := m.cfg.NewSessionDir
 	if cwd == "" {
 		cwd, _ = os.UserHomeDir()
@@ -1721,9 +1675,8 @@ func (m Model) createNewTmuxSession() (tea.Model, tea.Cmd) {
 	return m.openDirPicker(cwd, "New tmux session directory")
 }
 
-// openDirPicker activates the directory-picker overlay rooted at base. Show
-// returns a command that loads the candidate pool off the Update goroutine, so
-// the (possibly blocking) zoxide/subdir lookups don't freeze the UI.
+// openDirPicker shows the directory picker rooted at base; candidates load off
+// the Update goroutine so slow zoxide/subdir lookups don't freeze the UI.
 func (m Model) openDirPicker(base, title string) (tea.Model, tea.Cmd) {
 	m.mode = ModeDirPicker
 	m.dirPicker.SetSize(m.width, m.height)
@@ -1785,9 +1738,8 @@ func (m Model) handleDirPickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 }
 
-// confirmDirSelection dispatches the chosen directory to the flow that opened
-// the picker: create an agent window (n), or continue to the name input for a
-// new tmux session (N).
+// confirmDirSelection hands the chosen directory to the flow that opened the
+// picker: a new agent window (n) or the new tmux session's name input (N).
 func (m Model) confirmDirSelection(dir string) (tea.Model, tea.Cmd) {
 	action := m.pendingDirAction
 	m.pendingDirAction = dirActionNone
@@ -1845,10 +1797,8 @@ func (m Model) executeContextAction(action string, sess *session.Session) (tea.M
 	if sess == nil {
 		return m, nil
 	}
-	// Each case sets its own complete mode/statusbar target state so the result
-	// is correct regardless of the caller's pre-set mode (the context-menu key
-	// handler already reset to ModeList before dispatching here -- these cases
-	// must not depend on that ordering).
+	// Each case sets its full mode/statusbar state rather than relying on the
+	// caller having reset to ModeList first.
 	switch action {
 	case "focus":
 		if sess.Status == session.StatusClosed {
@@ -1929,9 +1879,8 @@ func buildActiveIDSet(active []*session.Session) map[string]bool {
 	return ids
 }
 
-// enrichActiveSummaries fills in each active session's Summary from its
-// harness's history index (first prompt) when the session doesn't already
-// carry one. No-op when reg is nil.
+// enrichActiveSummaries fills a missing Summary on each active session from its
+// harness's history index (first prompt).
 func enrichActiveSummaries(reg *harness.Registry, active []*session.Session) {
 	byHarness := partitionByHarness(reg, active)
 	for name, list := range byHarness {
@@ -1951,9 +1900,8 @@ func enrichActiveSummaries(reg *harness.Registry, active []*session.Session) {
 	}
 }
 
-// scanClosedAndAllSessions returns the time-windowed closed sessions and the
-// full closed-session list from every history-capable harness, excluding each
-// harness's active IDs. Each provider derives both views from a single pass.
+// scanClosedAndAllSessions returns the time-windowed and full closed-session
+// lists in one pass per history-capable harness, excluding active IDs.
 func scanClosedAndAllSessions(reg *harness.Registry, closedHours float64, active []*session.Session) (closed, all []*session.Session) {
 	if reg == nil {
 		return nil, nil
@@ -2106,9 +2054,8 @@ func (m *Model) syncSelectionAfterRebuild(prev string) tea.Cmd {
 	return nil
 }
 
-// clearSeenAttentionCmd drops hook markers the user no longer needs: the
-// session being previewed counts as seen, and a "waiting" marker is stale once
-// Claude's own status says it is no longer waiting.
+// clearSeenAttentionCmd drops the previewed session's hook marker (it is seen) and
+// "waiting" markers made stale by Claude's own status.
 func (m *Model) clearSeenAttentionCmd() tea.Cmd {
 	sel := m.sidebar.SelectedSession()
 	var panes []string
@@ -2134,10 +2081,8 @@ func (m *Model) clearSeenAttentionCmd() tea.Cmd {
 	}
 }
 
-// selectPreviewSession updates the preview header for the given session and
-// clears stale content when the selection changes to a different pane target.
-// It resizes the new pane's window to match the preview viewport and restores
-// the previous pane's window to the full terminal size when navigating away.
+// selectPreviewSession points the preview at s; on a pane change it fits the new
+// window to the viewport and restores the previous window's size.
 func (m *Model) selectPreviewSession(s *session.Session) {
 	target := ""
 	if s != nil {
@@ -2234,16 +2179,11 @@ func (m Model) capturePreviewCmd() tea.Cmd {
 	h := m.harnessFor(sess)
 	captureEngine := m.captureEngine
 	tc := m.tmuxClient
-	// Compute the capture width here (on the event-loop goroutine, where the
-	// dimensions are stable) and pass it to Capture, rather than relying on a
-	// shared mutable field on the engine that the capture goroutine would race
-	// with a concurrent resize. Mirrors resizeComponents: previewWidth-2 for the
-	// preview's left/right padding.
+	// Compute the width here, where dimensions are stable, since a shared field
+	// would race the capture goroutine; -2 is the preview's padding.
 	previewWidth := m.width - m.sidebarWidth()
 	maxWidth := previewWidth - 2
-	// Only overlay the pane cursor when the preview is focused (passthrough);
-	// while browsing the menu the pane isn't receiving input, so a cursor block
-	// would be misleading.
+	// Outside passthrough the pane isn't receiving input, so a cursor would mislead.
 	showCursor := m.mode == ModePassthrough
 
 	return func() tea.Msg {
@@ -2349,16 +2289,10 @@ func (m *Model) resizeComponents() {
 	m.dirPicker.SetSize(m.width, m.height)
 	m.resumePicker.SetSize(m.width, m.height)
 	m.contextMenu.SetTermSize(m.width, m.height)
-	// The capture width is computed per-capture in capturePreviewCmd and passed
-	// to Capture, so there is no shared maxWidth field to set here. (Truncation
-	// to the preview viewport width still happens -- see capturePreviewCmd.)
 }
 
-// previewPaneDimensions returns the width and height that managed tmux panes
-// should be resized to so their content fits the preview viewport exactly.
-// resizePreviewedPane fits the currently previewed tmux window to the preview
-// viewport. Call it whenever the preview area changes size (terminal resize,
-// toggling the changed-files panel) so captured content keeps matching it.
+// resizePreviewedPane fits the previewed tmux window to the preview viewport;
+// call it whenever the preview area changes size.
 func (m *Model) resizePreviewedPane() {
 	if m.resizedWinTarget != "" {
 		paneW, paneH := m.previewPaneDimensions()
@@ -2366,6 +2300,8 @@ func (m *Model) resizePreviewedPane() {
 	}
 }
 
+// previewPaneDimensions returns the size managed tmux panes are resized to so
+// their content fits the preview viewport exactly.
 func (m Model) previewPaneDimensions() (int, int) {
 	sidebarWidth := m.sidebarWidth()
 	previewWidth := m.width - sidebarWidth - m.rightSidebarWidth()
@@ -2422,8 +2358,7 @@ func (m Model) sidebarWidth() int {
 	return w
 }
 
-// rightSidebarWidth returns the width of the changed-files panel, or 0 when it
-// is collapsed. It mirrors sidebarWidth's percentage-with-clamps shape but is
+// rightSidebarWidth returns the changed-files panel width, or 0 when collapsed,
 // capped so the left sidebar and preview always keep room.
 func (m Model) rightSidebarWidth() int {
 	if !m.rightPanelOpen {
@@ -2447,10 +2382,7 @@ func (m Model) rightSidebarWidth() int {
 // Session selection helper
 // ---------------------------------------------------------------------------
 
-// selectSessionInSidebar iterates the sidebar sessions and moves the cursor
-// to match the given session. This is a best-effort approach: we set sessions
-// again with the target first so the sidebar rebuilds, but the simplest
-// approach is to just set the sessions and let the cursor stay.
+// selectSessionInSidebar moves the sidebar cursor and the preview to target.
 func (m *Model) selectSessionInSidebar(target *session.Session) {
 	if target == nil {
 		return
@@ -2459,11 +2391,8 @@ func (m *Model) selectSessionInSidebar(target *session.Session) {
 	m.preview.SetSession(target)
 }
 
-// reloadMetricsForSelection clears stale metrics and reloads them when the
-// selected session differs from the one the current metrics belong to. It
-// returns the load command (or nil when the selection is unchanged or has no
-// ID). Shared by list-mode and search-mode navigation so metrics never go
-// stale on the search path.
+// reloadMetricsForSelection clears and reloads metrics when sel differs from
+// the session they belong to, returning the load command or nil.
 func (m *Model) reloadMetricsForSelection(sel *session.Session) tea.Cmd {
 	if sel == nil || sel.ID == m.metricsSessionID {
 		return nil
@@ -2511,10 +2440,8 @@ func (m *Model) maybeRefreshChangedFilesCmd() tea.Cmd {
 	return loadChangedFilesCmd(m.harnessFor(sel), sel)
 }
 
-// setFocus moves keyboard focus to the given pane, applying the passthrough
-// enter/leave side effects and syncing the status bar. Entering the changed-
-// files pane refreshes its list for the current selection. It returns any
-// command the transition needs run.
+// setFocus moves keyboard focus to target, applying passthrough enter/leave side
+// effects; entering the changed-files pane returns its reload command.
 func (m *Model) setFocus(target Mode) tea.Cmd {
 	if m.mode == ModePassthrough && target != ModePassthrough {
 		m.preview.SetPassthrough(false)
@@ -2534,12 +2461,8 @@ func (m *Model) setFocus(target Mode) tea.Cmd {
 	return nil
 }
 
-// nextFocusMode returns the pane to focus when cycling with Tab (forward) or
-// Shift+Tab (backward). The ring runs left-to-right across the layout -- the
-// session list, then the preview (only when the selection is an active session
-// that can receive passthrough keys), then the changed-files panel (only when
-// it is open) -- and wraps around. Unavailable panes are skipped, so with the
-// panel closed this reduces to the normal list<->passthrough toggle.
+// nextFocusMode returns the next pane in the left-to-right Tab ring, skipping the
+// preview for non-live sessions and the changed-files panel when closed.
 func (m Model) nextFocusMode(forward bool) Mode {
 	sel := m.sidebar.SelectedSession()
 	canPassthrough := sel != nil && sel.Status != session.StatusClosed && sel.TmuxTarget != ""
@@ -2568,9 +2491,8 @@ func (m Model) nextFocusMode(forward bool) Mode {
 	return ring[idx]
 }
 
-// applyAliases overlays user-defined display-name aliases onto the given
-// session list in place. Centralizes alias application so refresh/rename/search
-// paths all behave identically.
+// applyAliases overlays user display-name aliases onto list in place, so
+// refresh, rename and search all show the same names.
 func (m *Model) applyAliases(list []*session.Session) {
 	aliases := m.aliasStore.All()
 	if len(aliases) == 0 {
@@ -2583,13 +2505,8 @@ func (m *Model) applyAliases(list []*session.Session) {
 	}
 }
 
-// enterNewSessionPassthrough inserts a just-created (or just-resumed) placeholder
-// at the front of the session list, focuses it in the sidebar, and enters
-// passthrough on it. It expands the placeholder's group first: a new session in a
-// collapsed group would otherwise be hidden from the flat list, so the cursor
-// could never land on it and focus would stay on the previous selection.
-// pendingNewTarget keeps the cursor pinned to the placeholder until the real
-// detected session replaces it on the next refresh.
+// enterNewSessionPassthrough selects a new/resumed placeholder at the front and
+// enters passthrough, expanding its group so a collapsed group can't hide it.
 func (m *Model) enterNewSessionPassthrough(placeholder *session.Session) {
 	m.sessions = append([]*session.Session{placeholder}, m.sessions...)
 	m.sidebar.SetSessions(m.sessions)
@@ -2602,9 +2519,8 @@ func (m *Model) enterNewSessionPassthrough(placeholder *session.Session) {
 	m.statusbar.SetMode(ModePassthrough.String())
 }
 
-// mergePendingPlaceholder checks whether the pending new-session target has
-// been detected in active. If found, clears pendingNewTarget. Otherwise,
-// carries forward the placeholder from m.sessions so it stays visible.
+// mergePendingPlaceholder clears pendingNewTarget once it appears in active;
+// until then it carries the placeholder forward so it stays visible.
 func (m *Model) mergePendingPlaceholder(active []*session.Session) []*session.Session {
 	if m.pendingNewTarget == "" {
 		return active
@@ -2617,17 +2533,14 @@ func (m *Model) mergePendingPlaceholder(active []*session.Session) []*session.Se
 	}
 	for _, s := range m.sessions {
 		if s.TmuxTarget == m.pendingNewTarget {
-			// Prepend the carried placeholder so it stays at the FRONT, matching
-			// where creation originally placed (and selected) it. Appending would
-			// make the new session visibly jump on the next refresh.
+			// Prepend so the placeholder stays where creation put it instead of
+			// jumping on the next refresh.
 			return append([]*session.Session{s}, active...)
 		}
 	}
 	return active
 }
 
-// removeSession removes a session by tmux target from all internal lists and
-// rebuilds the sidebar immediately.
 // dropKilling filters out sessions whose kill is still in flight.
 func (m *Model) dropKilling(active []*session.Session) []*session.Session {
 	if len(m.killing) == 0 {
@@ -2642,6 +2555,8 @@ func (m *Model) dropKilling(active []*session.Session) []*session.Session {
 	return kept
 }
 
+// removeSession removes a session by tmux target from all internal lists and
+// rebuilds the sidebar immediately.
 func (m *Model) removeSession(tmuxTarget string) {
 	filter := func(list []*session.Session) []*session.Session {
 		result := make([]*session.Session, 0, len(list))
@@ -2701,9 +2616,6 @@ func detectCurrentTmuxWindow() string {
 // detectCurrentTmuxSession returns the name of the tmux session that
 // naviClaude is running inside, or an empty string if it cannot be determined.
 func detectCurrentTmuxSession() string {
-	// First try parsing $TMUX which has format "/tmp/tmux-1000/default,12345,0"
-	// -- the session ID is the last component, but we need the name.
-	// Easier: just ask tmux directly.
 	out, err := exec.Command("tmux", "display-message", "-p", "#{session_name}").Output()
 	if err != nil {
 		return ""
@@ -2714,30 +2626,23 @@ func detectCurrentTmuxSession() string {
 // copyToClipboard attempts to copy text to the system clipboard.
 // It tries pbcopy (macOS), then xclip, then xsel. Errors are silently ignored.
 func copyToClipboard(text string) {
-	// Try pbcopy (macOS).
 	cmd := exec.Command("pbcopy")
 	cmd.Stdin = strings.NewReader(text)
 	if cmd.Run() == nil {
 		return
 	}
-	// Try xclip.
 	cmd = exec.Command("xclip", "-selection", "clipboard")
 	cmd.Stdin = strings.NewReader(text)
 	if cmd.Run() == nil {
 		return
 	}
-	// Try xsel.
 	cmd = exec.Command("xsel", "--clipboard", "--input")
 	cmd.Stdin = strings.NewReader(text)
 	_ = cmd.Run()
 }
 
-// maybeRestoreLastSession re-selects the session focused when the app last
-// closed, if focus_last_session is enabled and it has not already run. It is
-// safe to call repeatedly: it does nothing once the session is restored or the
-// user has navigated. Returns a metrics-load Cmd for the restored session, or
-// nil. If the stored session is not present, the default first-session cursor is
-// left untouched (the historical fallback behavior).
+// maybeRestoreLastSession re-selects the session focused at last quit, once, if
+// focus_last_session is on; it returns that session's metrics-load Cmd or nil.
 func (m *Model) maybeRestoreLastSession() tea.Cmd {
 	if m.restoredLastSession || !m.cfg.FocusLastSession || m.viewState == nil {
 		return nil
@@ -2759,9 +2664,8 @@ func (m *Model) maybeRestoreLastSession() tea.Cmd {
 	return m.reloadMetricsForSelection(sel)
 }
 
-// persistViewState writes the current focused session and manually-toggled group
-// state to disk. Called at quit. The full state is always written; each field is
-// applied on startup only if its config toggle is on.
+// persistViewState saves the focused session and manually toggled groups at quit;
+// each field is applied on startup only if its config toggle is on.
 func (m Model) persistViewState() {
 	if m.viewState == nil {
 		return

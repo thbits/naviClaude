@@ -77,9 +77,8 @@ func main() {
 	})
 
 	m := app.New(version)
-	// WithMouseCellMotion reports button presses, drags, and wheel events
-	// (everything handleMouse uses) without the motion-event flood of
-	// WithMouseAllMotion, which also blocks terminal text selection.
+	// Cell motion covers presses, drags and wheel without AllMotion's event flood,
+	// which also blocks terminal text selection.
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)

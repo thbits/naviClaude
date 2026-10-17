@@ -56,9 +56,7 @@ func (c *Client) CheckVersion(major, minor int) error {
 
 // ListPanes returns all panes across all sessions.
 func (c *Client) ListPanes() ([]PaneInfo, error) {
-	// Fields are joined with paneFieldSep (0x1f) rather than spaces so that
-	// session names and working directories containing spaces parse correctly.
-	// MUST stay in sync with parsePaneLine.
+	// paneFieldSep keeps spaces in names and paths intact; keep in sync with parsePaneLine.
 	format := "#{session_name}:#{window_index}.#{pane_index}" + paneFieldSep +
 		"#{pane_current_command}" + paneFieldSep +
 		"#{pane_pid}" + paneFieldSep +
@@ -72,9 +70,8 @@ func (c *Client) ListPanes() ([]PaneInfo, error) {
 	return ParsePanes(string(out))
 }
 
-// CapturePaneOutput captures the full scrollback + visible contents of a pane,
-// preserving ANSI color sequences. target is a tmux target string such as
-// "session:1.0".
+// CapturePaneOutput captures a pane's full scrollback and visible rows with ANSI
+// colors kept.
 func (c *Client) CapturePaneOutput(target string) (string, error) {
 	out, err := exec.Command("tmux", "capture-pane", "-e", "-p", "-S", "-", "-t", target).Output()
 	if err != nil {
@@ -83,10 +80,8 @@ func (c *Client) CapturePaneOutput(target string) (string, error) {
 	return string(out), nil
 }
 
-// CursorPosition returns the cursor state of a pane: its column, its row within
-// the visible pane, the pane height, and whether the cursor is currently
-// visible. tmux's capture-pane does not include the cursor, so callers overlay
-// it onto captured content using this position.
+// CursorPosition returns a pane's cursor column, visible row, height and
+// visibility, for callers to overlay since capture-pane omits the cursor.
 func (c *Client) CursorPosition(target string) (CursorInfo, error) {
 	out, err := exec.Command("tmux", "display-message", "-p", "-t", target,
 		"#{cursor_x} #{cursor_y} #{pane_height} #{cursor_flag}").Output()
@@ -238,10 +233,8 @@ func (c *Client) NewSessionPrint(opts NewSessionOptions) (string, error) {
 // printFormat makes new-session/new-window print the window id and pane target.
 const printFormat = "#{window_id}\t#{session_name}:#{window_index}.#{pane_index}"
 
-// createdTarget parses printFormat output into the pane target. A named window
-// gets allow-rename off, so shell title escapes (zsh retitling it to the
-// command being run, e.g. "cd") cannot overwrite the name; the name is
-// re-applied in case the shell's first prompt already did.
+// createdTarget parses printFormat output into the pane target. A named window gets
+// allow-rename off (and its name re-applied) so shell title escapes can't retitle it.
 func createdTarget(out []byte, name string) string {
 	id, target, _ := strings.Cut(strings.TrimSpace(string(out)), "\t")
 	if name != "" && id != "" {
@@ -251,9 +244,8 @@ func createdTarget(out []byte, name string) string {
 	return target
 }
 
-// HasSession reports whether a tmux session with exactly the given name exists.
-// The "=" target prefix forces an exact-name match, so "dev" does not match an
-// existing "dev-tools". Returns false for an empty name.
+// HasSession reports whether a session named exactly name exists; the "=" prefix
+// stops "dev" matching "dev-tools".
 func (c *Client) HasSession(name string) bool {
 	if name == "" {
 		return false
@@ -373,9 +365,8 @@ func (c *Client) SaveWindowSize(target string) {
 	exec.Command("tmux", "set-option", "-wq", "-t", target, optPreSize, pre).Run()
 }
 
-// RestoreWindowSize undoes a preview resize. A window that followed its
-// clients is re-fitted and left following them again; one with its own
-// window-size gets w x h and that setting back.
+// RestoreWindowSize undoes a preview resize: a window that followed its clients
+// follows them again; one with its own window-size gets w x h and that setting.
 func (c *Client) RestoreWindowSize(target string, w, h int) {
 	switch pre := windowOption(target, optPreSize); pre {
 	case "":

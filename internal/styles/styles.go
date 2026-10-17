@@ -1,5 +1,4 @@
-// Package styles defines all Lipgloss visual styles for naviClaude.
-// Tokyo Night color scheme matching the design mockups.
+// Package styles defines naviClaude's Lipgloss styles, built from the active theme.
 package styles
 
 import "github.com/charmbracelet/lipgloss"
@@ -8,10 +7,7 @@ import "github.com/charmbracelet/lipgloss"
 // Color palette (set by buildStyles; defaults to tokyo-night via init)
 // ---------------------------------------------------------------------------
 //
-// These package-level Color* vars are assigned from the active Palette by
-// buildStyles. They are declared with their tokyo-night default values purely
-// for documentation/reference; init() immediately re-derives them (and every
-// style below) from the default palette so there is a single source of truth.
+// The tokyo-night values below are for reference only; buildStyles reassigns them.
 
 var (
 	ColorBg           = lipgloss.Color("#16161e") // terminal background (dark)
@@ -36,11 +32,7 @@ var (
 // Style variables
 // ---------------------------------------------------------------------------
 //
-// Every style var below is declared here (with its documentation) and is
-// assigned exactly once, from the active palette, inside buildStyles. Do NOT
-// add a default initializer here: that would re-introduce the duplicate
-// definition that buildStyles exists to eliminate, and risk the two copies
-// drifting apart.
+// Assigned only in buildStyles; no initializers here, so no second copy can drift.
 
 // --- Sidebar styles ---
 
@@ -57,9 +49,8 @@ var RightSidebarPanel lipgloss.Style
 // RightSidebarPanelFocused is the changed-files panel when it has focus.
 var RightSidebarPanelFocused lipgloss.Style
 
-// PaneTitleActive is the lit reverse-video title bar shown on the focused pane
-// (blue background, bg-colored text). Derives from the palette so it follows
-// every theme, including light ones (fg=Bg keeps contrast on the blue bar).
+// PaneTitleActive is the lit reverse-video title bar on the focused pane; fg=Bg
+// keeps contrast on the blue bar in light themes too.
 var PaneTitleActive lipgloss.Style
 
 // PaneTitleInactive is the dim title shown on an unfocused pane.
@@ -113,9 +104,7 @@ var SidebarWaitingFlash lipgloss.Style
 
 // --- Preview panel styles ---
 
-// PreviewBorderUnfocused has NO border -- the separator is on the sidebar's
-// right border now. This style is kept for backward compatibility but renders
-// no border.
+// PreviewBorderUnfocused has NO border -- the separator is the sidebar's right border.
 var PreviewBorderUnfocused lipgloss.Style
 
 // PreviewBorderFocused also has NO border -- in passthrough mode the sidebar's
@@ -280,25 +269,15 @@ var StatsFilterInactive lipgloss.Style
 // defaultThemeKey is the palette used to populate styles at package init.
 const defaultThemeKey = "tokyo-night"
 
-// init populates every style variable from the default palette so the package
-// is fully initialized before any rendering happens, even if ApplyTheme is
-// never called.
+// init builds styles from the default palette so rendering works even if
+// ApplyTheme is never called.
 func init() {
 	buildStyles(Named(defaultThemeKey))
 }
 
-// buildStyles assigns every package-level Color* and style variable from the
-// given palette. It is the single source of truth for style construction and
-// is called from both init() (default palette) and ApplyTheme (selected theme).
-//
-// CONCURRENCY NOTE / known limitation: these are mutable package globals.
-// ApplyTheme (which calls buildStyles) writes them, while Bubble Tea Cmd
-// goroutines may read them concurrently when rendering. This is an accepted
-// architectural limitation; the real fix is to thread the active theme through
-// the model rather than mutating globals. Do NOT attempt to "fix" the race here
-// -- only theme switching writes these, and it is rare and user-initiated.
+// buildStyles assigns every Color* and style variable from p. Known, accepted race:
+// rare theme switches write these globals while Cmd goroutines may read them.
 func buildStyles(p Palette) {
-	// Reassign color variables from the palette.
 	ColorBg = p.Bg
 	ColorBgPanel = p.BgPanel
 	ColorBgHover = p.BgHover
@@ -316,7 +295,6 @@ func buildStyles(p Palette) {
 	ColorDim = p.Dim
 	ColorDimText = p.DimText
 
-	// Build all style variables from the (now updated) colors.
 	// Panel-fill styles set no Background so the app blends into the terminal's
 	// own background instead of painting an opaque block behind the content.
 	SidebarPanel = lipgloss.NewStyle().
@@ -329,14 +307,11 @@ func buildStyles(p Palette) {
 		BorderStyle(lipgloss.ThickBorder()).
 		BorderForeground(ColorBlue)
 
-	// RightSidebarPanel is the changed-files panel container. It uses a LEFT
-	// border as its separator (mirror of SidebarPanel's right border).
 	RightSidebarPanel = lipgloss.NewStyle().
 		BorderLeft(true).
 		BorderStyle(lipgloss.NormalBorder()).
 		BorderForeground(ColorBorder)
 
-	// RightSidebarPanelFocused is the changed-files panel when it has focus.
 	RightSidebarPanelFocused = lipgloss.NewStyle().
 		BorderLeft(true).
 		BorderStyle(lipgloss.ThickBorder()).
@@ -568,11 +543,7 @@ func buildStyles(p Palette) {
 	StatsFilterInactive = lipgloss.NewStyle().Foreground(ColorGray)
 }
 
-// ApplyTheme applies the given palette, reassigning all color variables
-// and rebuilding all style variables. Call once at startup before rendering.
-//
-// It delegates to buildStyles, which is the single source of truth shared with
-// init(). See the concurrency note on buildStyles regarding global mutation.
+// ApplyTheme switches to palette p, rebuilding every color and style variable.
 func ApplyTheme(p Palette) {
 	buildStyles(p)
 }

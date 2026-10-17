@@ -12,10 +12,8 @@ const (
 	PaneFiles
 )
 
-// focusedPane maps the current input mode to the pane that owns keyboard focus.
-// Passthrough focuses the preview; the changed-files mode focuses the right
-// sidebar; every other mode (list, search, inline inputs, and modal overlays
-// that sit above the list) keeps focus on the session list.
+// focusedPane maps the input mode to the pane owning keyboard focus; every mode
+// but passthrough and changed-files, overlays included, keeps it on the list.
 func (m Model) focusedPane() Pane {
 	switch m.mode {
 	case ModePassthrough:

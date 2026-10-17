@@ -15,10 +15,8 @@ import (
 	"github.com/thbits/naviClaude/internal/styles"
 )
 
-// ClosedGroupName is the sidebar group that holds closed sessions. It is a
-// pseudo-group, not a real tmux session, so callers that map a group to a tmux
-// target (e.g. resolveNewSessionTarget) must treat it specially. Exported so
-// those callers reference this constant rather than re-hardcoding the string.
+// ClosedGroupName is the pseudo-group holding closed sessions; it is not a real
+// tmux session, so callers mapping a group to a tmux target must special-case it.
 const ClosedGroupName = "Closed"
 
 // sessionGroup groups sessions by their tmux session name (or ClosedGroupName).
@@ -32,9 +30,7 @@ type flatItem struct {
 	isGroup   bool
 	groupName string
 	session   *session.Session
-	// For group items: the group's position in m.groups and its session count,
-	// captured during rebuildFlatItems so renderGroupHeader needn't rescan
-	// m.groups every frame.
+	// Group items only: cached so renderGroupHeader needn't rescan m.groups every frame.
 	groupIdx   int
 	groupCount int
 }
@@ -60,9 +56,8 @@ type SidebarModel struct {
 	groupSortOrder    string  // "name" or "activity"
 	sessionSortOrder  string  // "name" or "activity"
 
-	// Tracked selection: persists across data refreshes and is only updated
-	// by explicit user navigation (j/k, search select, SetCursor, SelectByID).
-	// rebuildGroups uses these to restore the cursor after re-sorting.
+	// Tracked selection: changed only by user navigation, so data refreshes
+	// restore the cursor to it instead of overriding the user's choice.
 	trackedPaneID string // tmux pane id ("%N"); stable even while a new session's ID settles
 	trackedID     string // session ID the cursor should follow
 	trackedTarget string // tmux target fallback (for placeholder sessions with no ID)
@@ -114,9 +109,8 @@ func (m *SidebarModel) SetSessionSortOrder(order string) {
 	m.sessionSortOrder = order
 }
 
-// ExpandAll sets search mode: all groups expand and stay expanded across
-// subsequent SetSessions calls until RestoreCollapsed is called.
-// Saves the current collapsed state so it can be restored later.
+// ExpandAll enters search mode: every group stays expanded across SetSessions
+// until RestoreCollapsed brings back the saved collapsed state.
 func (m *SidebarModel) ExpandAll() {
 	m.searchActive = true
 	m.savedCollapsed = make(map[string]bool)
@@ -208,16 +202,9 @@ func (m *SidebarModel) SetSpinnerView(view string) {
 	m.spinnerView = view
 }
 
-// SetFocused marks whether the sidebar pane has keyboard focus. It re-renders on
-// change so the lit title bar and content dimming update immediately.
-//
-// Invariant this depends on: SetSize does NOT call syncViewport, so row
-// dimming on an unfocused resize relies entirely on SetFocused's syncViewport
-// call firing here. That in turn relies on the change-guard above actually
-// registering a change: View() runs against a throwaway *copy* of the real
-// Model (see app.go), so any SetFocused(false) it calls only ever mutates that
-// copy's `focused` field -- the persisted model's `focused` stays true --
-// which is why the guard reliably sees `true != false` and re-syncs every time.
+// SetFocused marks whether the sidebar pane has keyboard focus, re-rendering on change.
+// SetSize doesn't render, so unfocused-resize dimming relies on this re-sync; it fires
+// reliably because View() calls it on a throwaway copy, so the stored focus never flips.
 func (m *SidebarModel) SetFocused(focused bool) {
 	if m.focused == focused {
 		return
@@ -227,9 +214,7 @@ func (m *SidebarModel) SetFocused(focused bool) {
 }
 
 func (m *SidebarModel) rebuildGroups() {
-	// Use the tracked selection (set by user navigation) to restore the
-	// cursor after rebuilding. This is decoupled from the current cursor
-	// position so data refreshes never override the user's choice.
+	// Restore from the tracked selection, not the cursor index, so refreshes never move it.
 
 	groupMap := make(map[string][]*session.Session)
 	var closedSessions []*session.Session
@@ -289,10 +274,8 @@ func (m *SidebarModel) rebuildGroups() {
 		names = append(names, name)
 	}
 	if m.groupSortOrder == "activity" {
-		// One total order: most-recent activity first, name as a stable
-		// tiebreaker. groupRecentActivity scans the whole group rather than
-		// trusting Sessions[0], which is only the most-recent entry under the
-		// activity session-sort (name-sort would put a stale session first).
+		// Most-recent activity first, name as tiebreaker. Scan the whole group:
+		// Sessions[0] is only the newest under the activity session-sort.
 		recent := make(map[string]time.Time, len(groupMap))
 		for name, sessions := range groupMap {
 			recent[name] = groupRecentActivity(sessions)
@@ -399,9 +382,8 @@ func (m *SidebarModel) rebuildFlatItems() {
 	}
 }
 
-// restoreCursorByID moves the cursor to the session with the given ID after
-// a list rebuild. If the session is no longer in the flat list, falls back
-// to clampCursor so the index stays valid.
+// restoreCursor moves the cursor back to the tracked item after a list rebuild,
+// matching by pane, ID+target, ID, target, then group header.
 func (m *SidebarModel) restoreCursor(id, tmuxTarget, groupName string) {
 	// A live pane keeps its id while detection refines the session ID, so it
 	// outranks the ID: a new session can briefly borrow another session's ID.
@@ -459,17 +441,13 @@ func (m *SidebarModel) restoreCursor(id, tmuxTarget, groupName string) {
 			}
 		}
 	}
-	// Session not found after the list changed. Clamp the old index into range,
-	// then nudge onto the nearest surviving session row so the cursor doesn't
-	// strand on a group header or an unrelated item.
+	// Not found: clamp, then snap to a session row so the cursor doesn't strand on a header.
 	m.clampCursor()
 	m.snapToNearestSession()
 }
 
 // snapToNearestSession moves the cursor off a group header onto the closest
-// session row, searching outward from the current index (preferring the next
-// row, then the previous). If no session row exists at all (only headers, or an
-// empty list) the cursor is left where clampCursor put it.
+// session row, preferring the next row; with no session rows it stays put.
 func (m *SidebarModel) snapToNearestSession() {
 	n := len(m.flatItems)
 	if n == 0 {
@@ -512,10 +490,8 @@ func (m *SidebarModel) clampCursor() {
 	m.syncViewport()
 }
 
-// syncViewport renders all items into the viewport content and scrolls to
-// keep the cursor visible. Must be called after any change to flatItems,
-// cursor, or dimensions so the viewport has up-to-date content before
-// YOffset is adjusted.
+// syncViewport re-renders all items into the viewport and scrolls the cursor into
+// view. Call it after any change to flatItems or the cursor.
 func (m *SidebarModel) syncViewport() {
 	var lines []string
 	// Fresh slice: View() runs on a copy that shares this backing array.
@@ -679,9 +655,8 @@ func (m *SidebarModel) SelectByID(key string) bool {
 	return false
 }
 
-// SelectByTarget moves the cursor to the session with the given tmux target.
-// Returns true if the session was found. Used to focus a freshly created
-// placeholder session that has no session ID assigned yet.
+// SelectByTarget moves the cursor to the session with the given tmux target,
+// reporting whether it was found; used for placeholders that have no ID yet.
 func (m *SidebarModel) SelectByTarget(target string) bool {
 	if target == "" {
 		return false
@@ -697,10 +672,8 @@ func (m *SidebarModel) SelectByTarget(target string) bool {
 	return false
 }
 
-// ExpandGroup ensures the named group is expanded so its sessions are visible --
-// e.g. after creating a new session inside a collapsed group, whose child rows
-// would otherwise be hidden. Marks the group as user-toggled so a subsequent
-// auto-collapse pass leaves it open. No-op if the group is already expanded.
+// ExpandGroup expands the named group (e.g. to show a new session in it) and
+// marks it user-toggled so auto-collapse leaves it open.
 func (m *SidebarModel) ExpandGroup(name string) {
 	if name == "" || !m.collapsed[name] {
 		return
@@ -721,11 +694,8 @@ func (m *SidebarModel) ToggledGroups() map[string]bool {
 	return out
 }
 
-// SeedToggledGroups pre-loads persisted group state so restored groups are
-// treated exactly as if the user had toggled them: they render at the seeded
-// collapsed value and are exempt from auto-collapse. Must be called before the
-// first SetSessions so rebuildGroups honors the seeded state. Entries for groups
-// that no longer exist are harmless -- rebuildGroups only iterates live groups.
+// SeedToggledGroups loads persisted group state as if the user had toggled each
+// group, exempting them from auto-collapse. Call before the first SetSessions.
 func (m *SidebarModel) SeedToggledGroups(groups map[string]bool) {
 	for name, collapsed := range groups {
 		m.userToggled[name] = true
@@ -823,9 +793,8 @@ func (m SidebarModel) Update(msg tea.Msg) (SidebarModel, tea.Cmd) {
 	return m, nil
 }
 
-// scrollToCursor adjusts the viewport YOffset so the cursor item is visible.
-// Uses cursorLineStart/cursorLineCount computed by syncViewport() from actual
-// rendered output, avoiding assumptions about how many lines each item takes.
+// scrollToCursor adjusts the viewport YOffset so the cursor item is visible, using
+// the line span syncViewport measured since items vary in height.
 func (m *SidebarModel) scrollToCursor() {
 	linePos := m.cursorLineStart
 	cursorLines := m.cursorLineCount
@@ -894,9 +863,8 @@ func (m SidebarModel) View() string {
 // needsUser reports a session blocked on the user (approval or question).
 func needsUser(s *session.Session) bool { return s.Status == session.StatusWaiting }
 
-// groupRecentActivity returns the most recent LastActivity across a group's
-// sessions. The zero Time is returned for an empty group, which sorts last
-// under the activity order (After is false for the zero value).
+// groupRecentActivity returns the newest LastActivity in a group; an empty group
+// yields the zero Time, which sorts last.
 func groupRecentActivity(sessions []*session.Session) time.Time {
 	var newest time.Time
 	for _, s := range sessions {
@@ -907,9 +875,8 @@ func groupRecentActivity(sessions []*session.Session) time.Time {
 	return newest
 }
 
-// renderGroupHeader renders a group header row. count is the group's session
-// count and idx its position in m.groups -- both passed in from the flatItems
-// walk so this avoids an O(groups) rescan on every frame.
+// renderGroupHeader renders a group header row; count and idx come from the
+// flatItems walk to avoid rescanning m.groups every frame.
 func (m SidebarModel) renderGroupHeader(name string, count, idx int, isCursor bool) string {
 	arrow := "\u25bc" // down-pointing triangle (expanded)
 	if m.collapsed[name] {

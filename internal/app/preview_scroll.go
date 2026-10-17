@@ -30,8 +30,7 @@ func (m Model) paneScroller() paneScroller {
 }
 
 // selfScrollTarget is the previewed pane when it scrolls itself on wheel input
-// (Claude Code keeps its transcript out of tmux history), else "" to scroll the
-// preview's own viewport.
+// (Claude keeps its transcript out of tmux history), else "" for the viewport.
 func (m Model) selfScrollTarget() string {
 	sel := m.sidebar.SelectedSession()
 	if sel == nil || sel.Status == session.StatusClosed || sel.Subprocess || sel.TmuxTarget != m.wheelTarget {
@@ -81,9 +80,8 @@ func scrolledCmd(target string, send func() error) tea.Cmd {
 	}
 }
 
-// onPaneScrolled captures the preview right after a forwarded scroll rather
-// than on the next tick. One such capture runs at a time; scrolls landing
-// meanwhile queue a single follow-up.
+// onPaneScrolled captures the preview right after a forwarded scroll; one capture
+// runs at a time and scrolls landing meanwhile queue a single follow-up.
 func (m Model) onPaneScrolled(target string) (tea.Model, tea.Cmd) {
 	if sel := m.sidebar.SelectedSession(); sel == nil || sel.TmuxTarget != target {
 		return m, nil

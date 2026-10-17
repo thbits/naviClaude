@@ -123,7 +123,7 @@ The title bar shows live counts (`● 2 working · ◎ 1 needs you · ◉ 1 done
 | `?` | Help overlay |
 | `q` | Quit |
 
-All key bindings except navigation and passthrough exit keys are configurable.
+All key bindings except navigation and passthrough exit keys are configurable. A config error, or a key bound twice or to a reserved key, is reported in the status bar at startup.
 
 ### Mouse
 

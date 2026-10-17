@@ -28,9 +28,8 @@ const (
 // DisableEnv silences all playback when set (used by tests and CI).
 const DisableEnv = "NAVICLAUDE_DISABLE_SOUND"
 
-// Play plays custom (a file path, "" for the built-in sound, "none" for
-// silence) at volume 0-1 and blocks until playback ends. It is a no-op off
-// macOS, where afplay is unavailable.
+// Play plays custom (a path, "" for built-in, "none" for silence) at volume 0-1
+// until it ends; a no-op off macOS, where afplay is unavailable.
 func Play(s Sound, custom string, volume float64) error {
 	if os.Getenv(DisableEnv) != "" || runtime.GOOS != "darwin" || strings.EqualFold(custom, "none") {
 		return nil

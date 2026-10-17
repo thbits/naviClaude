@@ -34,9 +34,8 @@ func HookCommand(exe string) string {
 	return "'" + strings.ReplaceAll(exe, "'", `'\''`) + "' hook " + hookMarker
 }
 
-// InstallHooks registers (or re-points) naviClaude's hooks in the settings
-// file, replacing any earlier naviClaude entries and keeping everything else
-// byte-for-byte, key order included. The previous file is backed up.
+// InstallHooks registers (or re-points) naviClaude's hooks, keeping every other
+// setting and its key order. The previous file is backed up.
 func InstallHooks(path, exe string) error {
 	return editHooks(path, func(event string, groups []json.RawMessage) ([]json.RawMessage, error) {
 		for _, h := range hookEvents {
@@ -99,7 +98,7 @@ func InstalledHooks(path string) (events []string, command string, err error) {
 }
 
 // editHooks strips naviClaude's groups from every event, lets add append new
-// ones, and writes the file back through any symlink.
+// ones, and writes the file back through any symlink, only if a group changed.
 func editHooks(path string, add func(event string, groups []json.RawMessage) ([]json.RawMessage, error)) error {
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
@@ -117,6 +116,7 @@ func editHooks(path string, add func(event string, groups []json.RawMessage) ([]
 			return fmt.Errorf("%s: hooks: %w", path, err)
 		}
 	}
+	changed := false
 	events := append([]string{}, hooks.keys...)
 	for _, h := range hookEvents {
 		if _, ok := hooks.get(h.Event); !ok {
@@ -141,6 +141,7 @@ func editHooks(path string, add func(event string, groups []json.RawMessage) ([]
 		if err != nil {
 			return err
 		}
+		changed = changed || len(kept) != len(groups) || len(out) != len(kept)
 		switch {
 		case len(out) == 0 && !existed:
 		case len(out) == 0 && len(groups) > 0 && len(kept) == 0:
@@ -153,6 +154,9 @@ func editHooks(path string, add func(event string, groups []json.RawMessage) ([]
 			}
 			hooks.set(event, json.RawMessage("["+string(bytes.Join(parts, []byte(",")))+"]"))
 		}
+	}
+	if !changed {
+		return nil
 	}
 	hooksRaw, err := hooks.marshal()
 	if err != nil {

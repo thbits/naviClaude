@@ -17,9 +17,7 @@ import (
 type HistoryScanner struct {
 	claudeDir string // defaults to ~/.claude
 
-	// cacheMu guards cachedIndex/cachedIndexAge. LoadHistoryIndex is invoked
-	// from several overlapping refresh Cmds, so the check-or-build-and-store
-	// sequence must be serialized to avoid a data race on these fields.
+	// cacheMu serializes LoadHistoryIndex, which overlapping refresh Cmds call.
 	cacheMu        sync.Mutex
 	cachedIndex    map[string]string // cached history index (sessionID -> display)
 	cachedIndexAge time.Time         // when the cache was populated
@@ -46,15 +44,10 @@ type HistoryEntry struct {
 	Timestamp int64  `json:"timestamp"`
 }
 
-// LoadHistoryIndex reads all lines from history.jsonl and returns a map from
-// sessionId to display text. Results are cached for 5 seconds to avoid
-// re-parsing on every call within the same refresh cycle. If the file does
-// not exist, an empty map is returned without error.
+// LoadHistoryIndex maps sessionId to its first history.jsonl prompt, cached 5s so
+// a refresh cycle parses it once; a missing file yields an empty map.
 func (s *HistoryScanner) LoadHistoryIndex() (map[string]string, error) {
-	// Serialize the entire check-or-build-and-store sequence: this method runs
-	// concurrently from several refresh Cmds. The returned map, once published
-	// into s.cachedIndex, is never mutated by this scanner, so callers may read
-	// it without holding the lock.
+	// A published map is never mutated, so callers may read it unlocked.
 	s.cacheMu.Lock()
 	defer s.cacheMu.Unlock()
 
@@ -103,10 +96,8 @@ func (s *HistoryScanner) LoadHistoryIndex() (map[string]string, error) {
 	return index, nil
 }
 
-// ScanClosed returns all closed sessions whose .jsonl file was modified within
-// the last closedHours hours, cross-referenced against the provided set of
-// active session IDs. Pass closedHours <= 0 to return all sessions (no time
-// filter).
+// ScanClosed returns sessions not in activeIDs whose transcript changed in the
+// last closedHours hours (no time filter when <= 0).
 func (s *HistoryScanner) ScanClosed(closedHours float64, activeIDs map[string]bool) ([]*session.Session, error) {
 	return s.scan(closedHours, activeIDs)
 }
@@ -116,19 +107,8 @@ func (s *HistoryScanner) ScanAll(activeIDs map[string]bool) ([]*session.Session,
 	return s.scan(0, activeIDs)
 }
 
-// ScanClosedAndAll globs and parses every session .jsonl file ONCE and returns
-// two views derived from that single pass:
-//
-//   - closed: sessions whose file was modified within the last closedHours
-//     hours (pass closedHours <= 0 for no time filter, matching ScanClosed).
-//   - all:    every parsed session regardless of modification time (matching
-//     ScanAll).
-//
-// closed is a subset of all and shares the same *Session pointers. This avoids
-// the previous double Glob + double per-file parse incurred by calling
-// ScanClosed and ScanAll separately. Filtering semantics are identical to the
-// existing ScanClosed/ScanAll methods (active sessions excluded, summaries
-// attached from history.jsonl).
+// ScanClosedAndAll returns ScanClosed and ScanAll from one glob-and-parse pass;
+// closed is a subset of all sharing the same *Session pointers.
 func (s *HistoryScanner) ScanClosedAndAll(closedHours float64, activeIDs map[string]bool) (closed []*session.Session, all []*session.Session, err error) {
 	summaries, lerr := s.LoadHistoryIndex()
 	if lerr != nil {
@@ -171,9 +151,7 @@ func (s *HistoryScanner) ScanClosedAndAll(closedHours float64, activeIDs map[str
 
 		all = append(all, sess)
 
-		// Derive the closed subset in memory using the mtime filter. A zero
-		// cutoff (closedHours <= 0) means no time filter, so every session
-		// qualifies.
+		// A zero cutoff (closedHours <= 0) means no time filter.
 		if cutoff.IsZero() || !info.ModTime().Before(cutoff) {
 			closed = append(closed, sess)
 		}
@@ -252,16 +230,12 @@ type rawMessage struct {
 	Role  string `json:"role"`
 }
 
-// maxTranscriptLineBytes is the largest single .jsonl line the transcript
-// scanners will buffer. One record can be large when a user pastes a big file or
-// a base64-encoded image, so keep this generous AND identical across every
-// transcript reader -- if the readers disagree on the limit, one path can parse
-// a session that another silently drops.
+// maxTranscriptLineBytes is generous because pasted files and images make big
+// records; readers sharing it agree on which sessions parse.
 const maxTranscriptLineBytes = 4 * 1024 * 1024
 
-// parseSessionFile reads a .jsonl session file and constructs a Session from
-// its records. Returns nil without error if the file is empty or yields no
-// usable records.
+// parseSessionFile builds a closed Session from a transcript; nil, nil when it
+// yields no usable records.
 func parseSessionFile(filePath string) (*session.Session, error) {
 	f, err := os.Open(filePath)
 	if err != nil {
@@ -349,11 +323,8 @@ func parseSessionFile(filePath string) (*session.Session, error) {
 	if err := scanner.Err(); err != nil && err != bufio.ErrTooLong {
 		return nil, err
 	}
-	// bufio.ErrTooLong (a single record larger than maxTranscriptLineBytes, e.g.
-	// a huge paste) is deliberately NOT fatal: scanning stops at that line, but
-	// any metadata gathered from earlier records (cwd, model, timestamps) is
-	// still valid, so the session is kept rather than vanishing from the picker.
-	// It only drops below if no cwd was seen before the oversized line.
+	// ErrTooLong is not fatal: metadata from earlier lines still holds, so the
+	// session stays in the picker if a cwd was seen before the huge record.
 
 	// A file that produced no usable records, no session ID, or no CWD
 	// (e.g. empty or metadata-only .jsonl) is skipped.
@@ -361,9 +332,7 @@ func parseSessionFile(filePath string) (*session.Session, error) {
 		return nil, nil
 	}
 
-	// The latest ai-title record is the session's current title; surface it so a
-	// closed session keeps the title Claude gave it instead of falling back to the
-	// Slug/ProjectName placeholder in the sidebar.
+	// A closed session keeps Claude's title instead of the Slug/ProjectName placeholder.
 	if aiTitle != "" {
 		sess.DisplayName = aiTitle
 	}

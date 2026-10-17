@@ -369,9 +369,8 @@ func userContent(raw json.RawMessage) (text string, results []string) {
 	return sb.String(), results
 }
 
-// asyncLaunch reports whether a tool result says an agent was started in the
-// background, and the task id of a backgrounded shell command; both results
-// arrive immediately, long before the work finishes.
+// asyncLaunch reports whether a tool result launched a background agent, and a
+// backgrounded shell's task id; both results arrive long before the work ends.
 func asyncLaunch(raw json.RawMessage) (agent bool, shellTask string) {
 	if len(raw) == 0 || raw[0] != '{' {
 		return false, ""

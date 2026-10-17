@@ -13,7 +13,7 @@ const (
 	optAttnSU    = "@naviclaude_attn_su"   // pane: native statusUpdatedAt the attention was raised for
 	optToken     = "@naviclaude_token"     // pane: id of the watcher that owns the attention
 	optBusy      = "@naviclaude_busy"      // pane: id of the watcher tracking a running turn
-	optMarker    = "@naviclaude_marker"    // window: marker currently prefixed to the name
+	optMarker    = "@naviclaude_marker"    // window: marker currently appended to the name
 	optOrigName  = "@naviclaude_orig_name" // window: name before marking
 	optOrigAuto  = "@naviclaude_orig_auto" // window: local automatic-rename before marking ("" = inherited)
 	optLastRing  = "@naviclaude_last_ring" // server: unix ms of the last sound, for the cooldown

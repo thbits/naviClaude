@@ -139,11 +139,8 @@ func (m *SearchModel) runSearch() {
 		return
 	}
 
-	// Scoring strategy:
-	//   3000  -- fuzzy match on project name (typo-tolerant, highest priority)
-	//   2000  -- case-insensitive substring match on summary (reliable content search)
-	//    500  -- case-insensitive substring match on CWD / git branch / tmux session
-	//   fuzzy score (< 500) -- fuzzy fallback on full concatenated fields
+	// Each session keeps its best score: name fuzzy (3000+) > summary substring (2000)
+	// > CWD/branch/tmux substring (500) > fuzzy over all fields (<500).
 	type scored struct {
 		session *session.Session
 		score   int
@@ -198,10 +195,8 @@ func (m *SearchModel) runSearch() {
 	for idx, score := range bestScore {
 		results = append(results, scored{session: m.sessions[idx], score: score})
 	}
-	// Use a stable sort with a deterministic tiebreaker. The scores are
-	// collected by ranging over a Go map (random iteration order), so without
-	// a tiebreaker, equal-scored results would shuffle between renders. Break
-	// ties on session ID, then DisplayName, for a stable, repeatable order.
+	// Results come from map iteration (random order), so break ties on ID then
+	// DisplayName or equal scores would shuffle between renders.
 	sort.SliceStable(results, func(i, j int) bool {
 		a, b := results[i], results[j]
 		if a.score != b.score {

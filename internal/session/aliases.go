@@ -14,10 +14,7 @@ type AliasStore struct {
 	mu      sync.RWMutex
 	aliases map[string]string
 
-	// loadErr records the most recent error encountered while unmarshaling the
-	// on-disk file. It is retained (rather than silently discarded) so callers
-	// can distinguish a corrupt file from an empty one via LoadErr. A nil value
-	// means the last load succeeded or the file did not exist.
+	// loadErr keeps the last unmarshal error so LoadErr can tell corrupt from empty.
 	loadErr error
 }
 
@@ -64,10 +61,7 @@ func (s *AliasStore) Set(sessionID, name string) error {
 	return s.save()
 }
 
-// LoadErr returns the error (if any) from the most recent attempt to unmarshal
-// the on-disk aliases file. It is nil when the last load succeeded or the file
-// did not exist. Lets callers detect a corrupt file rather than treating it as
-// an empty alias set.
+// LoadErr returns the last unmarshal error; nil when the file loaded or was missing.
 func (s *AliasStore) LoadErr() error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -90,10 +84,8 @@ func (s *AliasStore) load() {
 	s.loadErr = nil
 }
 
-// save writes the aliases atomically: it serializes to a temp file in the same
-// directory as the target, then os.Rename over the target. The rename is atomic
-// on the same filesystem, so a reader never observes a partially written file
-// and a crash mid-write cannot corrupt the existing aliases. Callers hold s.mu.
+// save writes via a temp file and rename so neither readers nor a crash see a
+// partial file. Callers hold s.mu.
 func (s *AliasStore) save() error {
 	if s.path == "" {
 		return nil

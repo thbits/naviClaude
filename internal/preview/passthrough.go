@@ -5,9 +5,8 @@ import (
 	"github.com/thbits/naviClaude/internal/tmux"
 )
 
-// Passthrough forwards Bubble Tea key events to a tmux pane via send-keys.
-// The intercepted keys Shift+Tab, Ctrl+], and Ctrl+f are NOT forwarded; callers are
-// responsible for handling those before calling SendKey.
+// Passthrough forwards Bubble Tea keys to a tmux pane via send-keys; callers
+// handle the intercepted keys (Shift+Tab, Ctrl+], Ctrl+f) first.
 type Passthrough struct {
 	tmuxClient *tmux.Client
 }
@@ -17,8 +16,7 @@ func NewPassthrough(client *tmux.Client) *Passthrough {
 	return &Passthrough{tmuxClient: client}
 }
 
-// SendKey translates a Bubble Tea KeyMsg and forwards it to the target pane.
-// Returns an error if the underlying tmux send-keys command fails.
+// SendKey forwards msg to the target pane.
 func (p *Passthrough) SendKey(target string, msg tea.KeyMsg) error {
 	keys := translateKey(msg)
 	if keys == "" {
@@ -27,16 +25,8 @@ func (p *Passthrough) SendKey(target string, msg tea.KeyMsg) error {
 	return p.tmuxClient.SendKeys(target, keys)
 }
 
-// translateKey converts a Bubble Tea KeyMsg into a tmux send-keys argument.
-// Printable rune sequences are sent as literal strings. Special keys are
-// translated to tmux named key strings.
-//
-// The Alt modifier is, at the byte level, an ESC prefix in front of the key
-// (Meta). tmux reproduces this with its "M-" key prefix: e.g. "M-Enter" emits
-// ESC CR, exactly what the terminal sends for Alt+Enter pressed directly. So an
-// Alt-modified key is forwarded with the "M-" prefix; without it, Alt+Enter
-// would arrive as a bare Enter and submit the Claude prompt instead of
-// inserting a newline.
+// translateKey maps a KeyMsg to a send-keys argument. Alt becomes tmux's "M-" (an
+// ESC prefix), so Alt+Enter inserts a newline instead of submitting the prompt.
 func translateKey(msg tea.KeyMsg) string {
 	base := baseKey(msg)
 	if base == "" {

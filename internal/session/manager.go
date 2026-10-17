@@ -11,9 +11,8 @@ import (
 	"github.com/thbits/naviClaude/internal/tmux"
 )
 
-// Manager performs tmux lifecycle operations on agent sessions: creating new
-// ones, resuming closed ones, and killing running ones. Harnesses supply the
-// shell commands.
+// Manager creates, resumes and kills agent sessions in tmux; harnesses supply
+// the shell commands.
 type Manager struct {
 	tmuxClient *tmux.Client
 	windowName string // window-name template; {project} and {harness} expand
@@ -41,15 +40,8 @@ func (m *Manager) nameWindow(project, harness string) string {
 	return name
 }
 
-// shellSingleQuote returns s wrapped so it is safe to embed in a POSIX shell
-// command as a single literal argument. Go's %q double-quotes, which still lets
-// the shell expand $, backticks, and backslash escapes inside the result -- a
-// directory path containing those would be misinterpreted (or used for command
-// injection). Single quotes suppress all shell expansion; the only character
-// that cannot appear inside single quotes is the single quote itself, which is
-// emitted as the standard close-escape-reopen sequence '\” (close quote,
-// backslash-escaped quote, reopen quote). Use this for filesystem paths only;
-// the user-configured start command is intentionally left shell-evaluated.
+// shellSingleQuote quotes s as one literal shell word, where %q would still expand
+// $ and backticks. Paths only: the user's start command is meant to be evaluated.
 func shellSingleQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
@@ -76,14 +68,8 @@ func resumeShellCommand(cwd, command string) string {
 	return fmt.Sprintf("cd %s && %s", shellSingleQuote(cwd), command)
 }
 
-// ResumeInSession resumes the closed session in the tmux session named
-// targetName, creating that session if it does not yet exist, and returns the
-// tmux target of the resumed pane (e.g. "work:3.0") so the caller can focus it.
-// When targetName already exists the resumed agent opens in a new window
-// within it; otherwise a new detached tmux session named targetName is created
-// rooted at the session's working directory, sized to the current client, and
-// the resume command is sent to its pane via send-keys (so the user's shell
-// config -- aliases, PATH -- is respected, matching CreateNewTmuxSession).
+// ResumeInSession resumes sess in tmux session targetName, creating it if missing,
+// and returns the pane target; a new session gets the command via send-keys.
 func (m *Manager) ResumeInSession(sess *Session, targetName, command string) (string, error) {
 	if sess.ID == "" {
 		return "", fmt.Errorf("resume: session has no ID")
@@ -135,9 +121,8 @@ func (m *Manager) ResumeInSession(sess *Session, targetName, command string) (st
 // before force-closing the pane.
 const quitTimeout = 15 * time.Second
 
-// Kill quits an active session's agent with SIGTERM so its SessionEnd hooks
-// run, waits for it to exit, then closes its tmux pane. A pane owned by a
-// parent app (e.g. nvim) is left open.
+// Kill SIGTERMs the agent so its SessionEnd hooks run, waits for it to exit, then
+// closes its pane unless a parent app (e.g. nvim) owns it.
 func (m *Manager) Kill(sess *Session) error {
 	pane := sess.TmuxPaneID
 	if pane == "" {
@@ -174,11 +159,8 @@ func waitForExit(pid int, timeout time.Duration) bool {
 	}
 }
 
-// CreateNewTmuxSession creates a brand new tmux session (detached), sends
-// command to start the agent, and returns the pane target. The command is
-// sent via send-keys so that shell aliases and PATH are respected.
-// If sessionName is empty, the directory basename is used as the tmux session
-// name; fallbackName is used when the basename is unusable.
+// CreateNewTmuxSession starts the agent in a detached tmux session named
+// sessionName (else cwd's basename, else fallbackName) and returns the pane target.
 func (m *Manager) CreateNewTmuxSession(cwd, command, sessionName, fallbackName string) (tmuxSession, target string, err error) {
 	if cwd == "" {
 		cwd = "."
@@ -191,10 +173,7 @@ func (m *Manager) CreateNewTmuxSession(cwd, command, sessionName, fallbackName s
 		sessionName = base
 	}
 
-	// If a tmux session with this name already exists, open the agent in a new
-	// window within it instead of failing with tmux's "duplicate session"
-	// error. This makes "N" reuse an existing session by name rather than only
-	// ever creating a brand new one.
+	// Reuse an existing session by name rather than failing as a duplicate.
 	if m.tmuxClient.HasSession(sessionName) {
 		target, err = m.CreateNewWithTarget(cwd, sessionName, command, fallbackName)
 		if err != nil {
@@ -234,15 +213,8 @@ func (m *Manager) CreateNewTmuxSession(cwd, command, sessionName, fallbackName s
 	return tmuxSession, target, nil
 }
 
-// CreateNewWithTarget opens a new tmux window in targetTmuxSession, changes to
-// cwd, runs command, and returns the new pane's tmux target (e.g. "session:3.0").
-// fallbackName names the window when cwd has no usable basename.
-//
-// The command is typed into the pane's shell via send-keys rather than passed to
-// new-window, so the user's shell config (aliases, functions, PATH) applies, and
-// the agent runs as a child of the shell. A window command would instead exec
-// the agent as the pane's own process, which some CLIs retitle (e.g. Claude
-// reports its version string as pane_current_command).
+// CreateNewWithTarget types command into a new window's shell so aliases and PATH
+// apply, and Claude can't replace pane_current_command with its version string.
 func (m *Manager) CreateNewWithTarget(cwd, targetTmuxSession, command, fallbackName string) (string, error) {
 	if cwd == "" {
 		cwd = "."

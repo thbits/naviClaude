@@ -6,15 +6,8 @@ import (
 	"strings"
 )
 
-// paneFieldSep separates the fields in the list-panes -F format string. It is
-// the ASCII Unit Separator (0x1f), which -- unlike a space -- cannot appear in a
-// tmux session name, a process command, or a filesystem path. Using it lets
-// panes whose session name OR working directory contains spaces parse correctly;
-// a space delimiter silently dropped them, because the first space in the name
-// shifted every subsequent field and the target failed to parse.
-//
-// This MUST stay byte-for-byte in sync with the -F format string built in
-// Client.ListPanes.
+// paneFieldSep is the ASCII Unit Separator, which unlike a space can't occur in
+// session names or paths; it must match the -F format in Client.ListPanes.
 const paneFieldSep = "\x1f"
 
 // PaneInfo holds the data parsed from a single tmux list-panes output line.
@@ -30,13 +23,8 @@ type PaneInfo struct {
 	Attention      string // @naviclaude_attn pane option set by the Claude hooks
 }
 
-// ParsePanes parses the raw output of:
-//
-//	tmux list-panes -a -F '#{session_name}:#{window_index}.#{pane_index}<US>#{pane_current_command}<US>#{pane_pid}<US>#{pane_current_path}'
-//
-// where <US> is the ASCII Unit Separator (paneFieldSep). Each non-empty line is
-// parsed into a PaneInfo.  Malformed lines are skipped with no error so that a
-// single bad line does not abort the full listing.
+// ParsePanes parses Client.ListPanes output, skipping malformed lines so one bad
+// line doesn't abort the listing.
 func ParsePanes(raw string) ([]PaneInfo, error) {
 	lines := strings.Split(raw, "\n")
 	panes := make([]PaneInfo, 0, len(lines))
@@ -56,16 +44,10 @@ func ParsePanes(raw string) ([]PaneInfo, error) {
 	return panes, nil
 }
 
-// parsePaneLine parses a single line produced by the list-panes format string.
-// Expected format: "session:window.pane<US>command<US>pid<US>/current/path"
-// Fields are separated by paneFieldSep (0x1f); the target (session:window.pane)
-// and the path may both contain spaces.
+// parsePaneLine parses one list-panes line: target, command, pid, pane_id, attn and
+// path joined by paneFieldSep, or the legacy four fields without pane_id and attn.
 func parsePaneLine(line string) (PaneInfo, error) {
-	// The format is:
-	//   <session>:<window>.<pane><US><command><US><pid><US><path>
-	// There are exactly 4 separator-delimited tokens. We split into at most 4
-	// fields so any stray separator in the path is preserved rather than
-	// truncating the line.
+	// Capping the split keeps a stray separator inside the path.
 	fields := strings.SplitN(line, paneFieldSep, 6)
 	if len(fields) < 4 {
 		return PaneInfo{}, fmt.Errorf("too few fields: %q", line)
@@ -115,12 +97,8 @@ type CursorInfo struct {
 	Visible    bool // cursor_flag: whether the cursor is currently shown
 }
 
-// parseCursorInfo parses the raw output of:
-//
-//	tmux display-message -p '#{cursor_x} #{cursor_y} #{pane_height} #{cursor_flag}'
-//
-// The four fields are space-separated integers; cursor_flag is 1 when the
-// cursor is visible.
+// parseCursorInfo parses CursorPosition's space-separated cursor_x, cursor_y,
+// pane_height and cursor_flag (1 when visible).
 func parseCursorInfo(raw string) (CursorInfo, error) {
 	fields := strings.Fields(strings.TrimSpace(raw))
 	if len(fields) < 4 {

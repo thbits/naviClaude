@@ -139,7 +139,8 @@ func TestPaneScrolledCoalescesCaptures(t *testing.T) {
 	if update(scrolled) == nil || !m.scrollCaptureInFlight {
 		t.Fatal("first scroll should start a capture")
 	}
-	if update(scrolled) != nil || update(scrolled) != nil || !m.scrollCaptureDirty {
+	second, third := update(scrolled), update(scrolled)
+	if second != nil || third != nil || !m.scrollCaptureDirty {
 		t.Fatal("scrolls during a capture should only mark it dirty")
 	}
 	if update(captured) == nil || !m.scrollCaptureInFlight || m.scrollCaptureDirty {

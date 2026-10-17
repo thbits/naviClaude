@@ -38,13 +38,9 @@ func loadChangedFilesCmd(h harness.Harness, sess *session.Session) tea.Cmd {
 	}
 }
 
-// applyGitCounts overlays live git diff counts onto the transcript-derived file
-// list. When a file has a pending git diff its exact net counts replace the
-// transcript churn and it is marked non-estimated; when it does not (the work
-// was committed/merged, or there is no repo -- stats is nil) the transcript
-// counts remain as a durable estimate, so the changes stay visible after a
-// commit. Matching uses the canonicalized path so symlinked roots (e.g. /var vs
-// /private/var on macOS) still line up with git's output.
+// applyGitCounts overlays live git diff counts onto the transcript-derived list;
+// files with no pending diff (committed, or no repo) keep the transcript estimate.
+// Paths are canonicalized so symlinked roots like /var vs /private/var match git.
 func applyGitCounts(files []session.ChangedFile, stats map[string]session.DiffStat) {
 	if stats == nil {
 		return // no repo: keep transcript estimates as-is
@@ -63,11 +59,8 @@ func applyGitCounts(files []session.ChangedFile, stats map[string]session.DiffSt
 	}
 }
 
-// openInEditorCmd opens path in the user's $EDITOR. It uses tea.ExecProcess,
-// which suspends the TUI and hands the real terminal to the editor, then
-// restores the TUI on exit -- the reliable way to run a full-screen editor like
-// nvim (a tmux popup does not always get a usable pty). The editor runs in the
-// file's own directory so relative navigation inside it behaves as expected.
+// openInEditorCmd opens path in $EDITOR from the file's directory; tea.ExecProcess
+// hands it the real terminal, which a tmux popup can't reliably provide.
 func (m Model) openInEditorCmd(path string) tea.Cmd {
 	if path == "" {
 		return nil
@@ -76,11 +69,8 @@ func (m Model) openInEditorCmd(path string) tea.Cmd {
 	cmd := exec.Command(fields[0], append(fields[1:], path)...)
 
 	if isGUIEditor(fields[0]) {
-		// A GUI editor has its own window and does not need the terminal.
-		// Launch it in the background so the TUI keeps rendering -- using
-		// tea.ExecProcess here would hand the terminal over and blank naviClaude
-		// until the editor closed. The default nil stdio connects the child to
-		// the null device, so it cannot garble the TUI, and cmd.Run reaps it.
+		// A GUI editor has its own window, so run it in the background to keep the
+		// TUI rendering; nil stdio keeps it from garbling the screen.
 		return func() tea.Msg {
 			return editorDoneMsg{err: cmd.Run()}
 		}
@@ -93,11 +83,8 @@ func (m Model) openInEditorCmd(path string) tea.Cmd {
 	})
 }
 
-// resolveEditorFields resolves the editor command and splits it into command +
-// flags (no file path). Resolution order: the configured value (config
-// `editor`), then $EDITOR, then vi. The value may include flags (e.g.
-// "code -w", "nvim -p"); the path is later appended as a separate argument
-// rather than passed through a shell, so no shell quoting or injection applies.
+// resolveEditorFields splits config `editor`, else $EDITOR, else vi into command
+// and flags; the path is appended as its own argument, so no shell is involved.
 func resolveEditorFields(configured string) []string {
 	editor := strings.TrimSpace(configured)
 	if editor == "" {

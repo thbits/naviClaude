@@ -7,15 +7,8 @@ import (
 	"time"
 )
 
-// lastMessageTime returns the timestamp of the most recent record in a
-// session's .jsonl transcript: the MAXIMUM parseable timestamp across all
-// records. It scans the whole file because record order is not guaranteed to
-// be chronological, and the physically-last line is often an untimestamped
-// meta record (custom-title, mode, file-history-snapshot). Returns the zero
-// time when the file is missing, empty, or has no timestamped records.
-//
-// This is the "last activity" the UI wants -- unlike the file's mtime, which
-// `claude --resume` bumps to now even when the last real message is hours old.
+// lastMessageTime returns a transcript's max record timestamp, scanning it all as
+// order isn't chronological; unlike mtime, `claude --resume` doesn't bump it.
 func lastMessageTime(path string) time.Time {
 	if path == "" {
 		return time.Time{}

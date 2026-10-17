@@ -10,12 +10,8 @@ import (
 	"github.com/thbits/naviClaude/internal/styles"
 )
 
-// SessionPickerModel is an overlay that chooses where a closed session is
-// resumed. It lists the live tmux sessions (recency-ordered, supplied by the
-// caller) and fuzzy-filters them as the user types. When the typed text does
-// not exactly match an existing session, a synthetic "create new" row is
-// offered so the user can spin up a fresh tmux session by name. Selecting a row
-// yields its name and whether it is the create-new row.
+// SessionPickerModel is an overlay choosing which tmux session a closed session
+// resumes in, offering a "create new" row when the query names no existing one.
 type SessionPickerModel struct {
 	input    textinput.Model
 	sessions []string // all candidate session names, recency-ordered
@@ -101,10 +97,8 @@ type sessionRow struct {
 	loose bool // true for a fuzzy fallback match shown below the create-new row
 }
 
-// rows returns the displayed rows. With no query, every session is listed. With
-// a query, substring matches come first (the create-new row trailing them);
-// when nothing matches as a substring, the create-new row floats to the top and
-// loose fuzzy matches are listed below it as a fallback.
+// rows returns the displayed rows: substring matches then the create-new row, or,
+// with no substring match, the create-new row above loose fuzzy matches.
 func (m SessionPickerModel) rows() []sessionRow {
 	query := strings.TrimSpace(m.input.Value())
 	if query == "" {
@@ -162,9 +156,8 @@ func (m SessionPickerModel) Selected() (string, bool) {
 	return r.name, r.isNew
 }
 
-// runFilter re-applies the filter for the current query. The cursor resets to
-// the top row so a quick Enter after typing selects the most sensible default
-// (the best match, or the create-new row when nothing matches).
+// runFilter re-applies the filter and resets the cursor to the top so a quick
+// Enter picks the best match (or create-new).
 func (m *SessionPickerModel) runFilter() {
 	m.filtered = filterSessions(m.input.Value(), m.sessions)
 	m.cursor = 0
@@ -189,12 +182,8 @@ func (m SessionPickerModel) Update(msg tea.Msg) (SessionPickerModel, tea.Cmd) {
 // Pure logic (unit-tested directly)
 // ---------------------------------------------------------------------------
 
-// filterSessions filters session names to those containing query as a
-// case-insensitive substring, preserving the caller's recency order. An empty
-// (whitespace) query returns the names unchanged. Substring matching is
-// deliberately stricter than subsequence fuzzy matching: it only surfaces
-// names that actually contain what was typed, so loosely-related names don't
-// crowd out the create-new option.
+// filterSessions keeps names containing query (case-insensitive), in order. It is
+// stricter than fuzzy matching so loosely related names don't crowd out create-new.
 func filterSessions(query string, sessions []string) []string {
 	q := strings.ToLower(strings.TrimSpace(query))
 	if q == "" {
@@ -215,10 +204,8 @@ type stringSource []string
 func (n stringSource) String(i int) string { return n[i] }
 func (n stringSource) Len() int            { return len(n) }
 
-// looseMatches returns subsequence ("fuzzy") matches for query, ranked by the
-// matcher's score. It is the hybrid fallback shown only when no name contains
-// the query as a substring, so abbreviations (e.g. "nvc" -> "naviclaude") stay
-// reachable without polluting normal substring results.
+// looseMatches returns ranked fuzzy matches, the fallback when nothing matches as
+// a substring, so abbreviations like "nvc" -> "naviclaude" stay reachable.
 func looseMatches(query string, sessions []string) []string {
 	matches := fuzzy.FindFrom(query, stringSource(sessions))
 	out := make([]string, len(matches))
@@ -247,9 +234,8 @@ func newSessionName(query string, sessions []string) string {
 // Rendering
 // ---------------------------------------------------------------------------
 
-// sessionPickerChromeRows is the number of popup rows consumed by non-candidate
-// chrome: border top+bottom (2) + padding top+bottom (2) + title (1) + input
-// (1) + two separators (2) + footer (1) = 9 rows.
+// sessionPickerChromeRows is the popup rows taken by non-candidate chrome: border (2),
+// padding (2), title, input, two separators (2), footer.
 const sessionPickerChromeRows = 9
 
 func (m SessionPickerModel) visibleRows() int {

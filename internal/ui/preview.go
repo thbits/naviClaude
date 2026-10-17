@@ -45,10 +45,8 @@ func NewPreview(width, height int) PreviewModel {
 	}
 }
 
-// SetContent updates the terminal capture displayed in the viewport.
-// Lines wider than the viewport are truncated using ANSI-aware truncation.
-// For live sessions, the viewport auto-scrolls to the bottom to follow output.
-// The scroll position is only preserved when the user has manually scrolled up.
+// SetContent updates the terminal capture shown in the viewport, following the
+// bottom unless the user has scrolled up.
 func (m *PreviewModel) SetContent(content string) {
 	m.content = content
 	m.viewport.SetContent(m.truncateToWidth(content))
@@ -59,11 +57,8 @@ func (m *PreviewModel) SetContent(content string) {
 	}
 }
 
-// truncateToWidth applies the per-line ANSI-aware width truncation used before
-// any content is handed to the viewport (a safety net for stale scrollback;
-// the tmux pane is resized to match so apps normally re-render at the correct
-// width via SIGWINCH). Shared by SetContent and SetSize so a resize doesn't
-// leave stale long lines overflowing the narrower viewport.
+// truncateToWidth cuts each line to the viewport width, a safety net for stale
+// scrollback that predates the pane's SIGWINCH re-render at the new width.
 func (m *PreviewModel) truncateToWidth(content string) string {
 	if m.viewport.Width <= 0 {
 		return content
@@ -134,10 +129,8 @@ func (m *PreviewModel) ScrollDown(n int) {
 	}
 }
 
-// atBottom reports whether the viewport is scrolled to the last line of the
-// content. The total line count is strings.Count("\n")+1 (a string with k
-// newlines has k+1 lines); using the raw count undercounts by one and resumes
-// auto-follow a line early.
+// atBottom reports whether the viewport shows the last line; k newlines mean k+1
+// lines, so the raw count would resume auto-follow a line early.
 func (m *PreviewModel) atBottom() bool {
 	totalLines := strings.Count(m.content, "\n") + 1
 	return m.viewport.YOffset+m.viewport.Height >= totalLines
@@ -248,11 +241,8 @@ func (m PreviewModel) renderHeader() string {
 
 	const sepStr = " • "
 
-	// The header must render on exactly one line (+ its bottom border = 2 rows):
-	// the viewport height is sized as paneHeight-2 assuming a single-line header,
-	// so a wrapped header would steal a row. Both header styles carry
-	// PaddingLeft(1)+PaddingRight(1), so the text area is maxWidth-2; budget the
-	// gap against that and truncate as a hard guard so overflow is cut, not wrapped.
+	// The viewport is sized for a one-line header, so a wrapped header would steal a
+	// row; budget against the styles' 2-column padding and truncate as a hard guard.
 	const headerPadding = 2
 	contentWidth := maxWidth - headerPadding
 	if contentWidth < 1 {
@@ -263,10 +253,8 @@ func (m PreviewModel) renderHeader() string {
 	var headerStyle lipgloss.Style
 
 	if m.passthrough {
-		// --- Focused: two-tone band = blue identity chip + muted metrics band. ---
-		// Every band segment (and its separators/fill) carries the muted
-		// background so the fill tiles continuously with no ANSI-reset gaps,
-		// mirroring the sidebar's selected-row rendering.
+		// --- Focused: blue identity chip + muted metrics band. ---
+		// Every band segment carries the muted bg so the fill has no ANSI-reset gaps.
 		bg := styles.ColorBgHover
 
 		// Identity chip: blue reverse-video, with the branch folded in.
@@ -312,11 +300,8 @@ func (m PreviewModel) renderHeader() string {
 			bandRight = append(bandRight, valStyle.Render(v))
 		}
 
-		// Connect the muted band to the blue identity chip with a separator dot
-		// so it reads "... branch • ACTIVE" instead of the name butting straight
-		// against the status. The chip supplies one trailing space; the seam adds
-		// an extra leading space + the dot so the identity chip isn't cramped
-		// against the status label on the muted background.
+		// Seam dot so it reads "... branch • ACTIVE" rather than the chip butting
+		// straight against the status label.
 		seam := lipgloss.NewStyle().Foreground(styles.ColorGray).Background(bg).Render(" • ")
 		leftStr := seam + strings.Join(bandLeft, bandSep)
 		rightStr := strings.Join(bandRight, bandSep)
@@ -333,9 +318,7 @@ func (m PreviewModel) renderHeader() string {
 		headerLine = ansi.Truncate(chip+band, contentWidth, "")
 		headerStyle = styles.PreviewHeaderFocused
 	} else {
-		// --- Unfocused: flat dim, matching the inactive SESSIONS / CHANGED
-		// FILES titles. All fields render in DimText; the thin gray underline
-		// carries the (lack of) focus. ---
+		// --- Unfocused: flat DimText, matching the inactive pane titles. ---
 		leftPlain := []string{projectName}
 		if s.GitBranch != "" {
 			leftPlain = append(leftPlain, s.GitBranch)
@@ -360,10 +343,8 @@ func (m PreviewModel) renderHeader() string {
 	return headerStyle.Width(maxWidth).Render(headerLine)
 }
 
-// cacheExpired reports whether a session has been idle for at least ttl, so
-// its prompt cache has expired and the next message re-processes the whole
-// context uncached. Closed sessions warn too (resuming re-sends everything).
-// A zero ttl or unknown last activity never warns.
+// cacheExpired reports whether a session idled past its prompt-cache ttl, so the
+// next message re-sends the whole context uncached. Closed sessions count too.
 func cacheExpired(s *session.Session, now time.Time, ttl time.Duration) bool {
 	if s == nil || ttl <= 0 || s.LastActivity.IsZero() {
 		return false

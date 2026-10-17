@@ -6,12 +6,8 @@ import (
 	"os"
 )
 
-// lastAITitle returns the aiTitle of the most recent "ai-title" record in a
-// session's .jsonl transcript. Claude Code appends a fresh ai-title record each
-// time it (re)generates the session's title, so the physically-last one is the
-// current title. Returns "" when the file is missing, has no ai-title records,
-// or cannot be read. Malformed and oversized lines are skipped, matching the
-// tolerance of the other transcript scanners (lastMessageTime, parseSessionFile).
+// lastAITitle returns the last "ai-title" record's title, the current one since
+// Claude appends a record per regeneration; "" when there is none or no file.
 func lastAITitle(path string) string {
 	if path == "" {
 		return ""

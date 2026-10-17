@@ -18,22 +18,15 @@ func NewCaptureEngine(client *tmux.Client) *CaptureEngine {
 	return &CaptureEngine{tmuxClient: client}
 }
 
-// cursorReverseOn / cursorReverseOff toggle reverse video, which renders a
-// terminal block cursor: the cell's foreground and background are swapped, so a
-// blank cell becomes a solid block in the foreground color.
+// cursorReverseOn/Off draw a block cursor: reverse video turns a blank cell into
+// a solid block.
 const (
 	cursorReverseOn  = "\x1b[7m"
 	cursorReverseOff = "\x1b[27m"
 )
 
-// Capture returns the raw pane content including ANSI escape sequences for the
-// given tmux target (e.g. "session:1.0"). Lines are truncated to maxWidth when
-// it is > 0 (0 = unbounded). maxWidth is passed in by the caller rather than
-// held as engine state so the capture goroutine never races a concurrent
-// resize. When showCursor is true the pane's cursor is overlaid as a
-// reverse-video block so the preview shows where input lands (capture-pane omits
-// the cursor); callers pass false for unfocused panes (e.g. while browsing the
-// menu) so the block doesn't imply the pane is receiving input.
+// Capture returns target's ANSI pane content cut to maxWidth (0 = none; a param so
+// it can't race a resize); showCursor overlays the cursor capture-pane omits.
 func (e *CaptureEngine) Capture(target string, showCursor bool, maxWidth int) (string, error) {
 	raw, err := e.tmuxClient.CapturePaneOutput(target)
 	if err != nil {
@@ -42,32 +35,16 @@ func (e *CaptureEngine) Capture(target string, showCursor bool, maxWidth int) (s
 	raw = strings.TrimSuffix(raw, "\n")
 	lines := strings.Split(raw, "\n")
 
-	// rawCount is the full grid height (history + visible rows) before trimming.
-	// capture-pane -S - returns history_size + pane_height lines, so the cursor's
-	// absolute line index is rawCount - paneHeight + cursorY. Capturing it here,
-	// before trimTrailingBlankLines, keeps the mapping consistent with this
-	// capture even if the pane produces more output before the next refresh.
+	// The untrimmed count (history + visible rows) maps the cursor to line
+	// rawCount - paneHeight + cursorY.
 	rawCount := len(lines)
 
-	// Drop trailing blank lines. capture-pane -S - returns the full pane grid,
-	// so a pane taller than its current content yields many trailing blank
-	// lines -- most notably Claude Code's trust/permission prompts, which render
-	// at the top of the pane and leave the rest empty. The preview viewport
-	// auto-scrolls to the bottom to follow live output; without trimming, those
-	// blanks push the prompt off the top and the preview looks empty. For a
-	// normal bottom-anchored session this is a no-op (its content already ends
-	// at the bottom). When the whole pane is blank this collapses to nothing, so
-	// the caller surfaces its "waiting for output" placeholder. Trimming only
-	// removes lines from the end, so indices of earlier lines (including the
-	// cursor row) are unchanged.
+	// Trailing blanks below top-anchored content (e.g. a trust prompt) would push it
+	// out of the bottom-following viewport; trimming the end keeps cursor rows valid.
 	lines = trimTrailingBlankLines(lines)
 
 	if maxWidth > 0 {
-		// Truncate lines that exceed the preview viewport width. This is
-		// just a safety net for stale scrollback content. The primary
-		// mechanism is resizing the tmux pane to match the viewport so
-		// the app inside (Claude, neovim, etc.) re-renders at the correct
-		// width via SIGWINCH.
+		// Only a safety net for stale scrollback; resizing the pane does the real fit.
 		for i, line := range lines {
 			if ansi.StringWidth(line) > maxWidth {
 				lines[i] = ansi.Truncate(line, maxWidth, "")
@@ -82,23 +59,8 @@ func (e *CaptureEngine) Capture(target string, showCursor bool, maxWidth int) (s
 	return strings.Join(lines, "\n"), nil
 }
 
-// overlayCursor fetches the live cursor position for target and draws a
-// reverse-video block at that cell. rawCount is the untrimmed capture line
-// count, used to map the pane-relative cursor row to an index in lines. Any
-// error or a hidden cursor leaves the content unchanged.
-//
-// Note: the cursor position comes from a second tmux call (CursorPosition),
-// separate from CapturePaneOutput, so there is a small TOCTOU window in which
-// the pane can change between the two reads. The row is mapped as
-// rawCount - PaneHeight + Y against the *untrimmed* capture line count, which
-// keeps the mapping consistent with this capture even if the pane produced more
-// output meanwhile. If the cursor sat on a trailing blank line that
-// trimTrailingBlankLines removed, the mapped row lands at or past len(lines);
-// drawCursor then no-ops on that out-of-range row (the cursor block is silently
-// dropped for that frame). This is intentional and safe -- a missing cursor for
-// one frame is preferable to drawing it on the wrong (now-trimmed) row. Fixing
-// it properly would require a single atomic capture+cursor call from the tmux
-// client, which is out of scope here.
+// overlayCursor draws target's live cursor as a reverse-video block; a cursor on a
+// trimmed trailing row is skipped for the frame rather than drawn on the wrong one.
 func (e *CaptureEngine) overlayCursor(target string, lines []string, rawCount, maxWidth int) []string {
 	info, err := e.tmuxClient.CursorPosition(target)
 	if err != nil || !info.Visible || info.PaneHeight <= 0 {
@@ -108,9 +70,8 @@ func (e *CaptureEngine) overlayCursor(target string, lines []string, rawCount, m
 	return drawCursor(lines, row, info.X, maxWidth)
 }
 
-// drawCursor renders a reverse-video block at column x of lines[row], returning
-// lines unchanged when row or x fall outside the rendered content. maxWidth
-// (0 = unbounded) guards against drawing past the truncated viewport width.
+// drawCursor reverse-videos column x of lines[row], skipping cells outside the
+// content or past maxWidth (0 = unbounded).
 func drawCursor(lines []string, row, x, maxWidth int) []string {
 	if row < 0 || row >= len(lines) || x < 0 {
 		return lines
@@ -122,11 +83,8 @@ func drawCursor(lines []string, row, x, maxWidth int) []string {
 	return lines
 }
 
-// renderCursorOnLine wraps the single cell at display column x of line in
-// reverse video. When x is at or past the line's width (cursor sitting beyond
-// the text, e.g. an empty shell prompt) the line is padded with spaces and the
-// block is drawn on a trailing space. ANSI sequences and wide characters in the
-// line are preserved.
+// renderCursorOnLine reverse-videos the cell at display column x, padding the
+// line when the cursor sits past the text (e.g. an empty prompt).
 func renderCursorOnLine(line string, x int) string {
 	width := ansi.StringWidth(line)
 	if x >= width {
@@ -142,9 +100,7 @@ func renderCursorOnLine(line string, x int) string {
 	return left + cursorReverseOn + cell + cursorReverseOff + right
 }
 
-// trimTrailingBlankLines returns lines with trailing blank lines removed. A line
-// is blank when it holds nothing but whitespace and ANSI escape sequences.
-// Interior blank lines are preserved.
+// trimTrailingBlankLines drops trailing lines holding only whitespace and ANSI.
 func trimTrailingBlankLines(lines []string) []string {
 	end := len(lines)
 	for end > 0 && strings.TrimSpace(ansi.Strip(lines[end-1])) == "" {

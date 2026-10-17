@@ -134,9 +134,8 @@ func (d *Detector) buildSession(h Harness, pane tmux.PaneInfo, pid int, tree *se
 	return s
 }
 
-// ResolveStatus returns the harness's native status when it has one. Otherwise
-// it blends pane-content, process-subtree CPU and recent-write signals through
-// the tracker's priority (Waiting > Working > Idle) and hysteresis.
+// ResolveStatus prefers the harness's native status, else blends pane, CPU and
+// recent-write signals through the tracker's priority and hysteresis.
 func (d *Detector) ResolveStatus(h Harness, s *session.Session, tree *session.ProcessTree) session.SessionStatus {
 	if status, ok := h.NativeStatus(s); ok {
 		return status
@@ -160,9 +159,8 @@ func (d *Detector) ResolveStatus(h Harness, s *session.Session, tree *session.Pr
 	return d.tracker.Resolve(s.TmuxTarget, signal, cpuActive, recent, now)
 }
 
-// PreviewStatus resolves status for the preview path from already-captured
-// content: native status first, else Waiting when a prompt is visible. The
-// caller applies only Waiting, so Active is a "not waiting" sentinel.
+// PreviewStatus resolves status from captured content: native first, else Waiting
+// on a visible prompt. Callers apply only Waiting, so Active means "not waiting".
 func PreviewStatus(h Harness, s *session.Session, content string) session.SessionStatus {
 	if status, ok := h.NativeStatus(s); ok {
 		return status

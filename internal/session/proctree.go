@@ -85,9 +85,8 @@ func (t *ProcessTree) Stats(pid int) (cpu float64, memMB float64) {
 	return t.cpu[pid], t.rss[pid] / 1024.0
 }
 
-// ParentAppName checks the immediate parent of pid. If it's a non-shell
-// program (e.g. "nvim"), returns its name -- meaning the agent is running as
-// a subprocess. Returns "" if the parent is a shell or tmux (normal case).
+// ParentAppName returns pid's parent program (e.g. "nvim") when the agent runs as
+// its subprocess, or "" for a shell or tmux parent.
 func (t *ProcessTree) ParentAppName(pid int) string {
 	ppid, ok := t.ppid[pid]
 	if !ok || ppid <= 1 {
@@ -125,9 +124,8 @@ func (t *ProcessTree) IsAncestorOf(ancestorPID, descendantPID int) bool {
 	return false
 }
 
-// FindMatchingDescendant performs a depth-first walk of the process tree from
-// rootPID and returns the PID of the first descendant whose process name
-// satisfies matchFunc. Returns 0 if no match is found.
+// FindMatchingDescendant returns the first descendant of rootPID, depth-first,
+// whose name satisfies matchFunc, or 0.
 func (t *ProcessTree) FindMatchingDescendant(rootPID int, matchFunc func(string) bool, maxDepth int) int {
 	if maxDepth == 0 {
 		return 0

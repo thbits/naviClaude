@@ -14,16 +14,8 @@ type DiffStat struct {
 	Removed int
 }
 
-// GitDiffStats returns per-file line stats for the working tree of the git
-// repository containing cwd, keyed by absolute file path. Tracked files report
-// their net change versus the last commit (staged + unstaged, via
-// `git diff --numstat HEAD`); untracked new files report all their lines as
-// additions. It returns nil when cwd is empty or not inside a git repository,
-// so callers can fall back to another source.
-//
-// Because it reflects the working tree, a file whose session edits were already
-// committed (or reverted) simply has no entry -- there is no pending diff to
-// show -- which is the intended, git-accurate behavior.
+// GitDiffStats returns working-tree line stats by absolute path: tracked files
+// versus HEAD, untracked ones as all additions; nil outside a repo.
 func GitDiffStats(cwd string) map[string]DiffStat {
 	if cwd == "" {
 		return nil
@@ -41,7 +33,7 @@ func GitDiffStats(cwd string) map[string]DiffStat {
 		parseNumstat(string(out), root, stats)
 	}
 
-	// Untracked new files: count every line as an addition (git would once added).
+	// Untracked files count every line as added, as git will once they're staged.
 	if out, err := exec.Command("git", "-C", cwd, "ls-files", "--others", "--exclude-standard", "-z").Output(); err == nil {
 		for _, rel := range strings.Split(strings.TrimRight(string(out), "\x00"), "\x00") {
 			if rel == "" {
@@ -73,10 +65,8 @@ func gitRoot(cwd string) (string, error) {
 	return root, nil
 }
 
-// parseNumstat parses `git diff --numstat` output into stats, resolving each
-// repo-relative path against root to an absolute path. Binary files (reported
-// as "-\t-") are skipped. Rename entries ("old => new") use the new path,
-// best-effort; unusual quoted paths are left as-is.
+// parseNumstat adds `git diff --numstat` lines to stats by absolute path, skipping
+// binary files; renames ("old => new") use the new path.
 func parseNumstat(out, root string, stats map[string]DiffStat) {
 	for _, line := range strings.Split(out, "\n") {
 		if line == "" {
@@ -108,9 +98,7 @@ func fileLineCount(path string) int {
 	return len(SplitLines(string(data)))
 }
 
-// SplitLines splits s into lines, treating a single trailing newline as a line
-// terminator rather than introducing a trailing empty line. An empty string is
-// zero lines.
+// SplitLines splits s into lines; a trailing newline adds no empty line.
 func SplitLines(s string) []string {
 	if s == "" {
 		return nil

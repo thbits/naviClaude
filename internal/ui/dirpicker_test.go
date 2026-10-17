@@ -1,11 +1,13 @@
 package ui
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 func paths(cands []DirCandidate) []string {
@@ -189,4 +191,22 @@ func equalStrings(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// A long candidate list must not grow the popup past the height it was given.
+func TestDirPickerFitsHeight(t *testing.T) {
+	m := NewDirPicker()
+	m.zoxideFn = func() []string { return nil }
+	m.listDirsFn = func(base string) []string {
+		var dirs []string
+		for i := 0; i < 40; i++ {
+			dirs = append(dirs, filepath.Join(base, fmt.Sprintf("d%02d", i)))
+		}
+		return dirs
+	}
+	m.SetSize(120, 20)
+	m, _ = m.Update(m.Show("/proj", nil)().(dirCandidatesMsg))
+	if got := lipgloss.Height(m.View()); got > 20 {
+		t.Errorf("popup height = %d, want <= 20", got)
+	}
 }

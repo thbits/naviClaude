@@ -133,9 +133,8 @@ func (h *Harness) Enrich(s *session.Session) {
 	s.DisplayName = resolveTitle(meta.Name, meta.NameSource, aiTitle)
 }
 
-// NativeStatus returns Claude Code's own status from ~/.claude/sessions,
-// trusted regardless of statusUpdatedAt age (it is event-driven, not a heartbeat).
-// It also records why the session is waiting on s.
+// NativeStatus returns Claude's own status from ~/.claude/sessions, trusted at any
+// age since it is event-driven, and records NativeStatus and WaitingFor on s.
 func (h *Harness) NativeStatus(s *session.Session) (session.SessionStatus, bool) {
 	st, ok := ReadNativeState(s.PID, s.ID)
 	if !ok {
@@ -164,9 +163,8 @@ func (h *Harness) RecentlyActive(s *session.Session, window time.Duration) bool 
 	return !mt.IsZero() && time.Since(mt) <= window
 }
 
-// cachedModel returns the session's model, reading the transcript only on
-// first access. The lock spans check-extract-store so concurrent Enrich calls
-// don't duplicate the read.
+// cachedModel returns the session's model, read once; the lock spans
+// check-read-store so concurrent Enrich calls don't duplicate the read.
 func (h *Harness) cachedModel(sessionID, cwd string) string {
 	h.modelCacheMu.Lock()
 	defer h.modelCacheMu.Unlock()
@@ -180,9 +178,8 @@ func (h *Harness) cachedModel(sessionID, cwd string) string {
 	return model
 }
 
-// cachedLastActivity returns the transcript's last-message time, rescanning only
-// when mtime changes and falling back to mtime when no record has a timestamp.
-// Unlike mtime alone this is not fooled by `claude --resume` touching the file.
+// cachedLastActivity returns the last-message time (else mtime), rescanning on
+// mtime change; unlike mtime it isn't fooled by `claude --resume` touching the file.
 func (h *Harness) cachedLastActivity(sessionID, cwd string, mtime time.Time) time.Time {
 	h.lastActMu.Lock()
 	defer h.lastActMu.Unlock()

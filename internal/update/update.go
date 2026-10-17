@@ -1,11 +1,5 @@
-// Package update checks whether a newer naviClaude release is available on
-// GitHub. It is deliberately self-contained and UI-agnostic: it performs a
-// single cached HTTP query against the GitHub Releases API and reports the
-// latest version when it is newer than the running build.
-//
-// Every failure path (no network, timeout, non-200, unparseable JSON or
-// version, or a "dev" build) is silent: Check returns ("", false) so callers
-// can simply show nothing.
+// Package update checks GitHub for a newer naviClaude release with one cached
+// query. Every failure is silent, so callers just show nothing.
 package update
 
 import (
@@ -23,14 +17,11 @@ import (
 // latestReleaseURL is the GitHub API endpoint for the newest published release.
 const latestReleaseURL = "https://api.github.com/repos/thbits/naviClaude/releases/latest"
 
-// cacheTTL is how long a successful check result is reused before hitting the
-// network.
+// cacheTTL is how long a successful check is reused.
 const cacheTTL = 6 * time.Hour
 
-// negativeCacheTTL is how long a failed check (no tag) is remembered before
-// retrying. It is shorter than cacheTTL so an offline launch doesn't suppress
-// the check for the rest of the day, but long enough that a burst of launches
-// doesn't re-fire a doomed request every time.
+// negativeCacheTTL retries a failed check sooner than cacheTTL, so an offline
+// launch doesn't hide updates all day, yet launch bursts don't refire it.
 const negativeCacheTTL = 30 * time.Minute
 
 // httpTimeout bounds the network call so startup is never blocked for long.
@@ -42,11 +33,8 @@ type cacheEntry struct {
 	LatestTag string    `json:"latest_tag"`
 }
 
-// Check reports the latest release version and whether it is newer than
-// current. It returns ("", false) when current is a dev build, on any error,
-// or when current is already at or ahead of the latest release.
-//
-// A cache file (6h TTL) avoids repeated network calls across launches.
+// Check returns the latest release when it is newer than current; ("", false)
+// for dev builds, errors or an up-to-date build.
 func Check(ctx context.Context, current string) (latest string, available bool) {
 	if !isReleaseVersion(current) {
 		return "", false
@@ -63,14 +51,10 @@ func Check(ctx context.Context, current string) (latest string, available bool) 
 	return "", false
 }
 
-// latestTag returns the latest release tag, using the cache when it is still
-// fresh and otherwise fetching from GitHub (and refreshing the cache). It
-// returns ok=false when no tag can be determined.
+// latestTag returns the latest release tag from a fresh cache, else from GitHub.
 func latestTag(ctx context.Context) (tag string, ok bool) {
 	if entry, err := readCache(); err == nil {
-		// A failed check (empty tag) is cached briefly; a successful one for the
-		// full TTL. Guard against a future CheckedAt (clock skew, restored VM
-		// snapshot): a negative age must count as stale, not perpetually fresh.
+		// A future CheckedAt (clock skew, restored VM snapshot) counts as stale.
 		ttl := cacheTTL
 		if entry.LatestTag == "" {
 			ttl = negativeCacheTTL
@@ -128,8 +112,7 @@ func fetchLatestTag(ctx context.Context) (tag string, ok bool) {
 	return payload.TagName, true
 }
 
-// releaseURL returns the API endpoint, allowing tests to override the target
-// via the naviclaude_UPDATE_URL environment variable.
+// releaseURL returns the API endpoint; tests override it via NAVICLAUDE_UPDATE_URL.
 func releaseURL() string {
 	if u := os.Getenv("NAVICLAUDE_UPDATE_URL"); u != "" {
 		return u
@@ -153,9 +136,8 @@ func normalize(tag string) string {
 	return strings.TrimPrefix(strings.TrimSpace(tag), "v")
 }
 
-// compareSemver returns >0 if a is newer than b, 0 if equal, <0 if older. A
-// version that fails to parse sorts as older (returns a negative result when
-// compared against a valid version), which keeps Check conservative.
+// compareSemver returns >0 if a is newer than b, 0 if equal, <0 if older; an
+// unparseable version sorts older, which keeps Check conservative.
 func compareSemver(a, b string) int {
 	amaj, amin, apat, apre, aok := parseSemver(a)
 	bmaj, bmin, bpat, bpre, bok := parseSemver(b)
@@ -179,10 +161,8 @@ func compareSemver(a, b string) int {
 	return comparePreRelease(apre, bpre)
 }
 
-// comparePreRelease orders pre-release identifiers per semver precedence: a
-// version WITHOUT a pre-release is newer than the same core version WITH one
-// (1.2.3 > 1.2.3-rc1), and two pre-releases compare field-by-field on their
-// dot-separated identifiers.
+// comparePreRelease applies semver precedence: a release beats its pre-release
+// (1.2.3 > 1.2.3-rc1), and pre-releases compare by dot-separated identifier.
 func comparePreRelease(a, b string) int {
 	if a == b {
 		return 0
@@ -221,11 +201,8 @@ func comparePreReleaseID(a, b string) int {
 	}
 }
 
-// parseSemver parses "v1.2.3" or "1.2.3", optionally with a pre-release suffix
-// ("1.2.3-rc1") and/or build metadata ("1.2.3+build9"). It returns the numeric
-// triplet plus the pre-release identifier (empty when absent); build metadata
-// is discarded since semver excludes it from precedence. ok is false when the
-// major/minor/patch triplet cannot be read.
+// parseSemver parses "v1.2.3" with optional "-pre" and "+build" suffixes, dropping
+// build metadata; ok is false when the numeric triplet can't be read.
 func parseSemver(v string) (major, minor, patch int, pre string, ok bool) {
 	v = strings.TrimSpace(v)
 	v = strings.TrimPrefix(v, "v")

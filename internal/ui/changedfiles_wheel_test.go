@@ -21,12 +21,12 @@ func TestChangedFilesWheelMovesCursor(t *testing.T) {
 		t.Fatalf("initial selected = %q, want /repo/a.go", got)
 	}
 
-	m, _ = m.Update(tea.MouseMsg{Type: tea.MouseWheelDown})
+	m, _ = m.Update(tea.MouseMsg{Button: tea.MouseButtonWheelDown, Action: tea.MouseActionPress})
 	if got := m.SelectedFile(); got != "/repo/b.go" {
 		t.Fatalf("after wheel down selected = %q, want /repo/b.go", got)
 	}
 
-	m, _ = m.Update(tea.MouseMsg{Type: tea.MouseWheelUp})
+	m, _ = m.Update(tea.MouseMsg{Button: tea.MouseButtonWheelUp, Action: tea.MouseActionPress})
 	if got := m.SelectedFile(); got != "/repo/a.go" {
 		t.Fatalf("after wheel up selected = %q, want /repo/a.go", got)
 	}
@@ -37,13 +37,13 @@ func TestChangedFilesWheelClamps(t *testing.T) {
 	m := NewChangedFiles(30, 12)
 	m.SetFiles([]session.ChangedFile{{Path: "/repo/a.go"}, {Path: "/repo/b.go"}}, "/repo")
 
-	m, _ = m.Update(tea.MouseMsg{Type: tea.MouseWheelUp}) // already at top
+	m, _ = m.Update(tea.MouseMsg{Button: tea.MouseButtonWheelUp, Action: tea.MouseActionPress}) // already at top
 	if got := m.SelectedFile(); got != "/repo/a.go" {
 		t.Fatalf("wheel up at top selected = %q, want /repo/a.go", got)
 	}
 
-	m, _ = m.Update(tea.MouseMsg{Type: tea.MouseWheelDown})
-	m, _ = m.Update(tea.MouseMsg{Type: tea.MouseWheelDown}) // past bottom
+	m, _ = m.Update(tea.MouseMsg{Button: tea.MouseButtonWheelDown, Action: tea.MouseActionPress})
+	m, _ = m.Update(tea.MouseMsg{Button: tea.MouseButtonWheelDown, Action: tea.MouseActionPress}) // past bottom
 	if got := m.SelectedFile(); got != "/repo/b.go" {
 		t.Fatalf("wheel down past bottom selected = %q, want /repo/b.go", got)
 	}

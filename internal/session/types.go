@@ -2,15 +2,13 @@ package session
 
 import "time"
 
-// PaneSignal is the input/activity signal extracted purely from a pane's
-// captured content, independent of process or CPU state. The StatusTracker
-// combines it with CPU and transcript signals to produce a final SessionStatus.
+// PaneSignal is the signal read from pane content alone; StatusTracker combines it
+// with CPU and transcript activity.
 type PaneSignal int
 
 const (
-	// SignalNone means the content shows neither a waiting prompt nor the
-	// "interrupt" footer; the session is idle, or its activity must be inferred
-	// from CPU/transcript signals.
+	// SignalNone shows neither a prompt nor the "interrupt" footer; activity must
+	// come from CPU/transcript signals.
 	SignalNone PaneSignal = iota
 	// SignalWaiting means an interactive prompt requiring user input is visible.
 	SignalWaiting
@@ -52,13 +50,8 @@ type SessionActivity struct {
 	Model         string    // model id of the latest main-thread assistant record ("" when none in the tail)
 }
 
-// ChangedFile is a file the session edited, with the added/removed line counts
-// accumulated across every edit the session made to it. As loaded here the
-// counts are derived from the transcript (old_string vs new_string per edit) --
-// a durable but approximate record of what the session changed. Callers may
-// replace the counts with a live git diff (see GitDiffStats) and clear
-// Estimated; when no live diff exists (e.g. the work was committed) the
-// transcript counts remain as the persistent estimate.
+// ChangedFile is a file the session edited, with line counts estimated from the
+// transcript unless replaced by a live git diff (see GitDiffStats).
 type ChangedFile struct {
 	Path      string
 	Added     int

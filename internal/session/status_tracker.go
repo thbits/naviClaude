@@ -5,9 +5,8 @@ import (
 	"time"
 )
 
-// StatusTracker resolves a final SessionStatus from the per-cycle signals,
-// applying priority (Waiting > Working > Idle) and hysteresis so a momentary
-// dropout of the working signal between captures does not flicker to Idle.
+// StatusTracker resolves status by priority (Waiting > Working > Idle), with
+// hysteresis so a momentary working dropout doesn't flicker to Idle.
 type StatusTracker struct {
 	grace time.Duration
 	// mu guards lastWorking. Detect runs in overlapping Bubble Tea tea.Cmd
@@ -28,16 +27,10 @@ func NewStatusTracker(grace time.Duration) *StatusTracker {
 	}
 }
 
-// Resolve returns the status for target given this cycle's signals.
-//   - signal is the content classification (Waiting/Working/None).
-//   - cpuActive is true when the process subtree CPU is above threshold.
-//   - transcriptActive is true when the .jsonl was written within the window.
-//
-// Waiting always wins and clears immediately when the prompt disappears.
-// Working is sticky for grace to absorb capture-to-capture dropouts.
+// Resolve returns target's status from this cycle's pane, CPU and transcript
+// signals; Waiting clears at once, while Working sticks for grace.
 func (st *StatusTracker) Resolve(target string, signal PaneSignal, cpuActive, transcriptActive bool, now time.Time) SessionStatus {
-	// Waiting wins and never sticks: as soon as the prompt is gone, it clears.
-	// (No map access, so no lock needed for this branch.)
+	// Waiting never sticks, so it needs no map access or lock.
 	if signal == SignalWaiting {
 		return StatusWaiting
 	}
@@ -61,12 +54,8 @@ func (st *StatusTracker) Resolve(target string, signal PaneSignal, cpuActive, tr
 	return StatusIdle
 }
 
-// Prune removes hysteresis entries for targets that are no longer live, keeping
-// the lastWorking map from growing unbounded as tmux panes are closed. active
-// maps each currently-detected target to true; any tracked target absent from
-// it is deleted. Guarded by the same mutex as Resolve. This changes no status
-// output: a pruned target that reappears simply starts fresh (no stale working
-// observation), and a live target's entry is never touched.
+// Prune drops entries for targets not in active so the map doesn't grow as panes
+// close; a target that reappears starts fresh.
 func (st *StatusTracker) Prune(active map[string]bool) {
 	st.mu.Lock()
 	defer st.mu.Unlock()

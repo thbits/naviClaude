@@ -41,18 +41,14 @@ func DefaultKeyMap() KeyMap {
 	}
 }
 
-// keyFieldBinding pairs a configured value (from config.KeyBindings) with the
-// destination field in the resulting KeyMap, so the per-field fallback logic in
-// KeyMapFromConfig can be table-driven instead of repeated by hand.
+// keyFieldBinding pairs a configured key with its KeyMap field.
 type keyFieldBinding struct {
 	action string  // human-readable action name (used for conflict reporting)
 	from   string  // configured value from config.KeyBindings
 	to     *string // destination field in the KeyMap being built
 }
 
-// keyFieldBindings returns the action/source/destination table linking each
-// config.KeyBindings field to its KeyMap field. It is the single source of
-// truth shared by KeyMapFromConfig and ValidateKeys.
+// keyFieldBindings is the config-to-KeyMap table shared by KeyMapFromConfig and ValidateKeys.
 func keyFieldBindings(kb config.KeyBindings, km *KeyMap) []keyFieldBinding {
 	return []keyFieldBinding{
 		{"quit", kb.Quit, &km.Quit},
@@ -141,11 +137,8 @@ const (
 	KeyThemePicker     = "T"
 )
 
-// reservedKeyBindings returns the hardcoded keys that configured bindings must
-// not shadow. These are handled directly by the update loop regardless of
-// config, so binding a configurable action to one of them would either be
-// ignored or behave unpredictably. Each entry maps the key to a description of
-// what reserves it, for clear conflict messages.
+// reservedKeyBindings maps the hardcoded keys a configured binding would be
+// shadowed by to what reserves them.
 func reservedKeyBindings() map[string]string {
 	return map[string]string{
 		KeyThemePicker:     "theme picker",
@@ -167,12 +160,8 @@ type KeyConflict struct {
 // String renders the conflict for display or logging.
 func (c KeyConflict) String() string { return c.Message }
 
-// ValidateKeys checks a config.KeyBindings for conflicts: two configured
-// actions bound to the same key, and configured actions that shadow a
-// reserved/hardcoded key. It returns the list of conflicts (empty if none).
-//
-// It does not mutate anything and is independent of KeyMapFromConfig, so
-// callers can surface warnings without changing how the KeyMap is built.
+// ValidateKeys reports configured keys bound to several actions or shadowed by a
+// reserved key.
 func ValidateKeys(kb config.KeyBindings) []KeyConflict {
 	var km KeyMap
 	bindings := keyFieldBindings(kb, &km)

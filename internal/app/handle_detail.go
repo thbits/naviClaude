@@ -8,9 +8,8 @@ import (
 	"github.com/thbits/naviClaude/internal/session"
 )
 
-// detailDataMsg carries data loaded from the session's .jsonl file. It carries
-// the session ID so a slow read doesn't repaint the detail popup after the user
-// has reopened it on a different session (mirrors metricsMsg).
+// detailDataMsg carries data loaded from the session's .jsonl file; sessionID
+// lets a slow read be dropped once the popup shows another session.
 type detailDataMsg struct {
 	sessionID    string
 	messageCount int

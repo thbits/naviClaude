@@ -7,9 +7,8 @@ import (
 	"os"
 )
 
-// editToolNames is the set of tool names whose invocations mutate a file on
-// disk. A tool_use block with one of these names carries the touched path in
-// its input, so it is what "files changed in the session" is derived from.
+// editToolNames are the tools that mutate a file; their tool_use input carries
+// the touched path.
 var editToolNames = map[string]bool{
 	"Edit":         true,
 	"Write":        true,
@@ -17,19 +16,15 @@ var editToolNames = map[string]bool{
 	"NotebookEdit": true,
 }
 
-// changedFilesBlock captures the fields of a single message content block
-// needed to identify a file-editing tool call. It extends the metrics
-// contentBlock shape with the tool name and raw input so the input is decoded
-// lazily only for edit tools.
+// changedFilesBlock keeps Input raw so it is decoded only for edit tools.
 type changedFilesBlock struct {
 	Type  string          `json:"type"`
 	Name  string          `json:"name"`
 	Input json.RawMessage `json:"input"`
 }
 
-// changedFilesInput captures the fields an edit tool_use block may carry across
-// the four edit tools: Edit/MultiEdit use old_string/new_string (MultiEdit
-// nests them in edits), Write uses content, NotebookEdit uses new_source.
+// changedFilesInput covers all four edit tools: Edit/MultiEdit use old/new_string
+// (MultiEdit nested in edits), Write uses content, NotebookEdit new_source.
 type changedFilesInput struct {
 	FilePath     string `json:"file_path"`
 	NotebookPath string `json:"notebook_path"`
@@ -43,15 +38,8 @@ type changedFilesInput struct {
 	} `json:"edits"`
 }
 
-// LoadChangedFiles reads a Claude JSONL session file and returns the files the
-// session edited, in first-seen order, each with the added/removed line counts
-// accumulated across all of the session's edits to it. It looks for assistant
-// tool_use blocks naming a file-editing tool (Edit/Write/MultiEdit/
-// NotebookEdit) and extracts the touched path and its line delta.
-//
-// Scanning mirrors LoadMetrics: a large scanner buffer tolerates long
-// transcript lines, and a mid-file scan error still yields the files collected
-// so far, so only an outright open failure is reported as an error.
+// LoadChangedFiles returns the files a transcript's edit tools touched, in
+// first-seen order with summed line deltas; a scan error keeps those found so far.
 func LoadChangedFiles(filePath string) ([]session.ChangedFile, error) {
 	f, err := os.Open(filePath)
 	if err != nil {
@@ -146,9 +134,8 @@ func LoadChangedFiles(filePath string) ([]session.ChangedFile, error) {
 	return files, nil
 }
 
-// lineDiff returns the added and removed line counts between old and new,
-// computed from the longest common subsequence of their lines -- the same
-// notion of "+N -M" that git and Claude Code display for a hunk.
+// lineDiff counts added and removed lines via their LCS, matching the "+N -M"
+// git and Claude Code show for a hunk.
 func lineDiff(old, new string) (added, removed int) {
 	o := session.SplitLines(old)
 	n := session.SplitLines(new)
@@ -156,15 +143,13 @@ func lineDiff(old, new string) (added, removed int) {
 	return len(n) - common, len(o) - common
 }
 
-// countLines returns the number of lines in s (a trailing newline does not
-// count as an extra empty line).
+// countLines counts the lines in s; a trailing newline adds no empty line.
 func countLines(s string) int {
 	return len(session.SplitLines(s))
 }
 
-// lcsLen returns the length of the longest common subsequence of two line
-// slices via the standard O(len(a)*len(b)) dynamic-programming table. Edit
-// hunks are small, so the quadratic cost is negligible.
+// lcsLen returns the LCS length of two line slices; the quadratic DP is fine
+// because edit hunks are small.
 func lcsLen(a, b []string) int {
 	if len(a) == 0 || len(b) == 0 {
 		return 0

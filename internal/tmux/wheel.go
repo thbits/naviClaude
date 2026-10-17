@@ -7,10 +7,8 @@ import (
 	"strings"
 )
 
-// WheelForwardable reports whether the app in target tracks the mouse with SGR
-// encoding, so forwarded wheel events scroll it exactly as a real wheel would.
-// Such apps (Claude Code's fullscreen renderer) keep their scrollback
-// internally, leaving capture-pane only the visible screen.
+// WheelForwardable reports whether target's app tracks the mouse with SGR, so a
+// forwarded wheel scrolls its internal scrollback, which capture-pane can't see.
 func (c *Client) WheelForwardable(target string) (bool, error) {
 	out, err := exec.Command("tmux", "display-message", "-p", "-t", target,
 		"#{pane_in_mode} #{mouse_any_flag} #{mouse_button_flag} #{mouse_standard_flag} #{mouse_sgr_flag}").Output()

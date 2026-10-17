@@ -29,20 +29,13 @@ type contentBlock struct {
 	Type string `json:"type"`
 }
 
-// isConversationalTurn reports whether a record represents an actual
-// conversational message rather than tool plumbing or injected context.
-//
-// Excluded: injected/meta records (isMeta), subagent traffic (isSidechain),
-// user records that are only tool_result blocks, and assistant records that
-// carry no visible text (thinking-only or tool_use-only).
+// isConversationalTurn reports a real message: not meta, sidechain, tool_result-only
+// user records, or assistant records without visible text.
 func isConversationalTurn(rec metricsRecord) bool {
 	if rec.IsMeta || rec.IsSidechain {
 		return false
 	}
-	// Only user/assistant records are conversational. This guard must precede
-	// the content checks below: a non-conversation record (e.g. a "system"
-	// record) can also carry plain-string content, and the string fast paths
-	// would otherwise count it as a turn.
+	// Checked first: other records (e.g. "system") can carry plain-string content too.
 	if rec.Type != "user" && rec.Type != "assistant" {
 		return false
 	}
@@ -101,9 +94,8 @@ type metricsUsage struct {
 	} `json:"usage"`
 }
 
-// LoadMetrics reads a Claude JSONL session file and extracts aggregate metrics.
-// The context limit comes from the latest assistant record's model id; model
-// (a family like "opus" or a full id) is the fallback when none is recorded.
+// LoadMetrics aggregates a transcript's metrics; the context limit uses the latest
+// assistant model id, else model (a family like "opus" or a full id).
 func LoadMetrics(filePath, model string) (*session.SessionMetrics, error) {
 	f, err := os.Open(filePath)
 	if err != nil {
@@ -116,9 +108,8 @@ func LoadMetrics(filePath, model string) (*session.SessionMetrics, error) {
 	// tell a 1M Claude 5 model from a 200K legacy one.
 	var modelID string
 
-	// Track the assistant record carrying the LATEST timestamp; its usage is
-	// the current context fill. File order is not guaranteed to be
-	// chronological, so we select by max timestamp rather than physical last.
+	// The latest-timestamped assistant usage is the current context fill; file
+	// order isn't chronological.
 	var (
 		tokensTime     time.Time // timestamp of the chosen assistant record
 		tokensHaveTime bool      // whether the chosen record had a parseable timestamp
@@ -147,18 +138,12 @@ func LoadMetrics(filePath, model string) (*session.SessionMetrics, error) {
 			m.MessageCount++
 		}
 
-		// Track the latest assistant record's context usage (not cumulative).
-		// Current context fill = input + cache_read + cache_creation + output
-		// from the most recent request, selected by MAX timestamp because file
-		// order is not guaranteed to be chronological.
+		// Context fill is that request's input + cache_read + cache_creation + output.
 		if rec.Type == "assistant" && len(rec.Message) > 0 {
 			var usage metricsUsage
 			if err := json.Unmarshal(rec.Message, &usage); err == nil {
-				// Decide whether this record is "later" than the chosen one.
-				// A record with a parseable timestamp beats one without; among
-				// timestamped records the larger timestamp wins. Untimestamped
-				// records only win when nothing has been chosen yet (preserving
-				// behavior for files lacking timestamps).
+				// Timestamped beats untimestamped and later beats earlier; among
+				// untimestamped records the last seen wins.
 				newer := false
 				switch {
 				case !tokensSeen:
@@ -166,7 +151,6 @@ func LoadMetrics(filePath, model string) (*session.SessionMetrics, error) {
 				case !recTime.IsZero() && (!tokensHaveTime || recTime.After(tokensTime)):
 					newer = true
 				case recTime.IsZero() && !tokensHaveTime:
-					// Both untimestamped: keep last-seen ordering as before.
 					newer = true
 				}
 				if newer {

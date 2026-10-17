@@ -13,9 +13,7 @@ import (
 )
 
 // ChangedFilesModel is the right-hand panel listing the files the selected
-// session edited, each with its accumulated +added/-removed counts. It mirrors
-// the SidebarModel component shape: SetSize / SetFiles / Update / View, with a
-// cursor navigable by j/k and a SelectedFile accessor for opening in $EDITOR.
+// session edited, each with its accumulated +added/-removed counts.
 type ChangedFilesModel struct {
 	files  []session.ChangedFile
 	cwd    string // session working directory, used to show relative paths
@@ -50,11 +48,8 @@ func (m *ChangedFilesModel) SetSize(w, h int) {
 	m.syncViewport()
 }
 
-// SetFiles replaces the file list and records the session CWD used to show
-// relative paths. The cursor stays on the same file when it is still present
-// (so a live refresh does not jump the selection); otherwise it resets to the
-// top -- which also handles a session switch, where none of the old paths are
-// in the new list.
+// SetFiles replaces the file list and CWD, keeping the cursor on the same file
+// if still present so a live refresh doesn't jump the selection.
 func (m *ChangedFilesModel) SetFiles(files []session.ChangedFile, cwd string) {
 	prev := m.SelectedFile()
 	m.files = files
@@ -104,9 +99,8 @@ func (m *ChangedFilesModel) SelectedFile() string {
 // Init satisfies the tea.Model interface.
 func (m ChangedFilesModel) Init() tea.Cmd { return nil }
 
-// Update handles navigation keys (j/k/g/G) and mouse wheel events. Opening the
-// selected file and closing the panel are handled by the app, which owns $EDITOR
-// and mode state.
+// Update handles navigation keys and the mouse wheel; opening and closing are
+// left to the app, which owns $EDITOR and mode state.
 func (m ChangedFilesModel) Update(msg tea.Msg) (ChangedFilesModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
@@ -131,13 +125,13 @@ func (m ChangedFilesModel) Update(msg tea.Msg) (ChangedFilesModel, tea.Cmd) {
 			m.syncViewport()
 		}
 	case tea.MouseMsg:
-		switch msg.Type {
-		case tea.MouseWheelUp:
+		switch msg.Button {
+		case tea.MouseButtonWheelUp:
 			if m.cursor > 0 {
 				m.cursor--
 			}
 			m.syncViewport()
-		case tea.MouseWheelDown:
+		case tea.MouseButtonWheelDown:
 			if m.cursor < len(m.files)-1 {
 				m.cursor++
 			}
@@ -169,12 +163,8 @@ func (m *ChangedFilesModel) syncViewport() {
 	m.vp.SetYOffset(yOff)
 }
 
-// renderRow renders one file row: the (relative) path on the left and the
-// +added/-removed counts on the right, filling the gap between. The counts
-// always get their full width and a one-column gap; the name takes whatever
-// space is left and is truncated from the LEFT (leading ellipsis) so the
-// basename and extension stay visible. This guarantees the counts are never
-// cut off, no matter how long the path.
+// renderRow renders the path left and the counts right. Counts always get full
+// width; the path is left-truncated so the basename stays visible.
 func (m ChangedFilesModel) renderRow(f session.ChangedFile, selected bool) string {
 	stats := m.renderStats(f, !m.focused)
 	statsWidth := lipgloss.Width(stats)
@@ -209,10 +199,8 @@ func (m ChangedFilesModel) renderRow(f session.ChangedFile, selected bool) strin
 	return styles.SidebarItem.Render(content)
 }
 
-// renderStats renders "+A" in green and "-R" in red, omitting a zero side. When
-// dim is true (pane unfocused) both sides render in DimText instead. Estimated
-// counts (no live git diff) render faintly. Styles are built per render from the
-// active theme's colors so they follow theme switches.
+// renderStats renders "+A" green and "-R" red (dim when unfocused, faint when
+// estimated), omitting a zero side; styles are built per render to follow themes.
 func (m ChangedFilesModel) renderStats(f session.ChangedFile, dim bool) string {
 	addColor, remColor := styles.ColorGreen, styles.ColorRed
 	if dim {

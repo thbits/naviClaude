@@ -50,9 +50,8 @@ func Classify(p Payload) Kind {
 	return KindIgnore
 }
 
-// RunHook handles one Claude Code hook invocation: the payload is on stdin and
-// the pane is $TMUX_PANE. Clears run inline; other events re-exec a detached
-// watcher so Claude never waits on the confirm delay, the sound or the turn.
+// RunHook handles one hook call (payload on stdin, pane in $TMUX_PANE). Clears run
+// inline; other events re-exec a detached watcher so Claude never waits on them.
 func RunHook(stdin io.Reader) error {
 	pane := os.Getenv("TMUX_PANE")
 	if pane == "" || os.Getenv("TMUX") == "" {
