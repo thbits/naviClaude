@@ -1,11 +1,12 @@
 package session
 
 import (
+	"errors"
 	"fmt"
-	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/thbits/naviClaude/internal/tmux"
 )
@@ -130,19 +131,47 @@ func (m *Manager) ResumeInSession(sess *Session, targetName, command string) (st
 	return target, nil
 }
 
-// Kill terminates an active session. Prefers tmux kill-pane (kills the pane
-// and all processes in it). Falls back to SIGTERM on the process PID.
+// quitTimeout bounds how long Kill waits for the agent to run its exit hooks
+// before force-closing the pane.
+const quitTimeout = 15 * time.Second
+
+// Kill quits an active session's agent with SIGTERM so its SessionEnd hooks
+// run, waits for it to exit, then closes its tmux pane. A pane owned by a
+// parent app (e.g. nvim) is left open.
 func (m *Manager) Kill(sess *Session) error {
-	if sess.TmuxTarget != "" {
-		return m.tmuxClient.KillPane(sess.TmuxTarget)
+	pane := sess.TmuxPaneID
+	if pane == "" {
+		pane = sess.TmuxTarget
 	}
 	if sess.PID == 0 {
-		return fmt.Errorf("kill: session %q has no PID or tmux target", sess.ID)
+		if pane == "" {
+			return fmt.Errorf("kill: session %q has no PID or tmux target", sess.ID)
+		}
+		return m.tmuxClient.KillPane(pane)
 	}
-	if err := exec.Command("kill", strconv.Itoa(sess.PID)).Run(); err != nil {
-		return fmt.Errorf("kill process %d: %w", sess.PID, err)
+	if err := syscall.Kill(sess.PID, syscall.SIGTERM); err != nil && !errors.Is(err, syscall.ESRCH) {
+		return fmt.Errorf("terminate process %d: %w", sess.PID, err)
 	}
-	return nil
+	waitForExit(sess.PID, quitTimeout)
+	if pane == "" || sess.Subprocess || !m.tmuxClient.PaneExists(pane) {
+		return nil
+	}
+	return m.tmuxClient.KillPane(pane)
+}
+
+// waitForExit polls until pid is gone or timeout elapses, reporting whether
+// it exited.
+func waitForExit(pid int, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for {
+		if errors.Is(syscall.Kill(pid, 0), syscall.ESRCH) {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 // CreateNewTmuxSession creates a brand new tmux session (detached), sends

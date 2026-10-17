@@ -103,6 +103,12 @@ type updateAvailableMsg struct{ latest string }
 // errMsg is a transient error notification.
 type errMsg struct{ err error }
 
+// killDoneMsg reports that a session kill finished (err is nil on success).
+type killDoneMsg struct {
+	target string
+	err    error
+}
+
 func (e errMsg) Error() string { return e.err.Error() }
 
 // selectionSettledMsg fires once navigation input has paused; gen identifies
@@ -158,6 +164,7 @@ type Model struct {
 	err                  error              // last error, shown briefly
 	confirmKill          bool               // waiting for kill confirmation
 	confirmSession       *session.Session   // session pending kill confirmation
+	killing              map[string]bool    // tmux targets still quitting; hidden from refreshes until done
 	pendingNewTarget     string             // tmux target of a just-created session; kept until detected
 	pendingNewTmuxCWD    string             // CWD for the tmux session being named
 	pendingDirAction     dirAction          // which flow opened the directory picker
@@ -700,6 +707,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case errMsg:
 		m.err = msg.err
 		return m, nil
+
+	case killDoneMsg:
+		delete(m.killing, msg.target)
+		if msg.err != nil {
+			m.err = msg.err
+		}
+		return m, m.refreshSessionsCmd()
 
 	// -- Key input -----------------------------------------------------------
 	case tea.KeyMsg:
@@ -1412,20 +1426,15 @@ func (m Model) handleKillConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
 	switch key {
 	case "y", "Y":
-		var cmds []tea.Cmd
+		var cmd tea.Cmd
 		if m.confirmSession != nil {
-			// Run the actual kill in a Cmd so the tmux exec doesn't block the
-			// event loop. Keep the optimistic removeSession so feedback is
-			// instant regardless of the exec's latency.
-			cmds = append(cmds, m.killSessionCmd(m.confirmSession))
-			m.removeSession(m.confirmSession.TmuxTarget)
+			cmd = m.killSessionCmd(m.confirmSession)
 		}
 		m.confirmKill = false
 		m.statusbar.SetConfirmKill(false)
 		m.confirmSession = nil
 		m.sidebar.ConfirmKillTarget = ""
-		cmds = append(cmds, m.refreshSessionsCmd())
-		return m, tea.Batch(cmds...)
+		return m, cmd
 	default:
 		// Any other key cancels.
 		m.confirmKill = false
@@ -1436,15 +1445,22 @@ func (m Model) handleKillConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 }
 
-// killSessionCmd runs manager.Kill off the event loop, emitting an errMsg on
-// failure so a tmux exec never blocks Update.
-func (m Model) killSessionCmd(sess *session.Session) tea.Cmd {
+// killSessionCmd hides sess at once and runs manager.Kill off the event loop;
+// the agent's exit hooks can take seconds, so refreshes skip it until
+// killDoneMsg arrives.
+func (m *Model) killSessionCmd(sess *session.Session) tea.Cmd {
+	target := sess.TmuxTarget
+	if m.killing == nil {
+		m.killing = map[string]bool{}
+	}
+	m.killing[target] = true
+	m.removeSession(target)
 	manager := m.manager
 	return func() tea.Msg {
 		if err := manager.Kill(sess); err != nil {
-			return errMsg{err: fmt.Errorf("kill: %w", err)}
+			return killDoneMsg{target: target, err: fmt.Errorf("kill: %w", err)}
 		}
-		return nil
+		return killDoneMsg{target: target}
 	}
 }
 
@@ -1823,13 +1839,10 @@ func (m Model) executeContextAction(action string, sess *session.Session) (tea.M
 		return m.jumpToPane()
 
 	case "kill":
-		// Mirror the keyboard kill path: optimistically remove the session for
-		// instant feedback, run the actual kill async, and refresh.
 		m.mode = ModeList
 		m.statusbar.SetMode(ModeList.String())
-		target := sess.TmuxTarget
-		m.removeSession(target)
-		return m, tea.Batch(m.killSessionCmd(sess), m.refreshSessionsCmd())
+		cmd := m.killSessionCmd(sess)
+		return m, cmd
 
 	case "resume":
 		m.mode = ModeList
@@ -1987,6 +2000,7 @@ func (m Model) refreshSessionsCmd() tea.Cmd {
 func (m *Model) applySessionRefresh(msg sessionRefreshMsg) tea.Cmd {
 	prevSel := m.selectionIdentity()
 
+	msg.active = m.dropKilling(msg.active)
 	// Store active sessions for progressive merge.
 	msg.active = m.mergePendingPlaceholder(msg.active)
 	m.activeSessions = msg.active
@@ -2579,6 +2593,20 @@ func (m *Model) mergePendingPlaceholder(active []*session.Session) []*session.Se
 
 // removeSession removes a session by tmux target from all internal lists and
 // rebuilds the sidebar immediately.
+// dropKilling filters out sessions whose kill is still in flight.
+func (m *Model) dropKilling(active []*session.Session) []*session.Session {
+	if len(m.killing) == 0 {
+		return active
+	}
+	kept := make([]*session.Session, 0, len(active))
+	for _, s := range active {
+		if !m.killing[s.TmuxTarget] {
+			kept = append(kept, s)
+		}
+	}
+	return kept
+}
+
 func (m *Model) removeSession(tmuxTarget string) {
 	filter := func(list []*session.Session) []*session.Session {
 		result := make([]*session.Session, 0, len(list))
