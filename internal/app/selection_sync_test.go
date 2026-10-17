@@ -265,3 +265,32 @@ func TestRepoCountsLoadForStartupSelection(t *testing.T) {
 		t.Errorf("tick: cmd nil = %v changedFilesSessionID = %q, want a1 loaded", cmd == nil, m.changedFilesSessionID)
 	}
 }
+
+// A just-started Claude has no per-PID metadata yet, so detection briefly
+// borrows the cwd's newest transcript ID (another live session's) before the
+// real one appears. The cursor must stay on the new pane through that.
+func TestNewSessionKeepsFocusWhenDetectedIDChanges(t *testing.T) {
+	m, _ := clickModel(t)
+	m.aliasStore = session.NewAliasStore(filepath.Join(t.TempDir(), "aliases.json"))
+	m.sidebar.SelectByID("a2")
+
+	send(t, m, newSessionMsg{tmuxTarget: "zzmouse:0.9", tmuxSession: "zzmouse", cwd: "/w", harness: "claude"})
+	if s := m.sidebar.SelectedSession(); s == nil || s.TmuxTarget != "zzmouse:0.9" {
+		t.Fatalf("precondition: placeholder not selected, got %+v", s)
+	}
+
+	now := time.Now()
+	one := &session.Session{ID: "a1", DisplayName: "one", TmuxSession: "zzmouse", TmuxTarget: "zzmouse:0.1", TmuxPaneID: "%1", Status: session.StatusIdle, LastActivity: now}
+	two := &session.Session{ID: "a2", DisplayName: "two", TmuxSession: "zzmouse", TmuxTarget: "zzmouse:0.2", TmuxPaneID: "%2", Status: session.StatusIdle, LastActivity: now}
+	borrowed := &session.Session{ID: "a1", TmuxSession: "zzmouse", TmuxTarget: "zzmouse:0.9", TmuxPaneID: "%9", Status: session.StatusActive, LastActivity: now}
+	m.applySessionRefresh(sessionRefreshMsg{active: []*session.Session{one, two, borrowed}})
+	if s := m.sidebar.SelectedSession(); s == nil || s.TmuxTarget != "zzmouse:0.9" {
+		t.Fatalf("after first detection cursor on %+v, want zzmouse:0.9", s)
+	}
+
+	real := &session.Session{ID: "n1", TmuxSession: "zzmouse", TmuxTarget: "zzmouse:0.9", TmuxPaneID: "%9", Status: session.StatusActive, LastActivity: now}
+	m.applySessionRefresh(sessionRefreshMsg{active: []*session.Session{one, two, real}})
+	if s := m.sidebar.SelectedSession(); s == nil || s.TmuxTarget != "zzmouse:0.9" {
+		t.Errorf("after ID resolved cursor jumped to %+v, want zzmouse:0.9", s)
+	}
+}

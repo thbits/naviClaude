@@ -110,7 +110,7 @@ func (h *Harness) Enrich(s *session.Session) {
 	} else {
 		// No per-PID file usually means the matched PID is a launcher/wrapper;
 		// resolve the ID elsewhere, then recover the name by sessionId.
-		s.ID = extractSessionIDFallback(s.PID, s.CWD)
+		s.ID = extractSessionIDFallback(s.PID, s.CWD, s.TmuxPaneID)
 		if byID, ok := readSessionMetadataByID(s.ID); ok {
 			meta.Name = byID.Name
 			meta.NameSource = byID.NameSource

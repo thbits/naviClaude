@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/thbits/naviClaude/internal/session"
@@ -29,21 +30,102 @@ func sessionFileModTime(sessionID, cwd string) time.Time {
 
 // extractSessionIDFallback attempts to determine the session ID when the
 // ~/.claude/sessions/{pid}.json metadata file is not available.
-func extractSessionIDFallback(pid int, cwd string) string {
+func extractSessionIDFallback(pid int, cwd, paneID string) string {
+	live := liveSessionMetadata()
+	// Claude records its tmux pane, which finds the file when the matched PID is a launcher.
+	if paneID != "" {
+		for _, m := range live {
+			if m.SessionID != "" && tmuxPaneID(m.Tmux) == paneID {
+				return m.SessionID
+			}
+		}
+	}
+
 	// Try command line: "claude --resume <uuid>"
 	cmdLine := fullCommandLine(pid)
 	if id := parseResumeFlag(cmdLine); id != "" {
 		return id
 	}
 
-	// Fall back to most recently modified .jsonl in the project dir.
-	return findLatestSessionFile(cwd)
+	// Guess from transcripts, skipping ones another live pane owns and ones that
+	// predate this process: a just-started session has no transcript of its own yet.
+	claimed := make(map[string]bool)
+	for _, m := range live {
+		if p := tmuxPaneID(m.Tmux); p != "" && p != paneID {
+			claimed[m.SessionID] = true
+		}
+	}
+	return findLatestSessionFile(cwd, processStart(pid), claimed)
+}
+
+// liveSessionMetadata returns the metadata files of Claude processes still running.
+func liveSessionMetadata() []sessionMetadata {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil
+	}
+	dir := filepath.Join(home, ".claude", "sessions")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var live []sessionMetadata
+	for _, e := range entries {
+		stem, ok := strings.CutSuffix(e.Name(), ".json")
+		if e.IsDir() || !ok {
+			continue
+		}
+		pid, err := strconv.Atoi(stem)
+		if err != nil || !processAlive(pid) {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil {
+			continue
+		}
+		live = append(live, parseSessionMetadata(data))
+	}
+	return live
+}
+
+// processAlive reports whether pid exists; EPERM still means it is running.
+func processAlive(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	err := syscall.Kill(pid, 0)
+	return err == nil || err == syscall.EPERM
+}
+
+// tmuxPaneID extracts the "%N" pane id from Claude's "session:@win.%pane" tmux field.
+func tmuxPaneID(tmux string) string {
+	i := strings.LastIndex(tmux, ".%")
+	if i < 0 {
+		return ""
+	}
+	return tmux[i+1:]
+}
+
+// processStart returns when pid started (to the second), or zero if unknown.
+func processStart(pid int) time.Time {
+	cmd := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "lstart=")
+	cmd.Env = append(os.Environ(), "LC_ALL=C")
+	out, err := cmd.Output()
+	if err != nil {
+		return time.Time{}
+	}
+	t, err := time.ParseInLocation("Mon Jan 2 15:04:05 2006", strings.Join(strings.Fields(string(out)), " "), time.Local)
+	if err != nil {
+		return time.Time{}
+	}
+	return t
 }
 
 // sessionMetadata holds fields from ~/.claude/sessions/{pid}.json. Claude Code
 // writes this file per running process and keeps Status live (Claude >= 2.1).
 type sessionMetadata struct {
 	SessionID       string `json:"sessionId"`
+	Tmux            string `json:"tmux"` // "session:@window.%pane" Claude runs in
 	Name            string `json:"name"`
 	NameSource      string `json:"nameSource"`      // "derived" = auto placeholder
 	Status          string `json:"status"`          // busy|waiting|idle|shell
@@ -226,8 +308,9 @@ func parseResumeFlag(cmdLine string) string {
 
 // findLatestSessionFile finds the most recently modified .jsonl file in the
 // Claude projects directory that matches the given CWD, and returns its
-// session UUID (filename stem).
-func findLatestSessionFile(cwd string) string {
+// session UUID (filename stem). Files modified before notBefore or whose UUID
+// is in skip are ignored.
+func findLatestSessionFile(cwd string, notBefore time.Time, skip map[string]bool) string {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return ""
@@ -252,8 +335,11 @@ func findLatestSessionFile(cwd string) string {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
 			continue
 		}
+		if skip[strings.TrimSuffix(e.Name(), ".jsonl")] {
+			continue
+		}
 		info, err := e.Info()
-		if err != nil {
+		if err != nil || info.ModTime().Before(notBefore) {
 			continue
 		}
 		jsonlFiles = append(jsonlFiles, fileEntry{

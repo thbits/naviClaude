@@ -63,6 +63,7 @@ type SidebarModel struct {
 	// Tracked selection: persists across data refreshes and is only updated
 	// by explicit user navigation (j/k, search select, SetCursor, SelectByID).
 	// rebuildGroups uses these to restore the cursor after re-sorting.
+	trackedPaneID string // tmux pane id ("%N"); stable even while a new session's ID settles
 	trackedID     string // session ID the cursor should follow
 	trackedTarget string // tmux target fallback (for placeholder sessions with no ID)
 	trackedGroup  string // group header name fallback
@@ -402,7 +403,19 @@ func (m *SidebarModel) rebuildFlatItems() {
 // a list rebuild. If the session is no longer in the flat list, falls back
 // to clampCursor so the index stays valid.
 func (m *SidebarModel) restoreCursor(id, tmuxTarget, groupName string) {
-	// Best match: both ID and target (handles duplicate IDs across tmux sessions).
+	// A live pane keeps its id while detection refines the session ID, so it
+	// outranks the ID: a new session can briefly borrow another session's ID.
+	if m.trackedPaneID != "" {
+		for i, item := range m.flatItems {
+			if !item.isGroup && item.session != nil && item.session.TmuxPaneID == m.trackedPaneID {
+				m.cursor = i
+				m.updateTracked()
+				m.syncViewport()
+				return
+			}
+		}
+	}
+	// Next best: both ID and target (handles duplicate IDs across tmux sessions).
 	if id != "" && tmuxTarget != "" {
 		for i, item := range m.flatItems {
 			if !item.isGroup && item.session != nil && item.session.ID == id && item.session.TmuxTarget == tmuxTarget {
@@ -750,6 +763,7 @@ func (m *SidebarModel) SetCursor(idx int) {
 // updateTracked saves the current cursor's identity so rebuildGroups can
 // restore it after re-sorting. Only call this after user-initiated navigation.
 func (m *SidebarModel) updateTracked() {
+	m.trackedPaneID = ""
 	m.trackedID = ""
 	m.trackedTarget = ""
 	m.trackedGroup = ""
@@ -760,6 +774,7 @@ func (m *SidebarModel) updateTracked() {
 	if item.isGroup {
 		m.trackedGroup = item.groupName
 	} else if item.session != nil {
+		m.trackedPaneID = item.session.TmuxPaneID
 		m.trackedID = item.session.ID
 		m.trackedTarget = item.session.TmuxTarget
 	}
