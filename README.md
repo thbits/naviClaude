@@ -11,24 +11,27 @@ layers on top of your existing tmux setup instead of replacing it.
 
 - **Session sidebar** -- lists active and recently closed Claude Code sessions, grouped by project
 - **Live preview** -- real-time tmux pane capture of the selected session
-- **Activity sparklines** -- per-session message activity visualization on the selected item
-- **Context usage bar** -- shows current token usage vs context window limit
+- **Live activity line** -- under the selected session, what Claude is doing right now: the tool in flight, its target and the turn time (`⚙ Bash · go test ./... · 42s`), what it is waiting on you for (`needs approval: Edit`, `question: ...`, `plan approval`), or `✓ done 5m ago`, plus any running subagents (`⇉2 agents`) and background shells (`$1 shell`)
+- **Context usage bar** -- current token usage vs the context window (`ctx ━━━──── 62K/1M (6%)`), amber from 60% and red above 85%; the window size is inferred from the model id (1M for Claude 5 models, Fable, Opus and `[1m]` variants, 200K otherwise, bumped if usage already exceeds it)
+- **Branch and changes line** -- the session's git branch and its edited files at a glance (`⎇ main · 3 files +120/−8`)
 - **Breathing status dots** -- active sessions pulse green, waiting sessions pulse amber, a blue `◉` marks a session that finished while you were away
 - **Attention alerts** -- a sound and a colored bell / check after the tmux window name when Claude needs you or finishes, even while naviClaude is closed (see [Notifications](#notifications))
 - **Passthrough mode** -- type directly into a session without leaving the TUI
 - **Changed-files sidebar** -- a right-hand panel listing the files the selected session edited, with per-file `+/-` counts (live `git diff` while uncommitted, a persistent transcript estimate afterwards); open any file in your editor
 - **Fuzzy search** -- filter sessions by name
 - **Session management** -- create new sessions, kill existing ones, and resume closed sessions into any tmux session (or a brand-new one) via a target picker
-- **Detail popup** -- view session metadata (model, project, cost, token counts)
-- **Rich preview header** -- status badge, uptime, message count, CPU/memory
-- **Usage statistics** -- per-project breakdown with bar charts
+- **Detail popup** -- view session metadata (project, CWD, branch, session ID, tmux target, model, Claude Code version, start time / uptime, message count, CPU/memory)
+- **Rich preview header** -- status badge (including what a waiting session waits for), uptime, model (e.g. `Opus 5.5`), CPU/memory
+- **Status title bar** -- one row with live counts of sessions working / needing you / done / idle; the footer shows a few hints for the current mode and `? more` opens the full key list
+- **Attention-first ordering** -- sessions waiting on you, and their groups, always sort to the top
+- **Usage statistics** -- rebuilt from your Claude Code transcripts: sessions, prompts, output and total tokens (each API response counted once; cache reads/writes and subagents included), top projects, prompts per day (per hour for Today), model share and busiest hour, filtered by All time / This week / Today. It only covers transcripts Claude Code still keeps on disk; per-file summaries are cached in `naviclaude/transcript-stats.gob` under your user cache dir (`~/Library/Caches` on macOS) so reopening it is fast
 - **10 built-in color themes** with a live theme picker
 - **Configurable key bindings** and layout options
 - **Auto-collapse** -- idle project groups collapse automatically
 
 ## Requirements
 
-- [tmux](https://github.com/tmux/tmux/wiki) -- naviClaude must be run inside a tmux session (`brew install tmux`)
+- [tmux](https://github.com/tmux/tmux/wiki) 3.2 or newer -- naviClaude must be run inside a tmux session (`brew install tmux`). **tmux 3.8+ is recommended**: 3.7.x redraws popup borders on every status line or pane title redraw, so a popup blinks while Claude works, and 3.8 adds the floating panes naviClaude opens in (see [below](#run-as-a-floating-pane-tmux-38-recommended))
 - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) (`claude`)
 
 ## Installation
@@ -49,13 +52,32 @@ make install
 
 This installs the binary to `~/.local/bin/naviclaude`. Set a custom prefix with `PREFIX=/usr/local make install`.
 
+### Run as a floating pane (tmux 3.8+, recommended)
+
+`naviclaude open` opens the dashboard over the current window: a **modal floating pane** on tmux 3.8 and newer, a `display-popup` on older tmux, so one binding works on every version. Add this to `~/.config/tmux/tmux.conf` to open it with `<prefix> g`:
+
+```tmux
+bind g run-shell -b 'naviclaude open -c "#{client_name}" -t "#{pane_id}"'
+```
+
+- `-b` runs the launcher in the background; `-c` / `-t` tell it which client and pane the key was pressed in (a `run-shell` job has neither of its own).
+- `run-shell` uses the tmux server's `PATH`. If `naviclaude` is not on it, use the full path, e.g. `~/.local/bin/naviclaude open ...`.
+- The pane is centered and sized by `popup_width` / `popup_height` (default 85% x 85% of the window).
+- Pressing `<prefix> g` again while it is open does nothing. If the window already has some other modal pane, the launcher says so in the status line instead.
+- Quit with `q`; jumping to a session (`f`) switches to it and closes naviClaude.
+- Clicks outside the floating pane are ignored rather than closing it, `Esc` stays a naviClaude key, and the tmux prefix still works while it is open.
+- Mouse support (click, wheel, menus) needs `set -g mouse on`.
+- `naviclaude open -popup` forces the `display-popup` behaviour on tmux 3.8 too.
+
 ### Run as a tmux popup
 
-Bind it to a key in `~/.config/tmux/tmux.conf` to open a centered popup with `<prefix> g`:
+`naviclaude open` already falls back to a popup on tmux 3.7 and older, so the binding above works as is. If you prefer a plain popup binding:
 
 ```tmux
 bind g display-popup -E -w 85% -h 85% -x C -y C "naviclaude"
 ```
+
+This binding sets its own size; `popup_width` / `popup_height` only apply to `naviclaude open`. tmux 3.8 gives popups a grey theme by default; naviClaude resets its own popup to your terminal's colours (when a single client is attached to the session), so no tmux.conf change is needed. You can also just run `naviclaude` in any tmux window or pane.
 
 ## Usage
 
@@ -64,6 +86,17 @@ Launch naviClaude from any terminal inside tmux:
 ```
 naviclaude
 ```
+
+Other commands:
+
+```sh
+naviclaude open [-c client] [-t pane] [-popup]   # open over the current window (floating pane or popup)
+naviclaude hooks install | status | uninstall    # attention alerts (see Notifications)
+naviclaude sound request | done                  # preview the alert sounds
+naviclaude --version
+```
+
+The title bar shows live counts (`● 2 working · ◎ 1 needs you · ◉ 1 done · ○ 3 idle`) and the current tmux session. The footer lists only the most useful keys for the current mode; `? more` opens the help overlay with everything.
 
 ### Key bindings
 
@@ -81,10 +114,11 @@ naviclaude
 | `N` | New tmux session (prompts for name) |
 | `r` | Rename session |
 | `K` | Kill session |
-| `F` | Toggle the changed-files sidebar and focus it (`Esc` drops focus but keeps it open) |
+| `F` | Open the changed-files sidebar and focus it; inside it, `F` closes it again (`Esc` drops focus but keeps it open) |
+| `j` / `k` | In the changed-files sidebar, navigate files |
 | `e` / `Enter` | In the changed-files sidebar, open the selected file in your editor |
 | `d` | Detail popup |
-| `s` | Statistics popup |
+| `s` | Statistics popup (`Tab` cycles All time / This week / Today, any other key closes) |
 | `T` | Theme picker |
 | `?` | Help overlay |
 | `q` | Quit |
@@ -99,13 +133,16 @@ All key bindings except navigation and passthrough exit keys are configurable.
 | Double-click a session | Same as `Enter`: focus an active session, open the resume picker for a closed one |
 | Click a group header | Collapse / expand the group |
 | Right-click a session | Open the context menu for that session |
-| Long-press a session (hold ~0.5s) | Open the context menu -- for tmux setups whose `MouseDown3Pane` binding swallows right-click |
+| Long-press a session (hold ~450ms) | Open the context menu -- for tmux setups whose `MouseDown3Pane` binding swallows right-click |
 | Wheel over the session list | Move the selection up / down |
 | Wheel over the preview / changed files | Scroll them |
-| Click the preview / changed files | Focus that pane |
+| Click the preview / changed files | Focus that pane (the preview only for a live session) |
 | Click a hint in the bottom bar | Run that key |
 | Click a menu item / picker row | Run it / select it (click the selected row again to confirm) |
+| Click a filter tab in the statistics popup | Switch to that filter |
 | Click outside a popup or menu | Close it |
+
+Mouse events only reach naviClaude when tmux has `set -g mouse on`.
 
 ## Configuration
 
@@ -154,10 +191,10 @@ remember_group_state: true
 | `sidebar_width` | `30` | Width of the session list panel |
 | `refresh_interval` | `200ms` | How often to refresh session data |
 | `closed_session_hours` | `8` | Show closed sessions from the last N hours |
-| `group_sort_order` | `name` | Sort tmux session groups: `name` (alphabetical) or `activity` |
-| `session_sort_order` | `name` | Sort sessions within groups: `name` (alphabetical) or `activity` |
-| `popup_width` | `85` | Popup width (percentage of terminal) |
-| `popup_height` | `85` | Popup height (percentage of terminal) |
+| `group_sort_order` | `name` | Sort tmux session groups: `name` (alphabetical) or `activity`. Groups with a session waiting on you always come first |
+| `session_sort_order` | `name` | Sort sessions within groups: `name` (alphabetical) or `activity`. Sessions waiting on you always come first |
+| `popup_width` | `85` | Width of the `naviclaude open` floating pane or popup (percentage of the window) |
+| `popup_height` | `85` | Height of the `naviclaude open` floating pane or popup (percentage of the window) |
 | `resume_in_current_session` | `true` | Resume sessions in the current tmux pane |
 | `process_names` | `["claude"]` | Process names to detect as Claude sessions |
 | `collapse_after_hours` | `8` | Auto-collapse groups idle longer than N hours (0 to disable) |
