@@ -39,11 +39,11 @@ func TestActivitySegments(t *testing.T) {
 		{"single agent shows no suffix", active, &session.SessionActivity{Tool: "Agent", Target: "Fix wrong context", TurnStart: ago(2 * time.Minute), Agents: 1},
 			"⚙ Agent · Fix wrong context · 2m"},
 		{"thinking with agents", active, &session.SessionActivity{TurnStart: ago(42 * time.Second), Agents: 3},
-			"⚙ thinking · 42s · ⇉3 agents"},
+			"⚙ thinking · 42s · " + styles.IconAgent + " 3 agents"},
 		{"only background agents left", active, &session.SessionActivity{TurnStart: ago(18 * time.Minute), TurnEnded: true, Agents: 4},
-			"⚙ ⇉4 agents running"},
+			"⚙ " + styles.IconAgent + " 4 agents running"},
 		{"agents and shells left", active, &session.SessionActivity{TurnEnded: true, Agents: 1, Shells: 2},
-			"⚙ ⇉1 agent running · " + styles.IconShell + " 2 shells"},
+			"⚙ " + styles.IconAgent + " 1 agent · " + styles.IconShell + " 2 shells running"},
 		{"only shells left", active, &session.SessionActivity{TurnEnded: true, Shells: 1}, "⚙ " + styles.IconShell + " 1 shell running"},
 		{"working with a shell", active, &session.SessionActivity{Tool: "Read", Target: "a.go", TurnStart: ago(5 * time.Second), Shells: 1},
 			"⚙ Read · a.go · 5s · " + styles.IconShell + " 1 shell"},
@@ -61,7 +61,7 @@ func TestActivitySegments(t *testing.T) {
 		{"done", &session.Session{Status: session.StatusIdle, LastActivity: ago(time.Hour)},
 			&session.SessionActivity{LastAssistant: ago(5 * time.Minute)}, "✓ done 5m ago"},
 		{"done just now with background agent", &session.Session{Status: session.StatusIdle},
-			&session.SessionActivity{LastAssistant: ago(10 * time.Second), Agents: 1}, "✓ done just now · ⇉1 agent"},
+			&session.SessionActivity{LastAssistant: ago(10 * time.Second), Agents: 1}, "✓ done just now · " + styles.IconAgent + " 1 agent"},
 		{"done falls back to last activity", &session.Session{Status: session.StatusIdle, Summary: "fix it", LastActivity: ago(3 * time.Hour)}, nil,
 			"✓ done 3h ago"},
 		{"new session before any transcript", &session.Session{Status: session.StatusIdle, LastActivity: ago(time.Second)}, nil,
@@ -85,7 +85,7 @@ func TestRenderSegmentsShrinksTarget(t *testing.T) {
 	segs := activitySegments(&session.Session{Status: session.StatusActive},
 		&session.SessionActivity{Tool: "Bash", Target: "go test -race -count=1 ./internal/...", TurnStart: now.Add(-42 * time.Second), Agents: 3}, now)
 	got := ansi.Strip(renderSegments(segs, styles.ColorSelectionDim, 32))
-	if want := "⚙ Bash · go t… · 42s · ⇉3 agents"; got != want {
+	if want := "⚙ Bash · go … · 42s · " + styles.IconAgent + " 3 agents"; got != want {
 		t.Errorf("got %q (%d cells), want %q", got, ansi.StringWidth(got), want)
 	}
 	if got := ansi.StringWidth(renderSegments(segs, styles.ColorSelectionDim, 12)); got > 12 {
@@ -326,8 +326,8 @@ func TestCtxLimitResolvedAtRender(t *testing.T) {
 	}
 }
 
-// Background shells show on every row, not only the selected one.
-func TestShellBadgeOnUnselectedRows(t *testing.T) {
+// Running agents and shells show on every row, not only the selected one.
+func TestBackgroundLineOnUnselectedRows(t *testing.T) {
 	const width = 35
 	sb := NewSidebar(width, 30)
 	sb.SetSize(width, 30)
@@ -338,11 +338,11 @@ func TestShellBadgeOnUnselectedRows(t *testing.T) {
 	}
 	sb.SetSessions([]*session.Session{mk("1"), mk("2")})
 	sb.SetCursor(1)
-	sb.SetShells(map[string]int{"2": 3})
+	sb.SetBackground(map[string]session.Background{"2": {Agents: 2, Shells: 1}})
 
 	body := ansi.Strip(sb.View())
-	if !strings.Contains(body, styles.IconShell+" 3") {
-		t.Errorf("unselected row lacks the shell badge:\n%s", body)
+	if want := styles.IconAgent + " 2 agents · " + styles.IconShell + " 1 shell"; !strings.Contains(body, want) {
+		t.Errorf("unselected row lacks %q:\n%s", want, body)
 	}
 	for i, l := range strings.Split(sb.View(), "\n") {
 		if w := ansi.StringWidth(l); w > width {

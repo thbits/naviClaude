@@ -82,11 +82,8 @@ func activitySegments(s *session.Session, a *session.SessionActivity, now time.T
 		}
 		if a.Tool == "" && a.TurnEnded && (a.Agents > 0 || a.Shells > 0) {
 			// The main thread is done; the pane stays busy only for background work.
-			if a.Agents == 0 {
-				return append(segs, seg(fmt.Sprintf("%s %d %s running", styles.IconShell, a.Shells, plural(a.Shells, "shell")), styles.ColorCyan))
-			}
-			segs = append(segs, seg(fmt.Sprintf("⇉%d %s running", a.Agents, plural(a.Agents, "agent")), styles.ColorPurple))
-			return append(segs, shellSegments(a)...)
+			segs = append(segs, backgroundSegments(session.Background{Agents: a.Agents, Shells: a.Shells})...)
+			return append(segs, seg(" running", styles.ColorGray))
 		}
 		if a.Tool != "" {
 			displayedAgent = a.Tool == "Agent" || a.Tool == "Task"
@@ -114,21 +111,31 @@ func activitySegments(s *session.Session, a *session.SessionActivity, now time.T
 		segs = []segment{seg("✓ ", styles.ColorBlue), seg("done "+agoText(done, now), gray)}
 	}
 
-	if a != nil && a.Agents > 0 && !(displayedAgent && a.Agents == 1) {
-		segs = append(segs, seg(fmt.Sprintf(" · ⇉%d %s", a.Agents, plural(a.Agents, "agent")), styles.ColorPurple))
-	}
 	if a != nil {
-		segs = append(segs, shellSegments(a)...)
+		bg := session.Background{Agents: a.Agents, Shells: a.Shells}
+		if displayedAgent && bg.Agents == 1 {
+			bg.Agents = 0 // the one agent is already the tool shown
+		}
+		if bgSegs := backgroundSegments(bg); len(bgSegs) > 0 {
+			segs = append(append(segs, seg(" · ", gray)), bgSegs...)
+		}
 	}
 	return segs
 }
 
-// shellSegments renders " ·  2 shells" for background shell commands still running.
-func shellSegments(a *session.SessionActivity) []segment {
-	if a.Shells == 0 {
-		return nil
+// backgroundSegments renders "󰚩 2 agents ·  1 shell", leaving out a zero count.
+func backgroundSegments(bg session.Background) []segment {
+	var segs []segment
+	if bg.Agents > 0 {
+		segs = append(segs, seg(fmt.Sprintf("%s %d %s", styles.IconAgent, bg.Agents, plural(bg.Agents, "agent")), styles.ColorPurple))
 	}
-	return []segment{seg(fmt.Sprintf(" · %s %d %s", styles.IconShell, a.Shells, plural(a.Shells, "shell")), styles.ColorCyan)}
+	if bg.Shells > 0 {
+		if len(segs) > 0 {
+			segs = append(segs, seg(" · ", styles.ColorGray))
+		}
+		segs = append(segs, seg(fmt.Sprintf("%s %d %s", styles.IconShell, bg.Shells, plural(bg.Shells, "shell")), styles.ColorCyan))
+	}
+	return segs
 }
 
 func plural(n int, noun string) string {

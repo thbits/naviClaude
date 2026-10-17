@@ -80,15 +80,15 @@ func (m *Model) applySidebarDetail(msg sidebarDetailMsg) {
 	}
 }
 
-// shellCountsMsg carries the running background shell count of every live session.
-type shellCountsMsg map[string]int
+// backgroundMsg carries the running subagents and shells of every live session.
+type backgroundMsg map[string]session.Background
 
-// shellsInflight keeps one shell-count scan running at a time.
-var shellsInflight atomic.Bool
+// backgroundInflight keeps one background-count scan running at a time.
+var backgroundInflight atomic.Bool
 
-// shellCountsCmd counts background shells for every live session, so each
-// sidebar row can show them. Transcript tails are cached, so this is mostly stats.
-func (m *Model) shellCountsCmd() tea.Cmd {
+// backgroundCmd counts running subagents and shells for every live session, so
+// each sidebar row can show them. Transcript tails are cached, so this is mostly stats.
+func (m *Model) backgroundCmd() tea.Cmd {
 	type job struct {
 		h    harness.ActivityProvider
 		snap session.Session
@@ -103,14 +103,14 @@ func (m *Model) shellCountsCmd() tea.Cmd {
 		}
 	}
 	return func() tea.Msg {
-		if !shellsInflight.CompareAndSwap(false, true) {
+		if !backgroundInflight.CompareAndSwap(false, true) {
 			return nil
 		}
-		defer shellsInflight.Store(false)
-		counts := shellCountsMsg{}
+		defer backgroundInflight.Store(false)
+		counts := backgroundMsg{}
 		for _, j := range jobs {
-			if a, _ := j.h.LoadActivity(&j.snap); a != nil && a.Shells > 0 {
-				counts[j.snap.ID] = a.Shells
+			if a, _ := j.h.LoadActivity(&j.snap); a != nil && (a.Agents > 0 || a.Shells > 0) {
+				counts[j.snap.ID] = session.Background{Agents: a.Agents, Shells: a.Shells}
 			}
 		}
 		return counts

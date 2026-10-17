@@ -50,6 +50,12 @@ type SessionActivity struct {
 	Model         string    // model id of the latest main-thread assistant record ("" when none in the tail)
 }
 
+// Background counts the subagents and background shells a session has running.
+type Background struct {
+	Agents int
+	Shells int
+}
+
 // ChangedFile is a file the session edited, with line counts estimated from the
 // transcript unless replaced by a live git diff (see GitDiffStats).
 type ChangedFile struct {

@@ -11,7 +11,8 @@ layers on top of your existing tmux setup instead of replacing it.
 
 - **Session sidebar** -- lists active and recently closed Claude Code sessions, grouped by project
 - **Live preview** -- real-time tmux pane capture of the selected session
-- **Live activity line** -- under the selected session, what Claude is doing right now: the tool in flight, its target and the turn time (`⚙ Bash · go test ./... · 42s`), what it is waiting on you for (`needs approval: Edit`, `question: ...`, `plan approval`), or `✓ done 5m ago`, plus any running subagents (`⇉2 agents`) and background shells (` 1 shell`, a Nerd Font glyph; the count also shows on every session row)
+- **Live activity line** -- under the selected session, what Claude is doing right now: the tool in flight, its target and the turn time (`⚙ Bash · go test ./... · 42s`), what it is waiting on you for (`needs approval: Edit`, `question: ...`, `plan approval`), or `✓ done 5m ago`, plus any running subagents and background shells (`󰚩 2 agents ·  1 shell`, Nerd Font glyphs)
+- **Background work on every row** -- sessions you are not on show the same `󰚩 2 agents ·  1 shell` line under their summary while anything is still running
 - **Context usage bar** -- current token usage vs the context window (`ctx ━━━──── 62K/1M (6%)`), amber from 60% and red above 85%; the window size is inferred from the model id (1M for Claude 5 models, Fable, Opus and `[1m]` variants, 200K otherwise, bumped if usage already exceeds it)
 - **Repo, branch and changes line** -- the session's git repo, branch and its edited files at a glance (` naviClaude ⎇ main · 3 files +120/−8`); the repo name is dropped when the pane is too narrow for both
 - **Breathing status dots** -- active sessions pulse green, waiting sessions pulse amber, a blue `◉` marks a session that finished while you were away
