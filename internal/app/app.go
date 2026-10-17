@@ -866,12 +866,8 @@ func (m Model) View() string {
 	}
 
 	if m.contextMenu.IsVisible() {
-		// The context menu positions itself via MarginLeft/MarginTop; overlayString
-		// composites it onto the screen at that position. (A prior lipgloss.Place
-		// call here was dead -- its result was immediately overwritten by
-		// overlayString -- so it has been removed.)
-		menuView := m.contextMenu.View()
-		screen = overlayString(screen, menuView, m.width, m.height)
+		x, y, _, _ := m.contextMenu.Rect()
+		screen = ui.PlaceOverlayAt(screen, m.contextMenu.View(), x, y)
 	}
 
 	return screen
@@ -2671,42 +2667,6 @@ func copyToClipboard(text string) {
 	cmd = exec.Command("xsel", "--clipboard", "--input")
 	cmd.Stdin = strings.NewReader(text)
 	_ = cmd.Run()
-}
-
-// overlayString composites the overlay text on top of the base text.
-// This is a simplified overlay: it just returns base with overlay appended
-// since lipgloss.Place handles proper centering for the help popup.
-// For the context menu which uses margin-based positioning, we simply
-// return the base as the menu is rendered via margin offsets.
-func overlayString(base, overlay string, width, height int) string {
-	// For Phase 1, the context menu is rendered below the main screen.
-	// A proper overlay compositing can be added in Phase 2. For now,
-	// we split both strings into lines and composite them.
-	baseLines := strings.Split(base, "\n")
-	overlayLines := strings.Split(overlay, "\n")
-
-	// Pad base to fill height.
-	for len(baseLines) < height {
-		baseLines = append(baseLines, "")
-	}
-
-	// The overlay uses MarginTop/MarginLeft for positioning. Parse the
-	// overlay to find its actual content position. For simplicity in Phase 1,
-	// render the overlay starting from its margin position.
-	// Since lipgloss renders margins as leading newlines/spaces, the overlay
-	// lines already contain the positioning. We just need to composite.
-	for i, line := range overlayLines {
-		if i < len(baseLines) && strings.TrimSpace(line) != "" {
-			baseLines[i] = line
-		}
-	}
-
-	// Truncate to height.
-	if len(baseLines) > height {
-		baseLines = baseLines[:height]
-	}
-
-	return strings.Join(baseLines, "\n")
 }
 
 // maybeRestoreLastSession re-selects the session focused when the app last

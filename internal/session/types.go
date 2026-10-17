@@ -47,6 +47,7 @@ type SessionActivity struct {
 	LastAssistant time.Time // timestamp of the latest assistant record
 	TurnEnded     bool      // the latest turn finished; only background work may remain
 	Agents        int       // subagents still running, foreground or background
+	Shells        int       // background shell commands still running
 	TokensUsed    int       // context fill from the latest assistant usage in the tail
 	Model         string    // model id of the latest main-thread assistant record ("" when none in the tail)
 }

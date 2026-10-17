@@ -66,3 +66,14 @@ func TestPlaceOverlayWideRuneStraddle(t *testing.T) {
 		t.Errorf("popup XX missing from composited line %q", line)
 	}
 }
+
+// A positioned popup must cover only its own cells, keeping the rows' content
+// on both sides of it.
+func TestPlaceOverlayAtKeepsSurroundingContent(t *testing.T) {
+	bg := strings.Join([]string{"aaaaaaaaaa", "bbbbbbbbbb", "cccccccccc", "dddddddddd"}, "\n")
+	got := PlaceOverlayAt(bg, "XX\nYY", 3, 1)
+	want := strings.Join([]string{"aaaaaaaaaa", "bbbXXbbbbb", "cccYYccccc", "dddddddddd"}, "\n")
+	if got != want {
+		t.Errorf("got\n%s\nwant\n%s", got, want)
+	}
+}

@@ -20,7 +20,26 @@ func PlaceOverlay(bg, fg string) string {
 
 	// Measure bg width from the first line.
 	bgW := lipgloss.Width(bgLines[0])
-	startX, startY, fgW, _ := OverlayRect(bgW, len(bgLines), fg)
+	startX, startY, _, _ := OverlayRect(bgW, len(bgLines), fg)
+	return PlaceOverlayAt(bg, fg, startX, startY)
+}
+
+// PlaceOverlayAt draws fg over bg with its top-left corner at column x, row y,
+// keeping the bg content on either side of the popup.
+func PlaceOverlayAt(bg, fg string, x, y int) string {
+	bgLines := strings.Split(bg, "\n")
+	fgLines := strings.Split(fg, "\n")
+	if len(bgLines) == 0 || len(fgLines) == 0 {
+		return bg
+	}
+	bgW := lipgloss.Width(bgLines[0])
+	startX, startY := x, y
+	fgW := 0
+	for _, l := range fgLines {
+		if lw := lipgloss.Width(l); lw > fgW {
+			fgW = lw
+		}
+	}
 
 	for i, fgLine := range fgLines {
 		bgRow := startY + i

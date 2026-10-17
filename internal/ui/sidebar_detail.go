@@ -80,9 +80,13 @@ func activitySegments(s *session.Session, a *session.SessionActivity, now time.T
 			segs = append(segs, seg("working", styles.ColorFg))
 			break
 		}
-		if a.Tool == "" && a.TurnEnded && a.Agents > 0 {
-			// The main thread is done; the pane stays busy only for its agents.
-			return append(segs, seg(fmt.Sprintf("⇉%d %s running", a.Agents, agentNoun(a.Agents)), styles.ColorPurple))
+		if a.Tool == "" && a.TurnEnded && (a.Agents > 0 || a.Shells > 0) {
+			// The main thread is done; the pane stays busy only for background work.
+			if a.Agents == 0 {
+				return append(segs, seg(fmt.Sprintf("$%d %s running", a.Shells, plural(a.Shells, "shell")), styles.ColorCyan))
+			}
+			segs = append(segs, seg(fmt.Sprintf("⇉%d %s running", a.Agents, plural(a.Agents, "agent")), styles.ColorPurple))
+			return append(segs, shellSegments(a)...)
 		}
 		if a.Tool != "" {
 			displayedAgent = a.Tool == "Agent" || a.Tool == "Task"
@@ -111,16 +115,27 @@ func activitySegments(s *session.Session, a *session.SessionActivity, now time.T
 	}
 
 	if a != nil && a.Agents > 0 && !(displayedAgent && a.Agents == 1) {
-		segs = append(segs, seg(fmt.Sprintf(" · ⇉%d %s", a.Agents, agentNoun(a.Agents)), styles.ColorPurple))
+		segs = append(segs, seg(fmt.Sprintf(" · ⇉%d %s", a.Agents, plural(a.Agents, "agent")), styles.ColorPurple))
+	}
+	if a != nil {
+		segs = append(segs, shellSegments(a)...)
 	}
 	return segs
 }
 
-func agentNoun(n int) string {
-	if n == 1 {
-		return "agent"
+// shellSegments renders " · $2 shells" for background shell commands still running.
+func shellSegments(a *session.SessionActivity) []segment {
+	if a.Shells == 0 {
+		return nil
 	}
-	return "agents"
+	return []segment{seg(fmt.Sprintf(" · $%d %s", a.Shells, plural(a.Shells, "shell")), styles.ColorCyan)}
+}
+
+func plural(n int, noun string) string {
+	if n == 1 {
+		return noun
+	}
+	return noun + "s"
 }
 
 // waitsOnUser reports tools that block on the user by design, whatever the

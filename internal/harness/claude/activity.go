@@ -171,7 +171,8 @@ var notificationToolUseID = regexp.MustCompile(`<tool-use-id>([^<]+)</tool-use-i
 func parseActivity(data []byte, truncated bool) (act session.SessionActivity, sawTurn bool) {
 	var (
 		pending   []pendingTool
-		async     = map[string]bool{} // background agents awaiting a completion notification
+		async     = map[string]bool{}   // background agents awaiting a completion notification
+		shells    = map[string]string{} // background shell task id -> its tool_use id
 		turnOpen  bool
 		answered  bool // an assistant record followed the turn's start
 		earliest  time.Time
@@ -187,11 +188,20 @@ func parseActivity(data []byte, truncated bool) (act session.SessionActivity, sa
 		sawTurn = true
 		pending = nil // tools from an abandoned turn never get results
 	}
-	agentNotified := func(text string) {
+	taskNotified := func(text string) {
 		if m := notificationToolUseID.FindStringSubmatch(text); m != nil {
 			delete(async, m[1])
+			for task, id := range shells {
+				if id == m[1] {
+					delete(shells, task)
+					return
+				}
+			}
 		}
-		bgDoneAft++
+		// A shell launched before the tail window is only recognisable by its summary.
+		if !strings.Contains(text, "<summary>Background command") {
+			bgDoneAft++
+		}
 	}
 
 	for _, line := range bytes.Split(data, []byte{'\n'}) {
@@ -216,7 +226,7 @@ func parseActivity(data []byte, truncated bool) (act session.SessionActivity, sa
 			var text string
 			if a := rec.Attachment; a != nil && a.Type == "queued_command" && json.Unmarshal(a.Prompt, &text) == nil &&
 				strings.HasPrefix(strings.TrimSpace(text), "<task-notification>") {
-				agentNotified(text)
+				taskNotified(text)
 			}
 
 		case "system":
@@ -254,6 +264,15 @@ func parseActivity(data []byte, truncated bool) (act session.SessionActivity, sa
 				continue
 			}
 			for _, b := range blocks {
+				if b.Type == "tool_use" && (b.Name == "TaskStop" || b.Name == "KillShell") {
+					var in struct {
+						TaskID  string `json:"task_id"`
+						ShellID string `json:"shell_id"`
+					}
+					_ = json.Unmarshal(b.Input, &in)
+					delete(shells, in.TaskID)
+					delete(shells, in.ShellID)
+				}
 				if b.Type == "tool_use" && b.ID != "" {
 					name, target := toolSummary(b.Name, b.Input)
 					pending = append(pending, pendingTool{id: b.ID, name: name, target: target})
@@ -266,7 +285,7 @@ func parseActivity(data []byte, truncated bool) (act session.SessionActivity, sa
 				continue
 			}
 			text, results := userContent(msg.Content)
-			launched := isAsyncLaunch(rec.ToolUseResult)
+			launched, shellTask := asyncLaunch(rec.ToolUseResult)
 			for _, id := range results {
 				for i, p := range pending {
 					if p.id != id {
@@ -274,6 +293,9 @@ func parseActivity(data []byte, truncated bool) (act session.SessionActivity, sa
 					}
 					if launched && isAgentTool(p.name) {
 						async[id] = true
+					}
+					if shellTask != "" && p.name == "Bash" {
+						shells[shellTask] = id
 					}
 					pending = append(pending[:i], pending[i+1:]...)
 					break
@@ -283,7 +305,7 @@ func parseActivity(data []byte, truncated bool) (act session.SessionActivity, sa
 			switch {
 			case text == "":
 			case strings.HasPrefix(text, "<task-notification>"):
-				agentNotified(text)
+				taskNotified(text)
 				// Mid-turn notifications are folded into the running turn.
 				if !turnOpen || !answered {
 					startTurn(ts)
@@ -320,6 +342,7 @@ func parseActivity(data []byte, truncated bool) (act session.SessionActivity, sa
 		bg = floor
 	}
 	act.Agents += bg
+	act.Shells = len(shells)
 	return act, sawTurn
 }
 
@@ -346,16 +369,21 @@ func userContent(raw json.RawMessage) (text string, results []string) {
 	return sb.String(), results
 }
 
-// isAsyncLaunch reports whether a tool result says an agent was started in the
-// background (its tool_result arrives immediately, long before it finishes).
-func isAsyncLaunch(raw json.RawMessage) bool {
+// asyncLaunch reports whether a tool result says an agent was started in the
+// background, and the task id of a backgrounded shell command; both results
+// arrive immediately, long before the work finishes.
+func asyncLaunch(raw json.RawMessage) (agent bool, shellTask string) {
 	if len(raw) == 0 || raw[0] != '{' {
-		return false
+		return false, ""
 	}
 	var r struct {
-		IsAsync bool `json:"isAsync"`
+		IsAsync          bool   `json:"isAsync"`
+		BackgroundTaskID string `json:"backgroundTaskId"`
 	}
-	return json.Unmarshal(raw, &r) == nil && r.IsAsync
+	if json.Unmarshal(raw, &r) != nil {
+		return false, ""
+	}
+	return r.IsAsync, r.BackgroundTaskID
 }
 
 func isAgentTool(name string) bool { return name == "Agent" || name == "Task" }

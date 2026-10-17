@@ -69,6 +69,46 @@ func queuedNotification(sec int, id string) string {
 	}})
 }
 
+func bgShellResult(sec int, id, task string) string {
+	return jl(map[string]any{"type": "user", "timestamp": ats(sec), "toolUseResult": map[string]any{"backgroundTaskId": task},
+		"message": map[string]any{"role": "user", "content": []any{map[string]any{"type": "tool_result", "tool_use_id": id, "content": "ok"}}}})
+}
+
+func shellNotification(sec int, id string) string {
+	return prompt(sec, "<task-notification>\n<task-id>b1</task-id>\n<tool-use-id>"+id+"</tool-use-id>\n<status>completed</status>\n<summary>Background command \"x\" completed</summary>\n</task-notification>")
+}
+
+func TestLoadActivityShells(t *testing.T) {
+	bash := func(sec int, id string) string {
+		return toolUse(sec, id, "Bash", map[string]any{"command": "make watch", "run_in_background": true})
+	}
+	tests := []struct {
+		name           string
+		lines          []string
+		shells, agents int
+	}{
+		{"running shells count", []string{prompt(0, "go"), bash(1, "s1"), bgShellResult(1, "s1", "b1"),
+			bash(2, "s2"), bgShellResult(2, "s2", "b2"), assistantText(3, "ok"), turnEnd(4, 0)}, 2, 0},
+		{"notification clears a shell", []string{prompt(0, "go"), bash(1, "s1"), bgShellResult(1, "s1", "b1"),
+			assistantText(3, "ok"), turnEnd(4, 0), shellNotification(9, "s1")}, 0, 0},
+		{"TaskStop clears a shell", []string{prompt(0, "go"), bash(1, "s1"), bgShellResult(1, "s1", "b1"),
+			toolUse(2, "k1", "TaskStop", map[string]any{"task_id": "b1"})}, 0, 0},
+		{"shell notification leaves the agent floor alone", []string{prompt(0, "go"), assistantText(1, "ok"), turnEnd(2, 1),
+			shellNotification(5, "gone")}, 0, 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := LoadActivity(writeTranscript(t, tt.lines...))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Shells != tt.shells || got.Agents != tt.agents {
+				t.Errorf("shells/agents = %d/%d, want %d/%d", got.Shells, got.Agents, tt.shells, tt.agents)
+			}
+		})
+	}
+}
+
 func sidechain(sec int, id, name string) string {
 	return jl(map[string]any{"type": "assistant", "isSidechain": true, "timestamp": ats(sec), "message": map[string]any{
 		"content": []any{map[string]any{"type": "tool_use", "id": id, "name": name, "input": map[string]any{"command": "ls"}}},

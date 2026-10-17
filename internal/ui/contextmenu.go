@@ -296,15 +296,10 @@ func (m *ContextMenuModel) SetCursor(idx int) {
 	}
 }
 
-// View renders the context menu at its clamped x,y position.
+// View renders the bare menu box; Rect gives where it belongs on screen.
 func (m ContextMenuModel) View() string {
 	if !m.visible || len(m.items) == 0 {
 		return ""
 	}
-	menu := m.renderBox()
-	x, y, _, _ := m.place(menu)
-	return lipgloss.NewStyle().
-		MarginLeft(x).
-		MarginTop(y).
-		Render(menu)
+	return m.renderBox()
 }
