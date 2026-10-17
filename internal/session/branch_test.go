@@ -3,6 +3,7 @@ package session
 import (
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -12,16 +13,16 @@ import (
 func TestCurrentBranchCachesPerCWD(t *testing.T) {
 	calls := 0
 	orig := branchLookup
-	branchLookup = func(cwd string) (string, bool) {
+	branchLookup = func(cwd string) (GitRef, bool) {
 		calls++
-		return "main", true
+		return GitRef{Repo: "repo", Branch: "main"}, true
 	}
 	t.Cleanup(func() { branchLookup = orig })
 
 	cwd := t.TempDir()
 	for i := 0; i < 3; i++ {
-		if b, ok := CurrentBranch(cwd); b != "main" || !ok {
-			t.Fatalf("CurrentBranch = %q, %v", b, ok)
+		if r, ok := CurrentBranch(cwd); r.Branch != "main" || !ok {
+			t.Fatalf("CurrentBranch = %+v, %v", r, ok)
 		}
 	}
 	if calls != 1 {
@@ -38,10 +39,10 @@ func TestCurrentBranchDedupesConcurrentMisses(t *testing.T) {
 	var calls atomic.Int32
 	release := make(chan struct{})
 	orig := branchLookup
-	branchLookup = func(cwd string) (string, bool) {
+	branchLookup = func(cwd string) (GitRef, bool) {
 		calls.Add(1)
 		<-release
-		return "feature", true
+		return GitRef{Branch: "feature"}, true
 	}
 	t.Cleanup(func() { branchLookup = orig })
 
@@ -53,7 +54,8 @@ func TestCurrentBranchDedupesConcurrentMisses(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			b, ok := CurrentBranch(cwd)
+			r, ok := CurrentBranch(cwd)
+			b := r.Branch
 			if !ok {
 				b = "!ok"
 			}
@@ -107,12 +109,25 @@ func TestGitCurrentBranch(t *testing.T) {
 	if _, ok := gitCurrentBranch(dir); ok {
 		t.Fatal("a plain directory is not a git repo")
 	}
-	cmd := exec.Command("git", "init", "-q", "-b", "feature-x", dir)
+	repo := filepath.Join(dir, "my-repo")
+	cmd := exec.Command("git", "init", "-q", "-b", "feature-x", repo)
 	cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null")
 	if err := cmd.Run(); err != nil {
 		t.Skipf("git init: %v", err)
 	}
-	if b, ok := gitCurrentBranch(dir); !ok || b != "feature-x" {
-		t.Errorf("gitCurrentBranch = %q, %v; want feature-x", b, ok)
+	if r, ok := gitCurrentBranch(repo); !ok || r != (GitRef{Repo: "my-repo", Branch: "feature-x"}) {
+		t.Errorf("gitCurrentBranch = %+v, %v; want my-repo/feature-x", r, ok)
+	}
+}
+
+func TestRepoName(t *testing.T) {
+	for in, want := range map[string]string{
+		"/src/naviClaude/.git":  "naviClaude",
+		"/src/naviClaude/.git/": "naviClaude",
+		"/srv/bare.git":         "bare",
+	} {
+		if got := repoName(in); got != want {
+			t.Errorf("repoName(%q) = %q, want %q", in, got, want)
+		}
 	}
 }

@@ -2,6 +2,7 @@ package app
 
 import (
 	"sync"
+	"sync/atomic"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/thbits/naviClaude/internal/harness"
@@ -14,7 +15,7 @@ type sidebarDetailMsg struct {
 	sessionID string
 	activity  *session.SessionActivity
 	cwd       string
-	branch    string
+	ref       session.GitRef
 	inRepo    bool
 }
 
@@ -58,7 +59,7 @@ func loadSidebarDetailCmd(h harness.Harness, sess *session.Session) tea.Cmd {
 		if ap, ok := harness.AsActivity(h); ok && snap.Status != session.StatusClosed {
 			msg.activity, _ = ap.LoadActivity(&snap)
 		}
-		msg.branch, msg.inRepo = session.CurrentBranch(snap.CWD)
+		msg.ref, msg.inRepo = session.CurrentBranch(snap.CWD)
 		return msg
 	}
 }
@@ -73,8 +74,45 @@ func (m *Model) sidebarDetailCmd() tea.Cmd {
 }
 
 func (m *Model) applySidebarDetail(msg sidebarDetailMsg) {
-	m.sidebar.SetBranch(msg.cwd, msg.branch, msg.inRepo)
+	m.sidebar.SetBranch(msg.cwd, msg.ref, msg.inRepo)
 	if sel := m.sidebar.SelectedSession(); sel != nil && sel.ID == msg.sessionID {
 		m.sidebar.SetActivity(msg.sessionID, msg.activity)
+	}
+}
+
+// shellCountsMsg carries the running background shell count of every live session.
+type shellCountsMsg map[string]int
+
+// shellsInflight keeps one shell-count scan running at a time.
+var shellsInflight atomic.Bool
+
+// shellCountsCmd counts background shells for every live session, so each
+// sidebar row can show them. Transcript tails are cached, so this is mostly stats.
+func (m *Model) shellCountsCmd() tea.Cmd {
+	type job struct {
+		h    harness.ActivityProvider
+		snap session.Session
+	}
+	var jobs []job
+	for _, s := range m.sessions {
+		if s.ID == "" || s.Status == session.StatusClosed {
+			continue
+		}
+		if ap, ok := harness.AsActivity(m.harnessFor(s)); ok {
+			jobs = append(jobs, job{ap, *s})
+		}
+	}
+	return func() tea.Msg {
+		if !shellsInflight.CompareAndSwap(false, true) {
+			return nil
+		}
+		defer shellsInflight.Store(false)
+		counts := shellCountsMsg{}
+		for _, j := range jobs {
+			if a, _ := j.h.LoadActivity(&j.snap); a != nil && a.Shells > 0 {
+				counts[j.snap.ID] = a.Shells
+			}
+		}
+		return counts
 	}
 }

@@ -412,6 +412,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if cmd := m.sidebarDetailCmd(); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
+		cmds = append(cmds, m.shellCountsCmd())
 		return m, tea.Batch(cmds...)
 
 	case tickResourceMsg:
@@ -485,6 +486,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case sidebarDetailMsg:
 		m.applySidebarDetail(msg)
+		return m, nil
+
+	case shellCountsMsg:
+		m.sidebar.SetShells(msg)
 		return m, nil
 
 	case editorDoneMsg:

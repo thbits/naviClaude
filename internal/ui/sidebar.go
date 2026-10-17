@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"maps"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -71,7 +72,8 @@ type SidebarModel struct {
 	// load for a previous selection never renders under the current one.
 	activity       *session.SessionActivity
 	activityID     string
-	branches       map[string]string // cwd -> branch, git repos only
+	branches       map[string]session.GitRef // cwd -> repo and branch, git repos only
+	shells         map[string]int            // session ID -> running background shells
 	changedFiles   []session.ChangedFile
 	changedFilesID string
 
@@ -163,24 +165,58 @@ func (m *SidebarModel) SetActivity(sessionID string, a *session.SessionActivity)
 	m.syncViewport()
 }
 
-// SetBranch records cwd's current git branch; inRepo false drops it so the
+// SetBranch records cwd's git repo and branch; inRepo false drops it so the
 // repo line is omitted.
-func (m *SidebarModel) SetBranch(cwd, branch string, inRepo bool) {
+func (m *SidebarModel) SetBranch(cwd string, ref session.GitRef, inRepo bool) {
 	if cwd == "" {
 		return
 	}
-	if old, had := m.branches[cwd]; had == inRepo && old == branch {
+	if old, had := m.branches[cwd]; had == inRepo && old == ref {
 		return
 	}
 	if m.branches == nil {
-		m.branches = make(map[string]string)
+		m.branches = make(map[string]session.GitRef)
 	}
 	if inRepo {
-		m.branches[cwd] = branch
+		m.branches[cwd] = ref
 	} else {
 		delete(m.branches, cwd)
 	}
 	m.syncViewport()
+}
+
+// SetShells records the running background shell count of every session, so
+// rows other than the selected one can show it too.
+func (m *SidebarModel) SetShells(counts map[string]int) {
+	if maps.Equal(m.shells, counts) {
+		return
+	}
+	m.shells = counts
+	m.syncViewport()
+}
+
+// shellCount prefers the selected session's live activity, which is fresher.
+func (m SidebarModel) shellCount(s *session.Session) int {
+	if s.ID == "" || s.Status == session.StatusClosed {
+		return 0
+	}
+	if m.activityID == s.ID && m.activity != nil {
+		return m.activity.Shells
+	}
+	return m.shells[s.ID]
+}
+
+// shellBadge renders " 2" for rows with background shells running, or "".
+func (m SidebarModel) shellBadge(s *session.Session, bg lipgloss.Color) string {
+	n := m.shellCount(s)
+	if n == 0 {
+		return ""
+	}
+	st := lipgloss.NewStyle().Foreground(styles.ColorCyan)
+	if bg != "" {
+		st = st.Background(bg)
+	}
+	return st.Render(fmt.Sprintf("%s %d ", styles.IconShell, n))
 }
 
 // SetChangedFiles records the files the session with the given ID edited, as
@@ -935,7 +971,8 @@ func (m SidebarModel) renderSessionItem(s *session.Session, isCursor bool) []str
 
 	// Truncate display name if needed. Rune/display-width aware so multibyte
 	// names are never split mid-rune; an ellipsis marks the cut.
-	maxNameWidth := m.width - 10
+	shellsWidth := lipgloss.Width(m.shellBadge(s, ""))
+	maxNameWidth := m.width - 10 - shellsWidth
 	if maxNameWidth < 8 {
 		maxNameWidth = 8
 	}
@@ -965,7 +1002,7 @@ func (m SidebarModel) renderSessionItem(s *session.Session, isCursor bool) []str
 		}
 		iconStyled := sessionIconWithBg(s, selBg, m.breathingFrame)
 		nameStyled := lipgloss.NewStyle().Foreground(styles.ColorBlue).Background(selBg).Bold(true).Render(displayName)
-		timeStyled := lipgloss.NewStyle().Foreground(styles.ColorGray).Background(selBg).Render(relTime)
+		timeStyled := m.shellBadge(s, selBg) + lipgloss.NewStyle().Foreground(styles.ColorGray).Background(selBg).Render(relTime)
 
 		innerWidth := m.width - 2 // PaddingLeft(1) inside Width; border is outside
 		if innerWidth < 10 {
@@ -1050,7 +1087,7 @@ func (m SidebarModel) renderSessionItem(s *session.Session, isCursor bool) []str
 		summaryStyle = lipgloss.NewStyle().Foreground(styles.ColorDimText).PaddingLeft(4)
 	}
 	nameStyled := nameStyle.Render(displayName)
-	timeStyled := timeStyle.Render(relTime)
+	timeStyled := m.shellBadge(s, "") + timeStyle.Render(relTime)
 
 	iconWidth := lipgloss.Width(icon)
 	nameWidth := lipgloss.Width(nameStyled)
@@ -1174,12 +1211,12 @@ func (m SidebarModel) renderDetailLines(s *session.Session, bg lipgloss.Color, b
 		}
 	}
 
-	if branch, ok := m.branches[s.CWD]; ok && s.CWD != "" {
+	if ref, ok := m.branches[s.CWD]; ok && s.CWD != "" {
 		var files []session.ChangedFile
 		if s.ID != "" && m.changedFilesID == s.ID {
 			files = m.changedFiles
 		}
-		lines = append(lines, box.Render(renderSegments(repoSegments(branch, files), bg, maxWidth)))
+		lines = append(lines, box.Render(renderSegments(repoSegments(ref, files, maxWidth), bg, maxWidth)))
 	}
 	return lines
 }

@@ -83,7 +83,7 @@ func activitySegments(s *session.Session, a *session.SessionActivity, now time.T
 		if a.Tool == "" && a.TurnEnded && (a.Agents > 0 || a.Shells > 0) {
 			// The main thread is done; the pane stays busy only for background work.
 			if a.Agents == 0 {
-				return append(segs, seg(fmt.Sprintf("$%d %s running", a.Shells, plural(a.Shells, "shell")), styles.ColorCyan))
+				return append(segs, seg(fmt.Sprintf("%s %d %s running", styles.IconShell, a.Shells, plural(a.Shells, "shell")), styles.ColorCyan))
 			}
 			segs = append(segs, seg(fmt.Sprintf("⇉%d %s running", a.Agents, plural(a.Agents, "agent")), styles.ColorPurple))
 			return append(segs, shellSegments(a)...)
@@ -123,12 +123,12 @@ func activitySegments(s *session.Session, a *session.SessionActivity, now time.T
 	return segs
 }
 
-// shellSegments renders " · $2 shells" for background shell commands still running.
+// shellSegments renders " ·  2 shells" for background shell commands still running.
 func shellSegments(a *session.SessionActivity) []segment {
 	if a.Shells == 0 {
 		return nil
 	}
-	return []segment{seg(fmt.Sprintf(" · $%d %s", a.Shells, plural(a.Shells, "shell")), styles.ColorCyan)}
+	return []segment{seg(fmt.Sprintf(" · %s %d %s", styles.IconShell, a.Shells, plural(a.Shells, "shell")), styles.ColorCyan)}
 }
 
 func plural(n int, noun string) string {
@@ -262,9 +262,31 @@ func ctxLine(used, limit int, bg lipgloss.Color, maxWidth int) string {
 	}, bg, maxWidth)
 }
 
-// repoSegments renders "⎇ main · 3 files +120/−8"; the file part appears only
-// once the changed-files list for the session has been loaded.
-func repoSegments(branch string, files []session.ChangedFile) []segment {
+// repoSegments renders " naviClaude ⎇ main · 3 files +120/−8" within maxWidth;
+// the file part appears only once the changed-files list has been loaded. The
+// repo name shrinks first and is dropped when the branch would be cut instead.
+func repoSegments(ref session.GitRef, files []session.ChangedFile, maxWidth int) []segment {
+	segs := branchSegments(ref.Branch, files)
+	if ref.Repo == "" {
+		return segs
+	}
+	repo := []segment{seg(styles.IconRepo+" ", styles.ColorPurple), flexSeg(ref.Repo, styles.ColorFg), seg(" ", styles.ColorFg)}
+	over := segmentsWidth(repo) + segmentsWidth(segs) - maxWidth
+	if over > ansi.StringWidth(ref.Repo)-4 {
+		return segs
+	}
+	return append(repo, segs...)
+}
+
+func segmentsWidth(segs []segment) int {
+	w := 0
+	for _, s := range segs {
+		w += ansi.StringWidth(s.text)
+	}
+	return w
+}
+
+func branchSegments(branch string, files []session.ChangedFile) []segment {
 	segs := []segment{seg("⎇ ", styles.ColorPurple), flexSeg(branch, styles.ColorGreen)}
 	if len(files) == 0 {
 		return segs

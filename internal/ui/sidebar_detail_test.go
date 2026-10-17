@@ -43,10 +43,10 @@ func TestActivitySegments(t *testing.T) {
 		{"only background agents left", active, &session.SessionActivity{TurnStart: ago(18 * time.Minute), TurnEnded: true, Agents: 4},
 			"⚙ ⇉4 agents running"},
 		{"agents and shells left", active, &session.SessionActivity{TurnEnded: true, Agents: 1, Shells: 2},
-			"⚙ ⇉1 agent running · $2 shells"},
-		{"only shells left", active, &session.SessionActivity{TurnEnded: true, Shells: 1}, "⚙ $1 shell running"},
+			"⚙ ⇉1 agent running · " + styles.IconShell + " 2 shells"},
+		{"only shells left", active, &session.SessionActivity{TurnEnded: true, Shells: 1}, "⚙ " + styles.IconShell + " 1 shell running"},
 		{"working with a shell", active, &session.SessionActivity{Tool: "Read", Target: "a.go", TurnStart: ago(5 * time.Second), Shells: 1},
-			"⚙ Read · a.go · 5s · $1 shell"},
+			"⚙ Read · a.go · 5s · " + styles.IconShell + " 1 shell"},
 		{"approximate turn start", active, &session.SessionActivity{TurnStart: ago(75 * time.Minute), TurnStartApprox: true},
 			"⚙ thinking · 1h15m+"},
 		{"active before load", active, nil, "⚙ working"},
@@ -144,12 +144,17 @@ func TestCtxLine(t *testing.T) {
 }
 
 func TestRepoSegments(t *testing.T) {
-	if got := plainSegments(repoSegments("main", nil)); got != "⎇ main" {
+	if got := plainSegments(repoSegments(session.GitRef{Branch: "main"}, nil, 80)); got != "⎇ main" {
 		t.Errorf("no files: %q", got)
 	}
 	files := []session.ChangedFile{{Path: "a", Added: 100, Removed: 3}, {Path: "b", Added: 20, Removed: 5}}
-	if got := plainSegments(repoSegments("main", files)); got != "⎇ main · 2 files +120/−8" {
+	ref := session.GitRef{Repo: "naviClaude", Branch: "main"}
+	if got := plainSegments(repoSegments(ref, files, 80)); got != styles.IconRepo+" naviClaude ⎇ main · 2 files +120/−8" {
 		t.Errorf("files: %q", got)
+	}
+	// Too narrow for both: the branch keeps its room and the repo goes.
+	if got := plainSegments(repoSegments(ref, files, 30)); got != "⎇ main · 2 files +120/−8" {
+		t.Errorf("narrow: %q", got)
 	}
 }
 
@@ -167,7 +172,7 @@ func TestSelectedDetailLinesNeverWrap(t *testing.T) {
 		sb.SetMetrics("1", &session.SessionMetrics{TokensUsed: 900_000, ContextLimit: 1_000_000})
 		sb.SetActivity("1", &session.SessionActivity{Tool: "Bash", Target: strings.Repeat("very long command ", 10),
 			TurnStart: now.Add(-42 * time.Second), Agents: 4})
-		sb.SetBranch("/repo", "feature/a-really-long-branch-name-for-testing", true)
+		sb.SetBranch("/repo", session.GitRef{Repo: "a-long-repository-name", Branch: "feature/a-really-long-branch-name-for-testing"}, true)
 		sb.SetChangedFiles("1", []session.ChangedFile{{Path: "x", Added: 12345, Removed: 678}})
 
 		lines := strings.Split(sb.View(), "\n")
@@ -318,5 +323,30 @@ func TestCtxLimitResolvedAtRender(t *testing.T) {
 				t.Errorf("want %q in\n%s", tt.want, body)
 			}
 		})
+	}
+}
+
+// Background shells show on every row, not only the selected one.
+func TestShellBadgeOnUnselectedRows(t *testing.T) {
+	const width = 35
+	sb := NewSidebar(width, 30)
+	sb.SetSize(width, 30)
+	now := time.Now()
+	mk := func(id string) *session.Session {
+		return &session.Session{ID: id, DisplayName: strings.Repeat("name"+id, 10), TmuxSession: "alpha",
+			TmuxTarget: "alpha:0." + id, Status: session.StatusIdle, LastActivity: now, Summary: "s"}
+	}
+	sb.SetSessions([]*session.Session{mk("1"), mk("2")})
+	sb.SetCursor(1)
+	sb.SetShells(map[string]int{"2": 3})
+
+	body := ansi.Strip(sb.View())
+	if !strings.Contains(body, styles.IconShell+" 3") {
+		t.Errorf("unselected row lacks the shell badge:\n%s", body)
+	}
+	for i, l := range strings.Split(sb.View(), "\n") {
+		if w := ansi.StringWidth(l); w > width {
+			t.Errorf("line %d is %d cells: %q", i, w, ansi.Strip(l))
+		}
 	}
 }

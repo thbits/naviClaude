@@ -99,6 +99,12 @@ const (
 	IconDone    = "◉" // fisheye: finished while you were away
 )
 
+// Nerd Font glyphs for the activity details.
+const (
+	IconShell = "\uf120" // nf-fa-terminal: background shell commands
+	IconRepo  = "\uea62" // nf-cod-repo: git repository name
+)
+
 // SidebarWaitingFlash is applied during the active->waiting transition flash.
 var SidebarWaitingFlash lipgloss.Style
 
