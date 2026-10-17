@@ -8,6 +8,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/thbits/naviClaude/internal/app"
+	"github.com/thbits/naviClaude/internal/session"
+	"github.com/thbits/naviClaude/internal/tmux"
 )
 
 // version is set at build time via -ldflags "-X main.version=..."
@@ -26,6 +28,7 @@ func main() {
 	fs := flag.NewFlagSet("naviclaude", flag.ContinueOnError)
 	fs.Usage = func() {
 		fmt.Fprintln(os.Stderr, "Usage: naviclaude [flags]")
+		fmt.Fprintln(os.Stderr, "       naviclaude open [-c client] [-t pane] [-popup]")
 		fmt.Fprintln(os.Stderr, "       naviclaude hooks install|uninstall|status")
 		fmt.Fprintln(os.Stderr, "       naviclaude sound request|done")
 		fmt.Fprintln(os.Stderr, "\nA tmux-native dashboard for navigating Claude sessions.")
@@ -63,6 +66,15 @@ func main() {
 		fmt.Fprintln(os.Stderr, "Start one with: tmux")
 		os.Exit(1)
 	}
+
+	// tmux 3.8 greys display-popups by default; naviClaude draws on the terminal's colours.
+	var tree *session.ProcessTree
+	tmux.New().RestyleOwnPopup(func(pid int) (int, bool) {
+		if tree == nil {
+			tree = session.BuildProcessTree()
+		}
+		return tree.Parent(pid)
+	})
 
 	m := app.New(version)
 	// WithMouseCellMotion reports button presses, drags, and wheel events

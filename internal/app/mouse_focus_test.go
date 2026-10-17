@@ -6,6 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/thbits/naviClaude/internal/session"
+	"github.com/thbits/naviClaude/internal/ui"
 )
 
 // mouseModel builds a Model wide enough to have distinct pane regions, with one
@@ -20,6 +21,7 @@ func mouseModel(rightOpen bool) Model {
 	m.width = 100
 	m.height = 30
 	m.rightPanelOpen = rightOpen
+	m.currentTmuxWin = "proj:0" // keeps selectPreviewSession from resizing a real tmux window
 	m.sidebar.SelectByTarget("proj:0.0")
 	return m
 }
@@ -27,7 +29,7 @@ func mouseModel(rightOpen bool) Model {
 func TestMouseClickPreviewEntersPassthrough(t *testing.T) {
 	m := mouseModel(false)
 	m.mode = ModeList
-	updated, _ := m.handleMouse(tea.MouseMsg{Type: tea.MouseLeft, X: 50, Y: 5})
+	updated, _ := m.handleMouse(tea.MouseMsg{Button: tea.MouseButtonLeft, Action: tea.MouseActionPress, X: 50, Y: 5})
 	got := updated.(Model)
 	if got.mode != ModePassthrough {
 		t.Errorf("mode = %v, want passthrough", got.mode)
@@ -41,7 +43,8 @@ func TestMouseClickSidebarFocusesList(t *testing.T) {
 	m := mouseModel(false)
 	m.mode = ModePassthrough
 	m.preview.SetPassthrough(true)
-	updated, _ := m.handleMouse(tea.MouseMsg{Type: tea.MouseLeft, X: 5, Y: 3})
+	// Y=20 is blank list space below the only group, so no row is hit.
+	updated, _ := m.handleMouse(tea.MouseMsg{Button: tea.MouseButtonLeft, Action: tea.MouseActionPress, X: 5, Y: 20})
 	got := updated.(Model)
 	if got.mode != ModeList {
 		t.Errorf("mode = %v, want list", got.mode)
@@ -54,7 +57,7 @@ func TestMouseClickSidebarFocusesList(t *testing.T) {
 func TestMouseClickRightPaneFocusesChangedFiles(t *testing.T) {
 	m := mouseModel(true)
 	m.mode = ModeList
-	updated, _ := m.handleMouse(tea.MouseMsg{Type: tea.MouseLeft, X: 90, Y: 4})
+	updated, _ := m.handleMouse(tea.MouseMsg{Button: tea.MouseButtonLeft, Action: tea.MouseActionPress, X: 90, Y: 4})
 	got := updated.(Model)
 	if got.mode != ModeChangedFiles {
 		t.Errorf("mode = %v, want changed-files", got.mode)
@@ -69,7 +72,7 @@ func TestMouseClickRightPaneFocusesChangedFiles(t *testing.T) {
 func TestMouseClickRightEdgeWithPanelClosedIsPreview(t *testing.T) {
 	m := mouseModel(false)
 	m.mode = ModeList
-	updated, _ := m.handleMouse(tea.MouseMsg{Type: tea.MouseLeft, X: 90, Y: 4})
+	updated, _ := m.handleMouse(tea.MouseMsg{Button: tea.MouseButtonLeft, Action: tea.MouseActionPress, X: 90, Y: 4})
 	got := updated.(Model)
 	if got.mode != ModePassthrough {
 		t.Errorf("mode = %v, want passthrough", got.mode)
@@ -83,24 +86,33 @@ func TestMouseClickPreviewNoSelectionNoop(t *testing.T) {
 	m.width = 100
 	m.height = 30
 	m.mode = ModeList
-	updated, _ := m.handleMouse(tea.MouseMsg{Type: tea.MouseLeft, X: 50, Y: 5})
+	updated, _ := m.handleMouse(tea.MouseMsg{Button: tea.MouseButtonLeft, Action: tea.MouseActionPress, X: 50, Y: 5})
 	got := updated.(Model)
 	if got.mode != ModeList {
 		t.Errorf("mode = %v, want list (no-op)", got.mode)
 	}
 }
 
-// A click while a modal is visible must not change pane focus underneath it.
-func TestMouseIgnoredWhenModalActive(t *testing.T) {
+// A click inside a modal is a no-op; outside it closes the modal without
+// acting on the pane underneath.
+func TestMouseModalBlocksPanesUnderneath(t *testing.T) {
 	m := mouseModel(false)
 	m.mode = ModeList
+	m.help.SetSize(m.width, m.height)
 	m.help.Toggle()
-	if !m.help.IsVisible() {
-		t.Fatal("precondition: help overlay should be visible")
-	}
-	updated, _ := m.handleMouse(tea.MouseMsg{Type: tea.MouseLeft, X: 50, Y: 5})
+	m.mode = ModeHelp
+	x, y, w, h := ui.OverlayRect(m.width, m.height, m.help.View())
+
+	updated, _ := m.handleMouse(tea.MouseMsg{Button: tea.MouseButtonLeft, Action: tea.MouseActionPress, X: x + w/2, Y: y + h/2})
 	got := updated.(Model)
-	if got.mode != ModeList {
-		t.Errorf("mode = %v, want list unchanged (click ignored under modal)", got.mode)
+	if !got.help.IsVisible() || got.mode != ModeHelp {
+		t.Fatalf("click inside help: visible = %v mode = %v, want it left open", got.help.IsVisible(), got.mode)
+	}
+
+	// Outside the popup, over the preview: closes help but must not enter passthrough.
+	updated, _ = got.handleMouse(tea.MouseMsg{Button: tea.MouseButtonLeft, Action: tea.MouseActionPress, X: m.width - 1, Y: 3})
+	got = updated.(Model)
+	if got.help.IsVisible() || got.mode != ModeList {
+		t.Errorf("click outside help: visible = %v mode = %v, want closed in list mode", got.help.IsVisible(), got.mode)
 	}
 }

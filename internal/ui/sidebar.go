@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/thbits/naviClaude/internal/attention"
 	"github.com/thbits/naviClaude/internal/session"
 	"github.com/thbits/naviClaude/internal/styles"
 )
@@ -54,7 +55,7 @@ type SidebarModel struct {
 	vp                viewport.Model
 	cursorLineStart   int     // actual line index where the cursor item starts
 	cursorLineCount   int     // actual number of lines the cursor item occupies
-	activeCount       int     // cached count of non-closed sessions
+	lineItems         []int   // flat-item index owning each content line; -1 for spacer lines
 	collapseAfterHrs  float64 // auto-collapse groups idle longer than this (hours)
 	groupSortOrder    string  // "name" or "activity"
 	sessionSortOrder  string  // "name" or "activity"
@@ -66,7 +67,17 @@ type SidebarModel struct {
 	trackedTarget string // tmux target fallback (for placeholder sessions with no ID)
 	trackedGroup  string // group header name fallback
 
-	metrics *session.SessionMetrics
+	metrics      *session.SessionMetrics
+	metricsID    string
+	contextLimit ContextLimitFunc
+
+	// Live detail for the selected session, keyed by session ID so a late
+	// load for a previous selection never renders under the current one.
+	activity       *session.SessionActivity
+	activityID     string
+	branches       map[string]string // cwd -> branch, git repos only
+	changedFiles   []session.ChangedFile
+	changedFilesID string
 
 	breathingFrame int    // animation frame for breathing status dots
 	spinnerView    string // spinner view string passed from app for loading state
@@ -133,20 +144,56 @@ func (m *SidebarModel) RestoreCollapsed() {
 // grouped by TmuxSession. Closed sessions are placed in a "Closed" group.
 func (m *SidebarModel) SetSessions(sessions []*session.Session) {
 	m.Sessions = sessions
-	count := 0
-	for _, s := range sessions {
-		if s.Status != session.StatusClosed {
-			count++
-		}
-	}
-	m.activeCount = count
 	m.rebuildGroups()
 }
 
-// SetMetrics updates the metrics for the selected session.
-func (m *SidebarModel) SetMetrics(metrics *session.SessionMetrics) {
+// SetMetrics records the loaded metrics of the session with the given ID.
+func (m *SidebarModel) SetMetrics(sessionID string, metrics *session.SessionMetrics) {
 	m.metrics = metrics
-	m.syncViewport() // re-render to show/hide sparkline immediately
+	m.metricsID = sessionID
+	m.syncViewport() // re-render so the context bar follows immediately
+}
+
+// ContextLimitFunc sizes a session's context window from its model id and
+// peak token use; 0 means unknown.
+type ContextLimitFunc func(s *session.Session, modelID string, tokensUsed int) int
+
+// SetContextLimitFunc sets how context windows are sized for the ctx bar.
+func (m *SidebarModel) SetContextLimitFunc(f ContextLimitFunc) { m.contextLimit = f }
+
+// SetActivity updates the live activity of the session with the given ID.
+func (m *SidebarModel) SetActivity(sessionID string, a *session.SessionActivity) {
+	m.activity = a
+	m.activityID = sessionID
+	m.syncViewport()
+}
+
+// SetBranch records cwd's current git branch; inRepo false drops it so the
+// repo line is omitted.
+func (m *SidebarModel) SetBranch(cwd, branch string, inRepo bool) {
+	if cwd == "" {
+		return
+	}
+	if old, had := m.branches[cwd]; had == inRepo && old == branch {
+		return
+	}
+	if m.branches == nil {
+		m.branches = make(map[string]string)
+	}
+	if inRepo {
+		m.branches[cwd] = branch
+	} else {
+		delete(m.branches, cwd)
+	}
+	m.syncViewport()
+}
+
+// SetChangedFiles records the files the session with the given ID edited, as
+// loaded for the changed-files panel.
+func (m *SidebarModel) SetChangedFiles(sessionID string, files []session.ChangedFile) {
+	m.changedFiles = files
+	m.changedFilesID = sessionID
+	m.syncViewport()
 }
 
 // SetBreathingFrame updates the breathing animation frame and re-renders.
@@ -176,11 +223,6 @@ func (m *SidebarModel) SetFocused(focused bool) {
 	}
 	m.focused = focused
 	m.syncViewport()
-}
-
-// ActiveCount returns the cached count of non-closed sessions.
-func (m *SidebarModel) ActiveCount() int {
-	return m.activeCount
 }
 
 func (m *SidebarModel) rebuildGroups() {
@@ -232,6 +274,10 @@ func (m *SidebarModel) rebuildGroups() {
 	}
 	for _, sessions := range groupMap {
 		sortFn(sessions)
+		// Sessions that need the user float above the configured order.
+		sort.SliceStable(sessions, func(i, j int) bool {
+			return needsUser(sessions[i]) && !needsUser(sessions[j])
+		})
 	}
 	// Closed sessions always sort by activity (slug context is sparse).
 	activitySort(closedSessions)
@@ -261,6 +307,19 @@ func (m *SidebarModel) rebuildGroups() {
 	} else {
 		sort.Strings(names)
 	}
+	// Groups holding a session that needs the user come first.
+	waitingGroup := make(map[string]bool, len(groupMap))
+	for name, sessions := range groupMap {
+		for _, s := range sessions {
+			if needsUser(s) {
+				waitingGroup[name] = true
+				break
+			}
+		}
+	}
+	sort.SliceStable(names, func(i, j int) bool {
+		return waitingGroup[names[i]] && !waitingGroup[names[j]]
+	})
 
 	m.groups = nil
 	for _, name := range names {
@@ -446,6 +505,8 @@ func (m *SidebarModel) clampCursor() {
 // YOffset is adjusted.
 func (m *SidebarModel) syncViewport() {
 	var lines []string
+	// Fresh slice: View() runs on a copy that shares this backing array.
+	m.lineItems = make([]int, 0, len(m.lineItems))
 	for i, item := range m.flatItems {
 		isCursor := i == m.cursor
 		if isCursor {
@@ -454,12 +515,22 @@ func (m *SidebarModel) syncViewport() {
 		if item.isGroup {
 			rendered := m.renderGroupHeader(item.groupName, item.groupCount, item.groupIdx, isCursor)
 			// Split on embedded newlines -- Width().Render() may wrap text.
-			lines = append(lines, strings.Split(rendered, "\n")...)
+			for j, l := range strings.Split(rendered, "\n") {
+				owner := i
+				if j == 0 && item.groupIdx > 0 {
+					owner = -1 // the blank spacer renderGroupHeader prepends
+				}
+				lines = append(lines, l)
+				m.lineItems = append(m.lineItems, owner)
+			}
 		} else {
 			for _, rl := range m.renderSessionItem(item.session, isCursor) {
 				// Each rendered line may itself contain embedded newlines
 				// from Width().Render() wrapping.
-				lines = append(lines, strings.Split(rl, "\n")...)
+				for _, l := range strings.Split(rl, "\n") {
+					lines = append(lines, l)
+					m.lineItems = append(m.lineItems, i)
+				}
 			}
 		}
 		if isCursor {
@@ -468,6 +539,81 @@ func (m *SidebarModel) syncViewport() {
 	}
 	m.vp.SetContent(strings.Join(lines, "\n"))
 	m.scrollToCursor()
+}
+
+// SidebarHitKind classifies what lies under a sidebar coordinate.
+type SidebarHitKind int
+
+const (
+	// HitNone is the pane title, a spacer line, or empty space.
+	HitNone SidebarHitKind = iota
+	// HitSession is a session row.
+	HitSession
+	// HitGroup is a group header.
+	HitGroup
+)
+
+// SidebarHit describes the item under a sidebar coordinate.
+type SidebarHit struct {
+	Kind    SidebarHitKind
+	Index   int // flat-item index, valid for HitSession and HitGroup
+	Session *session.Session
+	Group   string
+}
+
+// HitTest reports the item at sidebar-local (x, y), y=0 being the pane title,
+// from the line map syncViewport built for the last render (scroll included).
+func (m *SidebarModel) HitTest(x, y int) SidebarHit {
+	// The title wraps to two lines on very narrow panes.
+	headerH := lipgloss.Height(m.renderHeader())
+	if x < 0 || x >= m.width || y < headerH || y >= headerH+m.vp.Height {
+		return SidebarHit{}
+	}
+	line := m.vp.YOffset + y - headerH
+	if line < 0 || line >= len(m.lineItems) {
+		return SidebarHit{}
+	}
+	idx := m.lineItems[line]
+	if idx < 0 || idx >= len(m.flatItems) {
+		return SidebarHit{}
+	}
+	item := m.flatItems[idx]
+	if item.isGroup {
+		return SidebarHit{Kind: HitGroup, Index: idx, Group: item.groupName}
+	}
+	return SidebarHit{Kind: HitSession, Index: idx, Session: item.session}
+}
+
+// MoveCursor moves the selection by delta rows, clamped to the list.
+func (m *SidebarModel) MoveCursor(delta int) {
+	m.cursor += delta
+	if m.cursor > len(m.flatItems)-1 {
+		m.cursor = len(m.flatItems) - 1
+	}
+	if m.cursor < 0 {
+		m.cursor = 0
+	}
+	m.updateTracked()
+	m.syncViewport()
+}
+
+// ToggleGroupAtCursor collapses or expands the group header under the cursor;
+// a no-op when the cursor is on a session row.
+func (m *SidebarModel) ToggleGroupAtCursor() {
+	if m.cursor < 0 || m.cursor >= len(m.flatItems) {
+		return
+	}
+	item := m.flatItems[m.cursor]
+	if !item.isGroup {
+		return
+	}
+	m.collapsed[item.groupName] = !m.collapsed[item.groupName]
+	m.userToggled[item.groupName] = true // user explicitly toggled
+	m.rebuildFlatItems()
+	m.clampCursor()
+	// Re-anchor the tracked selection to wherever the cursor landed; otherwise
+	// the next data refresh re-runs restoreCursor against a stale target.
+	m.updateTracked()
 }
 
 // SelectedSession returns the session at the current cursor, or nil if the
@@ -642,31 +788,11 @@ func (m SidebarModel) Update(msg tea.Msg) (SidebarModel, tea.Cmd) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "j", "down":
-			if m.cursor < len(m.flatItems)-1 {
-				m.cursor++
-			}
-			m.updateTracked()
-			m.syncViewport()
+			m.MoveCursor(1)
 		case "k", "up":
-			if m.cursor > 0 {
-				m.cursor--
-			}
-			m.updateTracked()
-			m.syncViewport()
+			m.MoveCursor(-1)
 		case "enter":
-			if m.cursor >= 0 && m.cursor < len(m.flatItems) {
-				item := m.flatItems[m.cursor]
-				if item.isGroup {
-					m.collapsed[item.groupName] = !m.collapsed[item.groupName]
-					m.userToggled[item.groupName] = true // user explicitly toggled
-					m.rebuildFlatItems()
-					m.clampCursor()
-					// Re-anchor the tracked selection to wherever the cursor
-					// landed; otherwise the next data refresh re-runs
-					// restoreCursor against a stale target and jumps the cursor.
-					m.updateTracked()
-				}
-			}
+			m.ToggleGroupAtCursor()
 		case "G":
 			if len(m.flatItems) > 0 {
 				m.cursor = len(m.flatItems) - 1
@@ -707,32 +833,23 @@ func (m *SidebarModel) scrollToCursor() {
 	m.vp.SetYOffset(yOff)
 }
 
+// renderHeader renders the pane title: a lit reverse-video bar when focused, a
+// dim title otherwise. Both fill to m.width so focus never changes the pane width.
+func (m SidebarModel) renderHeader() string {
+	// No session count here: the title bar's status summary already shows it.
+	if m.focused {
+		return styles.PaneTitleActive.Width(m.width).Render(" ▸ SESSIONS")
+	}
+	title := styles.PaneTitleInactive.Render("SESSIONS")
+	if pad := m.width - lipgloss.Width(title); pad > 0 {
+		title += strings.Repeat(" ", pad)
+	}
+	return title
+}
+
 // View renders the sidebar.
 func (m SidebarModel) View() string {
-	// Render the pane title: a lit reverse-video bar when focused, a dim title
-	// otherwise. Both fill to m.width so focus never changes the pane width.
-	activeCount := m.ActiveCount()
-	countText := fmt.Sprintf("%d active", activeCount)
-	var header string
-	if m.focused {
-		titleText := "▸ SESSIONS"
-		gap := m.width - lipgloss.Width(titleText) - lipgloss.Width(countText) - 2
-		if gap < 1 {
-			gap = 1
-		}
-		inner := " " + titleText + strings.Repeat(" ", gap) + countText + " "
-		header = styles.PaneTitleActive.Width(m.width).Render(inner)
-	} else {
-		title := styles.PaneTitleInactive.Render("SESSIONS")
-		countStr := lipgloss.NewStyle().Foreground(styles.ColorDimText).Render(countText)
-		gap := m.width - lipgloss.Width(title) - lipgloss.Width(countStr) - 2
-		if gap < 1 {
-			gap = 1
-		}
-		// Two trailing spaces (not one) so this totals m.width, matching the
-		// focused branch above -- otherwise focus would shrink the header by 1.
-		header = title + strings.Repeat(" ", gap) + countStr + "  "
-	}
+	header := m.renderHeader()
 
 	if len(m.flatItems) == 0 {
 		listHeight := m.vp.Height
@@ -758,6 +875,9 @@ func (m SidebarModel) View() string {
 	// which is called on every cursor/data change. Just render.
 	return lipgloss.JoinVertical(lipgloss.Left, header, m.vp.View())
 }
+
+// needsUser reports a session blocked on the user (approval or question).
+func needsUser(s *session.Session) bool { return s.Status == session.StatusWaiting }
 
 // groupRecentActivity returns the most recent LastActivity across a group's
 // sessions. The zero Time is returned for an empty group, which sorts last
@@ -846,6 +966,11 @@ func (m SidebarModel) renderSessionItem(s *session.Session, isCursor bool) []str
 		maxSummary = 8
 	}
 	summary = truncateDisplay(summary, maxSummary)
+	// A session with no prompt yet would otherwise leave a blank row.
+	noPrompt := summary == ""
+	if noPrompt {
+		summary = "no prompt yet"
+	}
 
 	isConfirmingKill := m.ConfirmKillTarget != "" && s.TmuxTarget == m.ConfirmKillTarget
 
@@ -897,6 +1022,8 @@ func (m SidebarModel) renderSessionItem(s *session.Session, isCursor bool) []str
 			slash := lipgloss.NewStyle().Foreground(styles.ColorGray).Background(dimBg).Render("/")
 			nKey := lipgloss.NewStyle().Foreground(styles.ColorFg).Background(dimBg).Bold(true).Render("N")
 			line2Content = killLabel + " " + yKey + slash + nKey
+		} else if noPrompt {
+			line2Content = lipgloss.NewStyle().Foreground(styles.ColorDimText).Background(styles.ColorSelectionDim).Italic(true).Render(summary)
 		} else {
 			line2Content = summary
 		}
@@ -920,20 +1047,8 @@ func (m SidebarModel) renderSessionItem(s *session.Session, isCursor bool) []str
 			BorderForeground(borderFg).
 			Width(m.width - 1)
 
-		if m.metrics == nil && m.width >= 35 {
-			// Loading indicator while metrics are being fetched.
-			loading := lipgloss.NewStyle().Foreground(styles.ColorGray).Background(dimBg).Render("loading...")
-			extraLines = append(extraLines, extraStyle.Render(loading))
-		} else if m.metrics != nil && m.width >= 35 {
-			// Line 3: Sparkline + message count
-			sparkline := m.renderSparkline(m.metrics, dimBg)
-			extraLines = append(extraLines, extraStyle.Render(sparkline))
-
-			// Line 4: Token bar (only if token data exists)
-			tokenBar := m.renderTokenBar(m.metrics, dimBg)
-			if tokenBar != "" {
-				extraLines = append(extraLines, extraStyle.Render(tokenBar))
-			}
+		if m.width >= 35 {
+			extraLines = append(extraLines, m.renderDetailLines(s, dimBg, extraStyle)...)
 		}
 
 		result := []string{line1, line2}
@@ -964,6 +1079,9 @@ func (m SidebarModel) renderSessionItem(s *session.Session, isCursor bool) []str
 		gap = 1
 	}
 	line1 := "  " + icon + " " + nameStyled + strings.Repeat(" ", gap) + timeStyled + " "
+	if noPrompt {
+		summaryStyle = summaryStyle.Foreground(styles.ColorDimText).Italic(true)
+	}
 	line2 := summaryStyle.Render(summary)
 
 	return []string{line1, line2}
@@ -994,15 +1112,10 @@ func statusIconProps(s session.SessionStatus, frame int) (lipgloss.Color, string
 	}
 }
 
-func statusIcon(s session.SessionStatus, frame int) string {
-	fg, ch := statusIconProps(s, frame)
-	return lipgloss.NewStyle().Foreground(fg).Render(ch)
-}
-
 // sessionIconProps is statusIconProps plus the hook-raised "finished while you
 // were away" state, which only applies to an otherwise idle session.
 func sessionIconProps(s *session.Session, frame int) (lipgloss.Color, string) {
-	if s.Status == session.StatusIdle && s.Attention == "done" {
+	if s.Status == session.StatusIdle && s.Attention == attention.Done {
 		return styles.ColorBlue, styles.IconDone
 	}
 	return statusIconProps(s.Status, frame)
@@ -1015,13 +1128,6 @@ func sessionIcon(s *session.Session, frame int) string {
 
 func sessionIconWithBg(s *session.Session, bg lipgloss.Color, frame int) string {
 	fg, ch := sessionIconProps(s, frame)
-	return lipgloss.NewStyle().Foreground(fg).Background(bg).Render(ch)
-}
-
-// statusIconWithBg renders a status icon with an explicit background color,
-// preventing ANSI reset bleeding when composed inside a styled container.
-func statusIconWithBg(s session.SessionStatus, bg lipgloss.Color, frame int) string {
-	fg, ch := statusIconProps(s, frame)
 	return lipgloss.NewStyle().Foreground(fg).Background(bg).Render(ch)
 }
 
@@ -1065,104 +1171,59 @@ func relativeTime(d time.Duration) string {
 	}
 }
 
-// renderSparkline returns the sparkline bars + message count as raw styled
-// content (not wrapped in the selection border -- the caller handles that).
-func (m SidebarModel) renderSparkline(metrics *session.SessionMetrics, bg lipgloss.Color) string {
-	blocks := []string{"\u2581", "\u2582", "\u2583", "\u2584", "\u2585", "\u2586", "\u2587", "\u2588"}
+// renderDetailLines renders the selected session's live detail: activity
+// always, then context fill and repo state when known.
+func (m SidebarModel) renderDetailLines(s *session.Session, bg lipgloss.Color, box lipgloss.Style) []string {
+	// Width(m.width-1) includes PaddingLeft(3); the border sits outside it.
+	maxWidth := m.width - 4
+	var act *session.SessionActivity
+	if s.ID != "" && m.activityID == s.ID {
+		act = m.activity
+	}
+	lines := []string{box.Render(renderSegments(activitySegments(s, act, time.Now()), bg, maxWidth))}
 
-	// Find max value for scaling
-	maxVal := 0
-	for _, v := range metrics.RecentActivity {
-		if v > maxVal {
-			maxVal = v
+	var metrics *session.SessionMetrics
+	if s.ID != "" && m.metricsID == s.ID {
+		metrics = m.metrics
+	}
+	if used, limit := m.contextFill(s, metrics, act); used > 0 {
+		if ctx := ctxLine(used, limit, bg, maxWidth); ctx != "" {
+			lines = append(lines, box.Render(ctx))
 		}
 	}
 
-	var b strings.Builder
-
-	// Only render bars if there's recent activity
-	if maxVal > 0 {
-		barCount := 10
-		if m.width < 45 {
-			barCount = 6
+	if branch, ok := m.branches[s.CWD]; ok && s.CWD != "" {
+		var files []session.ChangedFile
+		if s.ID != "" && m.changedFilesID == s.ID {
+			files = m.changedFiles
 		}
-
-		startIdx := 10 - barCount
-		for i := startIdx; i < 10; i++ {
-			val := metrics.RecentActivity[i]
-			level := 0
-			if maxVal > 0 && val > 0 {
-				level = (val * 7) / maxVal
-			}
-
-			var color lipgloss.Color
-			switch {
-			case val == 0:
-				color = styles.ColorBorder
-			case level <= 2:
-				color = styles.ColorBlue
-			case level <= 4:
-				color = styles.ColorPurple
-			default:
-				color = styles.ColorGreen
-			}
-
-			b.WriteString(lipgloss.NewStyle().Foreground(color).Background(bg).Render(blocks[level]))
-		}
-		b.WriteString(lipgloss.NewStyle().Foreground(styles.ColorGray).Background(bg).Render(" "))
+		lines = append(lines, box.Render(renderSegments(repoSegments(branch, files), bg, maxWidth)))
 	}
-
-	// Always show message count
-	b.WriteString(lipgloss.NewStyle().Foreground(styles.ColorGray).Background(bg).Render(
-		fmt.Sprintf("%d msgs", metrics.MessageCount)))
-
-	return b.String()
+	return lines
 }
 
-// renderTokenBar returns the token usage bar as raw styled content
-// (not wrapped in the selection border -- the caller handles that).
-func (m SidebarModel) renderTokenBar(metrics *session.SessionMetrics, bg lipgloss.Color) string {
-	if metrics.ContextLimit == 0 || metrics.TokensUsed == 0 {
-		return ""
+// contextFill returns current context use and window size, resolving the limit
+// per render since the tail read can outgrow (or re-model) the one-off full scan.
+func (m SidebarModel) contextFill(s *session.Session, metrics *session.SessionMetrics, act *session.SessionActivity) (used, limit int) {
+	var modelID string
+	peak := 0
+	if metrics != nil {
+		used, peak, modelID = metrics.TokensUsed, metrics.TokensUsed, metrics.ModelID
+		limit = metrics.ContextLimit
 	}
-
-	barWidth := m.width - 28 // leave room for "ctx " prefix + " NNK/NNNK (NN%)" label + padding
-	if barWidth < 5 {
-		barWidth = 5
-	}
-	if barWidth > 20 {
-		barWidth = 20
-	}
-
-	pct := float64(metrics.TokensUsed) / float64(metrics.ContextLimit)
-	if pct > 1.0 {
-		pct = 1.0
-	}
-	filled := int(pct * float64(barWidth))
-	if filled < 0 {
-		filled = 0
-	}
-
-	var b strings.Builder
-
-	// Distinct prefix label so it's clearly not part of the sparkline
-	b.WriteString(lipgloss.NewStyle().Foreground(styles.ColorCyan).Background(bg).Render("ctx "))
-
-	// Bar using different chars than sparkline: thin horizontal bar
-	for i := 0; i < barWidth; i++ {
-		if i < filled {
-			b.WriteString(lipgloss.NewStyle().Foreground(styles.ColorCyan).Background(bg).Render("\u2501"))
-		} else {
-			b.WriteString(lipgloss.NewStyle().Foreground(styles.ColorBorder).Background(bg).Render("\u2500"))
+	if act != nil {
+		if act.TokensUsed > 0 {
+			used = act.TokensUsed // the tail read is fresher than the full scan
+		}
+		peak = max(peak, act.TokensUsed)
+		if act.Model != "" {
+			modelID = act.Model
 		}
 	}
-
-	// Label: X/Y (N%)
-	usedK := metrics.TokensUsed / 1000
-	limitK := metrics.ContextLimit / 1000
-	pctInt := int(pct * 100)
-	b.WriteString(lipgloss.NewStyle().Foreground(styles.ColorGray).Background(bg).Render(
-		fmt.Sprintf(" %dK/%dK (%d%%)", usedK, limitK, pctInt)))
-
-	return b.String()
+	if m.contextLimit != nil {
+		if l := m.contextLimit(s, modelID, peak); l > 0 {
+			limit = l
+		}
+	}
+	return used, limit
 }

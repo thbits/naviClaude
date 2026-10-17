@@ -2,6 +2,8 @@ package ui
 
 import (
 	"fmt"
+	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -9,6 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/thbits/naviClaude/internal/attention"
 	"github.com/thbits/naviClaude/internal/session"
 	"github.com/thbits/naviClaude/internal/styles"
 )
@@ -20,6 +23,7 @@ type PreviewModel struct {
 	content      string
 	session      *session.Session
 	metrics      *session.SessionMetrics
+	metricsID    string
 	passthrough  bool
 	userScrolled bool // true when user has scrolled away from bottom
 	viewport     viewport.Model
@@ -78,9 +82,10 @@ func (m *PreviewModel) SetSession(s *session.Session) {
 	m.session = s
 }
 
-// SetMetrics updates the session metrics displayed in the header.
-func (m *PreviewModel) SetMetrics(metrics *session.SessionMetrics) {
+// SetMetrics records the loaded metrics of the session with the given ID.
+func (m *PreviewModel) SetMetrics(sessionID string, metrics *session.SessionMetrics) {
 	m.metrics = metrics
+	m.metricsID = sessionID
 }
 
 // SetPassthrough sets whether the preview is in passthrough mode.
@@ -216,24 +221,30 @@ func (m PreviewModel) renderHeader() string {
 		}
 	case session.StatusIdle:
 		statusLabel = "IDLE"
-		if s.Attention == "done" {
+		if s.Attention == attention.Done {
 			statusLabel = "DONE"
 		}
 	}
 
-	// Right-side metrics as plain strings (styled per render path below).
+	// Right-side metrics as plain strings (styled per render path below). Last
+	// activity is left to the sidebar row, which already shows it.
 	var rightPlain []string
-	if m.metrics != nil && !m.metrics.StartTime.IsZero() {
-		rightPlain = append(rightPlain, "⏱ "+formatUptime(time.Since(m.metrics.StartTime)))
+	metrics := m.metrics
+	if s.ID == "" || m.metricsID != s.ID {
+		metrics = nil // loaded for another session
 	}
-	if m.metrics != nil && m.metrics.MessageCount > 0 {
-		rightPlain = append(rightPlain, fmt.Sprintf("msgs %d", m.metrics.MessageCount))
+	if metrics != nil && !metrics.StartTime.IsZero() {
+		rightPlain = append(rightPlain, "⏱ "+formatUptime(time.Since(metrics.StartTime)))
+	}
+	var modelID string
+	if metrics != nil {
+		modelID = metrics.ModelID
+	}
+	if label := modelLabel(modelID, s.Model); label != "" {
+		rightPlain = append(rightPlain, label)
 	}
 	rightPlain = append(rightPlain, fmt.Sprintf("CPU %.1f%%", s.CPU))
 	rightPlain = append(rightPlain, fmt.Sprintf("MEM %.0fMB", s.Memory))
-	if !s.LastActivity.IsZero() {
-		rightPlain = append(rightPlain, relativeTime(time.Since(s.LastActivity)))
-	}
 
 	const sepStr = " • "
 
@@ -380,8 +391,8 @@ func (m *PreviewModel) SetGroupSummary(groupName string, sessions []*session.Ses
 		case session.StatusIdle:
 			idle++
 		}
-		if s.Model != "" {
-			models[s.Model]++
+		if label := modelLabel(s.Model, s.Model); label != "" {
+			models[label]++
 		}
 		if s.ProjectName != "" {
 			projects[s.ProjectName]++
@@ -432,9 +443,9 @@ func (m *PreviewModel) SetGroupSummary(groupName string, sessions []*session.Ses
 	// Models used.
 	if len(models) > 0 {
 		b.WriteString("  " + label.Render("Models") + "\n")
-		for model, count := range models {
+		for _, model := range byCount(models) {
 			b.WriteString(fmt.Sprintf("    %s %s\n",
-				value.Render(fmt.Sprintf("%d", count)),
+				value.Render(fmt.Sprintf("%d", models[model])),
 				label.Render(model)))
 		}
 		b.WriteString("\n")
@@ -443,9 +454,9 @@ func (m *PreviewModel) SetGroupSummary(groupName string, sessions []*session.Ses
 	// Projects in this session.
 	if len(projects) > 0 {
 		b.WriteString("  " + label.Render("Projects") + "\n")
-		for project, count := range projects {
+		for _, project := range byCount(projects) {
 			b.WriteString(fmt.Sprintf("    %s %s\n",
-				value.Render(fmt.Sprintf("%d", count)),
+				value.Render(fmt.Sprintf("%d", projects[project])),
 				label.Render(project)))
 		}
 		b.WriteString("\n")
@@ -455,6 +466,22 @@ func (m *PreviewModel) SetGroupSummary(groupName string, sessions []*session.Ses
 
 	m.content = b.String()
 	m.viewport.SetContent(m.content)
+}
+
+// byCount returns the keys of counts, most frequent first, then by name, so
+// the summary keeps a stable order across renders.
+func byCount(counts map[string]int) []string {
+	keys := make([]string, 0, len(counts))
+	for k := range counts {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if counts[keys[i]] != counts[keys[j]] {
+			return counts[keys[i]] > counts[keys[j]]
+		}
+		return keys[i] < keys[j]
+	})
+	return keys
 }
 
 // formatUptime formats a duration into a compact human-readable string.
@@ -471,4 +498,58 @@ func formatUptime(d time.Duration) string {
 		return fmt.Sprintf("%dh", hours)
 	}
 	return fmt.Sprintf("%dh%dm", hours, mins)
+}
+
+// modelDateSuffix matches the snapshot date (and any Bedrock revision) that
+// trails dated ids like "claude-3-5-sonnet-20241022-v2:0".
+var modelDateSuffix = regexp.MustCompile(`-\d{8}.*$`)
+
+// modelLabel shortens a full model id to "Family version" (e.g.
+// "claude-opus-5-5" -> "Opus 5.5"), falling back to the capitalized family.
+func modelLabel(id, family string) string {
+	fallback := capitalize(strings.ToLower(strings.TrimSpace(family)))
+	lower := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(id)), "[1m]")
+	i := strings.Index(lower, "claude-")
+	if i < 0 {
+		return fallback
+	}
+	lower = modelDateSuffix.ReplaceAllString(lower[i+len("claude-"):], "")
+
+	// Legacy ids put the version before the family ("3-5-sonnet").
+	var name string
+	var pre, post []string
+	for _, part := range strings.Split(lower, "-") {
+		isNum := part != "" && strings.Trim(part, "0123456789") == ""
+		if name == "" {
+			if isNum {
+				pre = append(pre, part)
+			} else {
+				name = part
+			}
+			continue
+		}
+		if !isNum {
+			break
+		}
+		post = append(post, part)
+	}
+	if name == "" {
+		return fallback
+	}
+	if len(post) == 0 {
+		post = pre
+	}
+	name = capitalize(name)
+	if len(post) == 0 {
+		return name
+	}
+	return name + " " + strings.Join(post, ".")
+}
+
+// capitalize upper-cases the first letter of an ASCII word.
+func capitalize(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.ToUpper(s[:1]) + s[1:]
 }

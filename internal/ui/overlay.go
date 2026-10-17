@@ -18,28 +18,9 @@ func PlaceOverlay(bg, fg string) string {
 		return bg
 	}
 
-	bgH := len(bgLines)
-	fgH := len(fgLines)
-
-	// Measure fg width from the widest line.
-	fgW := 0
-	for _, l := range fgLines {
-		if w := lipgloss.Width(l); w > fgW {
-			fgW = w
-		}
-	}
-
 	// Measure bg width from the first line.
 	bgW := lipgloss.Width(bgLines[0])
-
-	startY := (bgH - fgH) / 2
-	startX := (bgW - fgW) / 2
-	if startX < 0 {
-		startX = 0
-	}
-	if startY < 0 {
-		startY = 0
-	}
+	startX, startY, fgW, _ := OverlayRect(bgW, len(bgLines), fg)
 
 	for i, fgLine := range fgLines {
 		bgRow := startY + i
@@ -76,4 +57,30 @@ func PlaceOverlay(bg, fg string) string {
 	}
 
 	return strings.Join(bgLines, "\n")
+}
+
+// OverlayRect returns where PlaceOverlay draws fg over a bgW x bgH background,
+// so mouse hit-tests agree with the composited popup.
+func OverlayRect(bgW, bgH int, fg string) (x, y, w, h int) {
+	fgLines := strings.Split(fg, "\n")
+	for _, l := range fgLines {
+		if lw := lipgloss.Width(l); lw > w {
+			w = lw
+		}
+	}
+	h = len(fgLines)
+	x = (bgW - w) / 2
+	y = (bgH - h) / 2
+	if x < 0 {
+		x = 0
+	}
+	if y < 0 {
+		y = 0
+	}
+	return x, y, w, h
+}
+
+// InRect reports whether (px, py) falls inside the x, y, w, h rectangle.
+func InRect(px, py, x, y, w, h int) bool {
+	return px >= x && px < x+w && py >= y && py < y+h
 }

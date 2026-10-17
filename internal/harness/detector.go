@@ -26,6 +26,8 @@ type Detector struct {
 	activeWindow time.Duration // how recently a harness must have written to count as active
 	cpuThreshold float64       // subtree CPU% above which a session counts as working
 	tracker      *session.StatusTracker
+	selfPID      int // naviClaude's own process
+	parentPID    int // its launching shell, the pane process of a floating pane
 }
 
 // NewDetector creates a Detector. activeWindowSecs <= 0 defaults to 5s and
@@ -45,6 +47,8 @@ func NewDetector(panes PaneSource, reg *Registry, activeWindowSecs int, cpuThres
 		activeWindow: activeWindow,
 		cpuThreshold: cpuThreshold,
 		tracker:      session.NewStatusTracker(activeWindow),
+		selfPID:      os.Getpid(),
+		parentPID:    os.Getppid(),
 	}
 }
 
@@ -57,7 +61,6 @@ func (d *Detector) Detect() ([]*session.Session, error) {
 	}
 
 	tree := d.buildTree()
-	selfPID := os.Getpid()
 
 	var sessions []*session.Session
 	for _, pane := range panes {
@@ -65,8 +68,9 @@ func (d *Detector) Detect() ([]*session.Session, error) {
 		if strings.HasPrefix(pane.SessionName, "[popup]") || pane.SessionName == "popup" {
 			continue
 		}
-		// Don't detect naviClaude itself.
-		if pane.PID == selfPID || tree.IsAncestorOf(pane.PID, selfPID) {
+		// Don't detect naviClaude's own pane (a plain or floating one). The
+		// parent check holds even when the ps snapshot missed this process.
+		if pane.PID == d.selfPID || pane.PID == d.parentPID || tree.IsAncestorOf(pane.PID, d.selfPID) {
 			continue
 		}
 		h, s := d.sessionFromPane(pane, tree)

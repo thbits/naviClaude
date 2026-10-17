@@ -26,11 +26,29 @@ type ConversationEntry struct {
 
 // SessionMetrics holds aggregate statistics extracted from a session's .jsonl file.
 type SessionMetrics struct {
-	MessageCount   int       // conversational turns (see isConversationalTurn): user/assistant records with visible text, excluding meta, sidechain, and tool-only records
-	StartTime      time.Time // first non-zero timestamp in the file
-	TokensUsed     int       // context fill (input + cache_read + cache_creation + output) from the assistant record with the max timestamp
-	ContextLimit   int       // inferred from model: opus->1000000, sonnet->200000, haiku->200000, default->200000
-	RecentActivity [10]int   // message counts bucketed into 10 equal slots spanning the session's first-to-last message (adaptive window)
+	MessageCount int       // conversational turns (see isConversationalTurn): user/assistant records with visible text, excluding meta, sidechain, and tool-only records
+	StartTime    time.Time // first non-zero timestamp in the file
+	TokensUsed   int       // context fill (input + cache_read + cache_creation + output) from the assistant record with the max timestamp
+	ContextLimit int       // inferred from the transcript's model id (see claude.ContextLimitForModel), raised if usage exceeds it
+	ModelID      string    // full model id of the latest assistant record, e.g. "claude-opus-5-5" ("" when none)
+}
+
+// SessionActivity is what a session's main thread is doing now, read from its
+// transcript tail; Status still decides working vs waiting vs idle.
+type SessionActivity struct {
+	Tool   string // latest tool_use still awaiting its result ("" when none)
+	Target string // short summary of that tool's input, e.g. a file name
+
+	// TurnStart is when the current turn began. When the turn started before
+	// the tail window, TurnStartApprox is set and TurnStart is a lower bound.
+	TurnStart       time.Time
+	TurnStartApprox bool
+
+	LastAssistant time.Time // timestamp of the latest assistant record
+	TurnEnded     bool      // the latest turn finished; only background work may remain
+	Agents        int       // subagents still running, foreground or background
+	TokensUsed    int       // context fill from the latest assistant usage in the tail
+	Model         string    // model id of the latest main-thread assistant record ("" when none in the tail)
 }
 
 // ChangedFile is a file the session edited, with the added/removed line counts

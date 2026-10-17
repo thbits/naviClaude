@@ -22,9 +22,13 @@ const (
 	statsBarWidth        = 30 // max width (cells) of the horizontal project/model bars
 	statsHourlyBarHeight = 4  // max height (rows) of the per-hour activity chart
 	statsWeeklyBarHeight = 6  // max height (rows) of the weekly activity chart
-	statsNameColMax      = 28 // cap on the project-name column width
+	statsNameColMax      = 32 // cap on the project-name column width
 	statsModelLabelWidth = 8  // fixed width (cells) of the model-family label column
+	statsPopupChrome     = 6  // border plus horizontal padding around the content
 )
+
+// statsFilterLabels is indexed by FilterAll / FilterWeek / FilterToday.
+var statsFilterLabels = []string{"All time", "This week", "Today"}
 
 // StatsModel renders a centered popup with usage statistics.
 type StatsModel struct {
@@ -75,15 +79,48 @@ func (m *StatsModel) SetSize(w, h int) {
 	m.height = h
 }
 
-// Filter returns the current filter index.
-func (m *StatsModel) Filter() int {
-	return m.filter
-}
-
 // CycleFilter advances to the next filter.
 func (m *StatsModel) CycleFilter() {
 	m.filter = (m.filter + 1) % 3
 	m.loading = true
+}
+
+// SetFilter selects filter f, reporting whether it changed (and a recompute
+// is needed).
+func (m *StatsModel) SetFilter(f int) bool {
+	if f < FilterAll || f > FilterToday || f == m.filter {
+		return false
+	}
+	m.filter = f
+	m.loading = true
+	return true
+}
+
+// FilterAt returns the filter whose label is drawn at popup-local (x, y). It
+// locates the labels in the rendered title line, so it tracks View exactly.
+func (m StatsModel) FilterAt(x, y int) (int, bool) {
+	lines := strings.Split(m.View(), "\n")
+	if y < 0 || y >= len(lines) {
+		return 0, false
+	}
+	line := ansi.Strip(lines[y])
+	if !strings.Contains(line, "Statistics") {
+		return 0, false
+	}
+	for f, label := range statsFilterLabels {
+		if f == m.filter {
+			label = "[" + label + "]"
+		}
+		i := strings.Index(line, label)
+		if i < 0 {
+			continue
+		}
+		start := ansi.StringWidth(line[:i])
+		if x >= start && x < start+ansi.StringWidth(label) {
+			return f, true
+		}
+	}
+	return 0, false
 }
 
 // FilterString returns the filter as a string for the compute function.
@@ -107,268 +144,298 @@ func (m StatsModel) View() string {
 	if m.loading {
 		content := styles.StatsTitle.Render("Statistics") + "\n\n" +
 			styles.DetailLabel.Render("  Computing...")
-		popup := styles.StatsBorder.Render(content)
-		return popup
+		return styles.StatsBorder.Render(content)
 	}
 
 	if m.stats == nil {
 		content := styles.StatsTitle.Render("Statistics") + "\n\n" +
 			styles.DetailLabel.Render("  No data available.")
-		popup := styles.StatsBorder.Render(content)
-		return popup
+		return styles.StatsBorder.Render(content)
 	}
 
 	s := m.stats
 	var lines []string
-
-	// Title + filter badge.
-	filterBadge := m.renderFilterBadge()
-	lines = append(lines, styles.StatsTitle.Render("Statistics")+"  "+filterBadge)
+	lines = append(lines, styles.StatsTitle.Render("Statistics")+"  "+m.renderFilterBadge())
+	if p := statsPeriodLabel(s); p != "" {
+		lines = append(lines, styles.DetailLabel.Render(p))
+	}
 	lines = append(lines, "")
 
-	// Metrics row.
-	metrics := fmt.Sprintf(
-		"%s sessions  %s messages  %s active  %s avg/day",
-		styles.StatsMetricValue.Render(fmt.Sprintf("%d", s.TotalSessions)),
-		styles.StatsMetricValue.Render(fmt.Sprintf("%d", s.TotalMessages)),
-		styles.StatsMetricValue.Render(fmt.Sprintf("%d", s.ActiveCount)),
-		styles.StatsMetricValue.Render(fmt.Sprintf("%.1f", s.AvgSessionsPerDay)),
-	)
-	lines = append(lines, metrics)
+	value := func(v string) string { return styles.StatsMetricValue.Render(v) }
+	label := func(v string) string { return styles.DetailLabel.Render(v) }
+	counts := value(statsCount(s.Sessions)) + label(" sessions   ") +
+		value(statsCount(s.Prompts)) + label(" prompts")
+	if s.ActiveCount > 0 {
+		counts += label("   ") + value(statsCount(s.ActiveCount)) + label(" running")
+	}
+	lines = append(lines, counts)
+	lines = append(lines, value(statsTokens(s.Tokens.Output))+label(" output tokens   ")+
+		value(statsTokens(s.Tokens.Total()))+label(" total"))
+	lines = append(lines, label("tokens include cache reads/writes and subagents"))
 	lines = append(lines, "")
 
-	// Top projects with horizontal bars.
-	if len(s.ProjectCounts) > 0 {
-		lines = append(lines, styles.DetailLabel.Render("Top Projects"))
-		maxCount := s.ProjectCounts[0].Count
-		maxBarWidth := statsBarWidth
-
-		// Size the name column to the longest name so two-component paths
-		// (e.g. "opmed-deployment-ng/dev") aren't clipped, capped so the
-		// popup can't grow unbounded. Width is measured in display cells.
-		nameWidth := 0
-		for _, p := range s.ProjectCounts {
-			if w := ansi.StringWidth(p.Name); w > nameWidth {
-				nameWidth = w
-			}
+	if s.Sessions == 0 && s.Tokens.Total() == 0 {
+		lines = append(lines, label("No activity in this period."), "")
+	} else {
+		lines = append(lines, m.renderProjects(s)...)
+		lines = append(lines, m.renderActivity(s)...)
+		lines = append(lines, m.renderModels(s)...)
+		if s.BusiestHour >= 0 {
+			n := s.Hourly[s.BusiestHour]
+			lines = append(lines, label("Busiest hour  ")+styles.DetailValue.Render(fmt.Sprintf(
+				"%02d:00-%02d:00", s.BusiestHour, (s.BusiestHour+1)%24))+label(fmt.Sprintf("  %s %s", statsCount(n), statsPlural(n, "prompt"))), "")
 		}
-		if nameWidth > statsNameColMax {
-			nameWidth = statsNameColMax
-		}
-
-		for _, p := range s.ProjectCounts {
-			barWidth := 1
-			if maxCount > 0 {
-				barWidth = p.Count * maxBarWidth / maxCount
-				if barWidth < 1 {
-					barWidth = 1
-				}
-			}
-			bar := strings.Repeat("\u2588", barWidth)
-			name := fmt.Sprintf("%-*s ", nameWidth, truncateDisplay(p.Name, nameWidth))
-			countStr := fmt.Sprintf(" %d", p.Count)
-			lines = append(lines, "  "+styles.DetailLabel.Render(name)+styles.StatsBar.Render(bar)+styles.DetailValue.Render(countStr))
-		}
-		lines = append(lines, "")
 	}
 
-	// Activity bar chart.
-	if s.Filter == "today" {
-		lines = append(lines, styles.DetailLabel.Render("Today's Activity (by hour)"))
-		maxVal := 0
-		for _, v := range s.HourlyActivity {
-			if v > maxVal {
-				maxVal = v
-			}
-		}
-		maxBarHeight := statsHourlyBarHeight
-		for row := maxBarHeight; row >= 1; row-- {
-			var rowStr strings.Builder
-			rowStr.WriteString("  ")
-			for h := 0; h < 24; h++ {
-				barHeight := 0
-				if maxVal > 0 {
-					barHeight = s.HourlyActivity[h] * maxBarHeight / maxVal
-				}
-				if barHeight >= row {
-					rowStr.WriteString(styles.StatsBar.Render("\u2588"))
-				} else {
-					rowStr.WriteString(" ")
-				}
-				rowStr.WriteString(" ")
-			}
-			lines = append(lines, rowStr.String())
-		}
-		// Hour labels: 0, 6, 12, 18, 23
-		var hourLabels strings.Builder
-		hourLabels.WriteString("  ")
-		for h := 0; h < 24; h++ {
-			switch h {
-			case 0:
-				hourLabels.WriteString("0 ")
-			case 6:
-				hourLabels.WriteString("6 ")
-			case 12:
-				hourLabels.WriteString("12")
-			case 13:
-				hourLabels.WriteString(" ")
-			case 18:
-				hourLabels.WriteString("18")
-			case 19:
-				hourLabels.WriteString(" ")
-			case 23:
-				hourLabels.WriteString("23")
-			default:
-				hourLabels.WriteString("  ")
-			}
-		}
-		lines = append(lines, styles.DetailLabel.Render(hourLabels.String()))
-		lines = append(lines, "")
-	} else if len(s.WeeklyActivity) > 0 {
-		chartLabel := "Activity"
-		if s.Filter == "week" {
-			chartLabel = "Weekly Activity"
-		}
-		lines = append(lines, styles.DetailLabel.Render(chartLabel))
-		maxMsgs := 0
-		for _, d := range s.WeeklyActivity {
-			if d.MessageCount > maxMsgs {
-				maxMsgs = d.MessageCount
-			}
-		}
-		maxBarHeight := statsWeeklyBarHeight
-		barChar := "\u2588"
-		spaceChar := " "
-		sepChar := ""
-		if len(s.WeeklyActivity) <= 7 {
-			barChar = "\u2588\u2588"
-			spaceChar = "  "
-			sepChar = " "
-		}
-		for row := maxBarHeight; row >= 1; row-- {
-			var rowStr strings.Builder
-			rowStr.WriteString("  ")
-			for _, d := range s.WeeklyActivity {
-				barHeight := 0
-				if maxMsgs > 0 {
-					barHeight = d.MessageCount * maxBarHeight / maxMsgs
-				}
-				if barHeight >= row {
-					rowStr.WriteString(styles.StatsBar.Render(barChar))
-				} else {
-					rowStr.WriteString(spaceChar)
-				}
-				rowStr.WriteString(sepChar)
-			}
-			lines = append(lines, rowStr.String())
-		}
-		var dayLabels strings.Builder
-		dayLabels.WriteString("  ")
-		for i, d := range s.WeeklyActivity {
-			label := d.Date
-			if len(s.WeeklyActivity) <= 7 {
-				if len(label) >= 10 {
-					t, err := time.Parse("2006-01-02", label)
-					if err == nil {
-						label = t.Format("Mon")[:2]
-					} else {
-						label = label[8:10]
-					}
-				}
-				dayLabels.WriteString(fmt.Sprintf("%-3s", label))
-			} else {
-				if i == 0 || i == len(s.WeeklyActivity)-1 || i%7 == 0 {
-					if len(label) >= 10 {
-						dayLabels.WriteString(label[8:10])
-					} else {
-						dayLabels.WriteString(" ")
-					}
-				} else {
-					dayLabels.WriteString(" ")
-				}
-			}
-		}
-		lines = append(lines, styles.DetailLabel.Render(dayLabels.String()))
-		lines = append(lines, "")
-	}
-
-	// Model usage.
-	if len(s.ModelUsage) > 0 {
-		lines = append(lines, styles.DetailLabel.Render("Model Usage"))
-		totalTokens := 0
-		for _, mu := range s.ModelUsage {
-			totalTokens += mu.Count
-		}
-		for _, mu := range s.ModelUsage {
-			pct := 0
-			if totalTokens > 0 {
-				pct = mu.Count * 100 / totalTokens
-			}
-			barWidth := mu.Count * statsBarWidth / maxInt(totalTokens, 1)
-			if barWidth < 1 && mu.Count > 0 {
-				barWidth = 1
-			}
-			bar := strings.Repeat("\u2588", barWidth)
-			barStyle := styles.StatsBar
-			if mu.Family == "opus" {
-				barStyle = styles.StatsBarAlt
-			}
-			label := fmt.Sprintf("%-*s", statsModelLabelWidth, mu.Family)
-			lines = append(lines, "  "+styles.DetailLabel.Render(label)+" "+barStyle.Render(bar)+" "+styles.DetailValue.Render(fmt.Sprintf("%d%%", pct)))
-		}
-		lines = append(lines, "")
-	}
-
-	// Longest session + peak hour.
-	if s.LongestSession.SessionID != "" {
-		dur := formatMinutes(s.LongestSession.DurationMins)
-		lines = append(lines, styles.DetailLabel.Render("Longest session: ")+
-			styles.DetailValue.Render(fmt.Sprintf("%s (%d messages)", dur, s.LongestSession.MessageCount)))
-	}
-	lines = append(lines, styles.DetailLabel.Render("Peak hour: ")+
-		styles.DetailValue.Render(fmt.Sprintf("%02d:00", s.PeakHour)))
-
-	lines = append(lines, "")
 	lines = append(lines, styles.DetailLabel.Render("Tab")+" "+styles.HelpDesc.Render("filter")+"  "+
 		styles.DetailLabel.Render("Any key")+" "+styles.HelpDesc.Render("close"))
 
-	content := strings.Join(lines, "\n")
-	popup := styles.StatsBorder.Render(content)
+	return styles.StatsBorder.Render(strings.Join(lines, "\n"))
+}
 
-	return popup
+// statsPeriodLabel describes the span the numbers cover. "All time" is bounded by
+// the transcripts Claude Code still keeps on disk.
+func statsPeriodLabel(s *stats.Stats) string {
+	if s.Since.IsZero() {
+		return ""
+	}
+	since := s.Since.Local()
+	switch s.Filter {
+	case "today":
+		return since.Format("Mon, Jan 2")
+	case "week":
+		return since.Format("Jan 2") + " - " + time.Now().Format("Jan 2")
+	}
+	return "all transcripts on disk, since " + since.Format("Jan 2, 2006")
+}
+
+func (m StatsModel) renderProjects(s *stats.Stats) []string {
+	if len(s.Projects) == 0 {
+		return nil
+	}
+	lines := []string{styles.DetailLabel.Render("Top projects") + styles.HelpDesc.Render("  sessions / prompts")}
+	nameWidth, countWidth := 0, 0
+	counts := make([]string, len(s.Projects))
+	for i, p := range s.Projects {
+		nameWidth = max(nameWidth, ansi.StringWidth(p.Name))
+		counts[i] = fmt.Sprintf(" / %s", statsCount(p.Prompts))
+		countWidth = max(countWidth, len(fmt.Sprintf(" %d", p.Sessions))+len(counts[i]))
+	}
+	nameWidth = min(nameWidth, statsNameColMax)
+	// Shrink the name column rather than let the popup outgrow the terminal.
+	if m.width > 0 {
+		nameWidth = max(min(nameWidth, m.width-statsPopupChrome-2-1-statsBarWidth-countWidth), 8)
+	}
+	maxSessions := max(s.Projects[0].Sessions, 1)
+	for i, p := range s.Projects {
+		bar := strings.Repeat("\u2588", max(p.Sessions*statsBarWidth/maxSessions, 1))
+		name := fmt.Sprintf("%-*s ", nameWidth, truncateDisplayLeft(p.Name, nameWidth))
+		lines = append(lines, "  "+styles.DetailLabel.Render(name)+styles.StatsBar.Render(bar)+
+			styles.DetailValue.Render(fmt.Sprintf(" %d", p.Sessions))+styles.DetailLabel.Render(counts[i]))
+	}
+	return append(lines, "")
+}
+
+func (m StatsModel) renderActivity(s *stats.Stats) []string {
+	var values []int
+	var labels []statsAxisLabel
+	var title string
+	barW, gap := 1, 1
+	switch {
+	case s.Filter == "today":
+		title = "Prompts by hour"
+		values = s.Hourly[:]
+		for _, h := range []int{0, 23, 6, 12, 18} {
+			labels = append(labels, statsAxisLabel{bar: h, text: fmt.Sprintf("%d", h)})
+		}
+	case len(s.Daily) > 0:
+		title = "Prompts per day"
+		if s.Filter != "week" {
+			title += ", last " + fmt.Sprintf("%d", len(s.Daily)) + " days"
+		}
+		for _, d := range s.Daily {
+			values = append(values, d.Prompts)
+		}
+		last := len(s.Daily) - 1
+		if len(s.Daily) <= 7 {
+			barW, gap = 3, 2
+			for i := last; i >= 0; i-- {
+				labels = append(labels, statsAxisLabel{bar: i, text: statsDayLabel(s.Daily[i].Date, "Mon")})
+			}
+		} else {
+			labels = append(labels, statsAxisLabel{bar: last, text: statsDayLabel(s.Daily[last].Date, "Jan 2")},
+				statsAxisLabel{bar: 0, text: statsDayLabel(s.Daily[0].Date, "Jan 2")})
+			for i := last - 7; i > 0; i -= 7 {
+				labels = append(labels, statsAxisLabel{bar: i, text: statsDayLabel(s.Daily[i].Date, "Jan 2")})
+			}
+		}
+	default:
+		return nil
+	}
+	peak := 0
+	for _, v := range values {
+		peak = max(peak, v)
+	}
+	if peak == 0 {
+		return []string{styles.DetailLabel.Render(title) + styles.HelpDesc.Render("  none"), ""}
+	}
+	height := statsWeeklyBarHeight
+	if s.Filter == "today" {
+		height = statsHourlyBarHeight
+	}
+	lines := []string{styles.DetailLabel.Render(title) + styles.HelpDesc.Render(fmt.Sprintf("  peak %s", statsCount(peak)))}
+	for _, row := range statsBars(values, barW, gap, height) {
+		lines = append(lines, "  "+styles.StatsBar.Render(row))
+	}
+	width := len(values)*(barW+gap) - gap
+	lines = append(lines, "  "+styles.DetailLabel.Render(statsAxisLabels(width, barW+gap, labels)))
+	return append(lines, "")
+}
+
+func (m StatsModel) renderModels(s *stats.Stats) []string {
+	var total int64
+	for _, mu := range s.Models {
+		total += mu.Tokens
+	}
+	if total == 0 {
+		return nil
+	}
+	lines := []string{styles.DetailLabel.Render("Models") + styles.HelpDesc.Render("  share of total tokens")}
+	for _, mu := range s.Models {
+		share := float64(mu.Tokens) / float64(total)
+		pct := fmt.Sprintf("%.0f%%", share*100)
+		barWidth := int(share*statsBarWidth + 0.5)
+		if share < 0.005 {
+			pct, barWidth = "<1%", 0
+		} else {
+			barWidth = max(barWidth, 1)
+		}
+		barStyle := styles.StatsBar
+		if mu.Family == "opus" {
+			barStyle = styles.StatsBarAlt
+		}
+		row := "  " + styles.DetailLabel.Render(fmt.Sprintf("%-*s", statsModelLabelWidth, capitalize(mu.Family))) + " "
+		if barWidth > 0 {
+			row += barStyle.Render(strings.Repeat("\u2588", barWidth)) + " "
+		}
+		lines = append(lines, row+styles.DetailValue.Render(pct)+styles.DetailLabel.Render("  "+statsTokens(mu.Tokens)))
+	}
+	return append(lines, "")
+}
+
+// statsBlocks are eighth-height blocks, so a bar's top cell shows its remainder.
+var statsBlocks = []rune(" \u2581\u2582\u2583\u2584\u2585\u2586\u2587\u2588")
+
+// statsBars draws a vertical bar chart top row first. Any non-zero value gets
+// at least a sliver so small days stay visible.
+func statsBars(values []int, barW, gap, height int) []string {
+	peak := 0
+	for _, v := range values {
+		peak = max(peak, v)
+	}
+	units := make([]int, len(values))
+	for i, v := range values {
+		if peak > 0 && v > 0 {
+			units[i] = max(v*height*8/peak, 1)
+		}
+	}
+	rows := make([]string, height)
+	for r := 0; r < height; r++ {
+		level := height - 1 - r
+		var b strings.Builder
+		for i, u := range units {
+			if i > 0 {
+				b.WriteString(strings.Repeat(" ", gap))
+			}
+			cell := min(max(u-level*8, 0), 8)
+			b.WriteString(strings.Repeat(string(statsBlocks[cell]), barW))
+		}
+		rows[r] = b.String()
+	}
+	return rows
+}
+
+// statsAxisLabel is a label anchored at a bar index.
+type statsAxisLabel struct {
+	bar  int
+	text string
+}
+
+// statsAxisLabels lays labels out in priority order on a width-cell row,
+// skipping any that would touch an already placed label.
+func statsAxisLabels(width, step int, labels []statsAxisLabel) string {
+	row := []rune(strings.Repeat(" ", width))
+	taken := make([]bool, width)
+	for _, l := range labels {
+		w := len([]rune(l.text))
+		start := min(l.bar*step, width-w)
+		if start < 0 {
+			continue
+		}
+		free := true
+		for c := max(start-1, 0); c < min(start+w+1, width); c++ {
+			if taken[c] {
+				free = false
+				break
+			}
+		}
+		if !free {
+			continue
+		}
+		for i, r := range []rune(l.text) {
+			row[start+i] = r
+			taken[start+i] = true
+		}
+	}
+	return string(row)
+}
+
+func statsDayLabel(date, layout string) string {
+	t, err := time.Parse("2006-01-02", date)
+	if err != nil {
+		return date
+	}
+	return t.Format(layout)
+}
+
+func statsCount(n int) string {
+	s := fmt.Sprintf("%d", n)
+	if n < 0 {
+		return s
+	}
+	for i := len(s) - 3; i > 0; i -= 3 {
+		s = s[:i] + "," + s[i:]
+	}
+	return s
+}
+
+func statsTokens(n int64) string {
+	switch {
+	case n >= 1e9:
+		return fmt.Sprintf("%.2fB", float64(n)/1e9)
+	case n >= 1e6:
+		return fmt.Sprintf("%.1fM", float64(n)/1e6)
+	case n >= 1e3:
+		return fmt.Sprintf("%.1fK", float64(n)/1e3)
+	}
+	return fmt.Sprintf("%d", n)
+}
+
+func statsPlural(n int, word string) string {
+	if n == 1 {
+		return word
+	}
+	return word + "s"
 }
 
 func (m StatsModel) renderFilterBadge() string {
-	filters := []struct {
-		label string
-		idx   int
-	}{
-		{"All time", FilterAll},
-		{"This week", FilterWeek},
-		{"Today", FilterToday},
-	}
-
 	var parts []string
-	for _, f := range filters {
-		if f.idx == m.filter {
-			parts = append(parts, styles.StatsFilterActive.Render("["+f.label+"]"))
+	for idx, label := range statsFilterLabels {
+		if idx == m.filter {
+			parts = append(parts, styles.StatsFilterActive.Render("["+label+"]"))
 		} else {
-			parts = append(parts, styles.StatsFilterInactive.Render(f.label))
+			parts = append(parts, styles.StatsFilterInactive.Render(label))
 		}
 	}
 	return strings.Join(parts, " ")
-}
-
-func formatMinutes(mins int) string {
-	if mins < 60 {
-		return fmt.Sprintf("%dm", mins)
-	}
-	return fmt.Sprintf("%dh %dm", mins/60, mins%60)
-}
-
-func maxInt(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }

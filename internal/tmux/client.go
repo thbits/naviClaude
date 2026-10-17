@@ -2,6 +2,7 @@ package tmux
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -120,37 +121,62 @@ func (c *Client) SwitchClient(target string) error {
 	return nil
 }
 
-// SelectPane makes the specified pane the active pane in its window.
+// SelectPane makes target the active pane. tmux ignores focus behind a modal pane, so
+// when that is this process's own floating pane it is closed first, ending the process.
 func (c *Client) SelectPane(target string) error {
+	if self := os.Getenv("TMUX_PANE"); self != "" && modalPaneOf(target) == self {
+		// One invocation: tmux runs both before this process gets its SIGHUP.
+		return exec.Command("tmux", "kill-pane", "-t", self, ";", "select-pane", "-t", target).Run()
+	}
 	if err := exec.Command("tmux", "select-pane", "-t", target).Run(); err != nil {
 		return fmt.Errorf("tmux select-pane -t %s: %w", target, err)
 	}
 	return nil
 }
 
+// modalPaneOf returns the id of the modal pane in target's window, or "" when
+// there is none (always, before tmux 3.8).
+func modalPaneOf(target string) string {
+	out, err := exec.Command("tmux", "display-message", "-p", "-t", target, "#{window_modal_pane}").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
 // DisplayPopupOptions holds parameters for tmux display-popup.
 type DisplayPopupOptions struct {
+	Target LaunchTarget
 	// Width and Height accept tmux size expressions, e.g. "80" or "80%".
 	Width   string
 	Height  string
 	Command string
+	Version string // server version; gates the -s/-S style flags
 }
 
-// DisplayPopup opens an interactive popup over the current pane.
-// The popup runs Command and exits when the command finishes.
-func (c *Client) DisplayPopup(opts DisplayPopupOptions) error {
-	args := []string{"display-popup", "-E"}
+func displayPopupArgs(opts DisplayPopupOptions) []string {
+	args := append([]string{"display-popup", "-E"}, opts.Target.args()...)
 	if opts.Width != "" {
 		args = append(args, "-w", opts.Width)
 	}
 	if opts.Height != "" {
 		args = append(args, "-h", opts.Height)
 	}
+	args = append(args, "-x", "C", "-y", "C")
+	if SupportsPopupStyle(opts.Version) {
+		args = append(args, "-s", PopupStyle, "-S", PopupStyle)
+	}
 	if opts.Command != "" {
 		args = append(args, opts.Command)
 	}
-	if err := exec.Command("tmux", args...).Run(); err != nil {
-		return fmt.Errorf("tmux display-popup: %w", err)
+	return args
+}
+
+// DisplayPopup opens a centred interactive popup that closes when Command
+// exits. It blocks until then.
+func (c *Client) DisplayPopup(opts DisplayPopupOptions) error {
+	if out, err := exec.Command("tmux", displayPopupArgs(opts)...).CombinedOutput(); err != nil {
+		return fmt.Errorf("tmux display-popup: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	return nil
 }
@@ -401,9 +427,10 @@ func (c *Client) NewWindowPrint(opts NewWindowOptions) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-// parseVersionString parses a version string like "3.4" or "3.4a" into its
-// major and minor integer components.
+// parseVersionString parses a version string like "3.4", "3.4a" or
+// "next-3.9" (a development build) into its major and minor components.
 func parseVersionString(v string) (major, minor int, err error) {
+	v = strings.TrimPrefix(strings.TrimSpace(v), "next-")
 	// strip trailing non-numeric suffix (e.g. "3.4a" -> "3.4")
 	trimmed := strings.TrimRightFunc(v, func(r rune) bool {
 		return r < '0' || r > '9'
@@ -420,10 +447,16 @@ func parseVersionString(v string) (major, minor int, err error) {
 	if err != nil {
 		return 0, 0, err
 	}
-	if len(parts) == 2 && parts[1] != "" {
-		minor, err = strconv.Atoi(parts[1])
-		if err != nil {
-			return 0, 0, err
+	if len(parts) == 2 {
+		// Keep only the leading digits, so "8-rc2" reads as 8.
+		digits := parts[1]
+		if i := strings.IndexFunc(digits, func(r rune) bool { return r < '0' || r > '9' }); i >= 0 {
+			digits = digits[:i]
+		}
+		if digits != "" {
+			if minor, err = strconv.Atoi(digits); err != nil {
+				return 0, 0, err
+			}
 		}
 	}
 	return major, minor, nil

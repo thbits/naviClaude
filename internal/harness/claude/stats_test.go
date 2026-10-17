@@ -4,417 +4,416 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/thbits/naviClaude/internal/stats"
 )
 
-func TestGroupModelUsage(t *testing.T) {
-	tests := []struct {
-		name      string
-		usage     map[string]modelUsageRaw
-		wantCount int
-		wantFirst string // family name of highest-count entry
-	}{
-		{
-			name:      "nil map",
-			usage:     nil,
-			wantCount: 0,
-		},
-		{
-			name:      "empty map",
-			usage:     map[string]modelUsageRaw{},
-			wantCount: 0,
-		},
-		{
-			name: "single opus model",
-			usage: map[string]modelUsageRaw{
-				"claude-opus-4-6": {InputTokens: 1000, OutputTokens: 500},
-			},
-			wantCount: 1,
-			wantFirst: "opus",
-		},
-		{
-			name: "multiple models same family aggregated",
-			usage: map[string]modelUsageRaw{
-				"claude-sonnet-4-6": {InputTokens: 100, OutputTokens: 200},
-				"claude-sonnet-4-5": {InputTokens: 300, OutputTokens: 400},
-			},
-			wantCount: 1,
-			wantFirst: "sonnet",
-		},
-		{
-			name: "all three families sorted by count desc",
-			usage: map[string]modelUsageRaw{
-				"claude-haiku-4-5":  {InputTokens: 10, OutputTokens: 10},
-				"claude-opus-4-6":   {InputTokens: 5000, OutputTokens: 5000},
-				"claude-sonnet-4-6": {InputTokens: 100, OutputTokens: 100},
-			},
-			wantCount: 3,
-			wantFirst: "opus",
-		},
-		{
-			name: "unknown model ignored",
-			usage: map[string]modelUsageRaw{
-				"gpt-4": {InputTokens: 999, OutputTokens: 999},
-			},
-			wantCount: 0,
-		},
-		{
-			name: "case insensitive matching",
-			usage: map[string]modelUsageRaw{
-				"Claude-OPUS-4-6": {InputTokens: 100, OutputTokens: 100},
-			},
-			wantCount: 1,
-			wantFirst: "opus",
+// statsFixture writes JSONL transcripts under a temp claude dir.
+type statsFixture struct {
+	t   *testing.T
+	dir string
+}
+
+func newStatsFixture(t *testing.T) *statsFixture {
+	return &statsFixture{t: t, dir: t.TempDir()}
+}
+
+func (fx *statsFixture) write(rel string, recs ...map[string]any) string {
+	fx.t.Helper()
+	p := filepath.Join(fx.dir, "projects", rel)
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		fx.t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte(statsJSONL(fx.t, recs...)), 0o644); err != nil {
+		fx.t.Fatal(err)
+	}
+	return p
+}
+
+func (fx *statsFixture) compute(filter string, now time.Time) *stats.Stats {
+	return computeStats(&transcriptCache{}, fx.dir, 0, filter, now)
+}
+
+func statsJSONL(t *testing.T, recs ...map[string]any) string {
+	t.Helper()
+	var b strings.Builder
+	for _, r := range recs {
+		raw, err := json.Marshal(r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b.Write(raw)
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
+func statsTS(t time.Time) string { return t.UTC().Format(time.RFC3339Nano) }
+
+func statsPrompt(uuid string, at time.Time, text string) map[string]any {
+	return map[string]any{
+		"type": "user", "uuid": uuid, "timestamp": statsTS(at), "cwd": "/work/proj",
+		"isSidechain": false, "origin": map[string]any{"kind": "human"},
+		"message": map[string]any{"role": "user", "content": text},
+	}
+}
+
+func statsReply(uuid, msgID, req string, at time.Time, model string, in, out, cr, cw int) map[string]any {
+	return map[string]any{
+		"type": "assistant", "uuid": uuid, "timestamp": statsTS(at), "cwd": "/work/proj", "requestId": req,
+		"message": map[string]any{
+			"id": msgID, "model": model, "role": "assistant",
+			"content": []any{map[string]any{"type": "text", "text": "ok"}},
+			"usage":   map[string]any{"input_tokens": in, "output_tokens": out, "cache_read_input_tokens": cr, "cache_creation_input_tokens": cw},
 		},
 	}
+}
 
+var statsNow = time.Date(2026, 10, 17, 15, 30, 0, 0, time.Local)
+
+func TestComputeCountsPromptsAndTokens(t *testing.T) {
+	fx := newStatsFixture(t)
+	at := statsNow.Add(-time.Hour)
+	toolResult := map[string]any{
+		"type": "user", "uuid": "u-tool", "timestamp": statsTS(at), "toolUseResult": map[string]any{"stdout": "x"},
+		"message": map[string]any{"role": "user", "content": []any{map[string]any{"type": "tool_result", "content": "x"}}},
+	}
+	meta := statsPrompt("u-meta", at, "skill body")
+	meta["isMeta"] = true
+	compact := statsPrompt("u-compact", at, "This session is being continued")
+	compact["isCompactSummary"] = true
+	notification := statsPrompt("u-notify", at, "<task-notification>done</task-notification>")
+	notification["origin"] = map[string]any{"kind": "task-notification"}
+	legacyCmd := statsPrompt("u-cmd", at, "<command-name>/clear</command-name>")
+	delete(legacyCmd, "origin")
+	legacyPrompt := statsPrompt("u-legacy", at, "an older-format prompt")
+	delete(legacyPrompt, "origin")
+	interrupted := map[string]any{
+		"type": "user", "uuid": "u-int", "timestamp": statsTS(at),
+		"message": map[string]any{"role": "user", "content": []any{map[string]any{"type": "text", "text": "[Request interrupted by user]"}}},
+	}
+	synthetic := statsReply("a-syn", "msg_syn", "req_syn", at, "<synthetic>", 0, 0, 0, 0)
+
+	fx.write("-work-proj/s1.jsonl",
+		map[string]any{"type": "mode", "sessionId": "s1"},
+		statsPrompt("u1", at, "fix the bug"),
+		// One API response is written as one record per content block.
+		statsReply("a1", "msg_1", "req_1", at, "claude-opus-5-5", 10, 100, 1000, 50),
+		statsReply("a2", "msg_1", "req_1", at, "claude-opus-5-5", 10, 100, 1000, 50),
+		toolResult, meta, compact, notification, legacyCmd, legacyPrompt, interrupted, synthetic,
+		statsReply("a3", "msg_2", "req_2", at, "claude-sonnet-5", 1, 20, 0, 0),
+	)
+	sub := statsReply("s-a1", "msg_sub", "req_sub", at, "claude-haiku-5-5", 5, 7, 0, 0)
+	sub["isSidechain"] = true
+	subPrompt := statsPrompt("s-u1", at, "subagent instructions")
+	subPrompt["isSidechain"] = true
+	fx.write("-work-proj/s1/subagents/agent-x.jsonl", subPrompt, sub)
+
+	st := fx.compute("all", statsNow)
+	if st.Sessions != 1 {
+		t.Errorf("Sessions = %d, want 1 (subagent transcripts are not sessions)", st.Sessions)
+	}
+	if st.Prompts != 2 {
+		t.Errorf("Prompts = %d, want 2 (typed prompt + legacy prompt)", st.Prompts)
+	}
+	want := stats.Tokens{Input: 16, Output: 127, CacheRead: 1000, CacheWrite: 50}
+	if st.Tokens != want {
+		t.Errorf("Tokens = %+v, want %+v (msg_1 once, sonnet, subagent haiku)", st.Tokens, want)
+	}
+	gotModels := map[string]int64{}
+	for _, m := range st.Models {
+		gotModels[m.Family] = m.Tokens
+	}
+	if gotModels["opus"] != 1160 || gotModels["sonnet"] != 21 || gotModels["haiku"] != 12 || len(gotModels) != 3 {
+		t.Errorf("Models = %+v", st.Models)
+	}
+	if st.Models[0].Family != "opus" {
+		t.Errorf("Models not sorted by tokens: %+v", st.Models)
+	}
+}
+
+func TestComputeDedupesForkedSessions(t *testing.T) {
+	fx := newStatsFixture(t)
+	day := statsNow.Add(-2 * time.Hour)
+	shared := []map[string]any{
+		statsPrompt("u1", day, "first"),
+		statsReply("a1", "msg_1", "req_1", day, "claude-opus-5-5", 1, 10, 0, 0),
+	}
+	fx.write("-work-proj/orig.jsonl", shared...)
+	// A pure copy contributes nothing new; a fork that continues adds its own turn.
+	fx.write("-work-proj/copy.jsonl", shared...)
+	fx.write("-work-proj/fork.jsonl", append(shared,
+		statsPrompt("u2", day.Add(time.Minute), "second"),
+		statsReply("a2", "msg_2", "req_2", day.Add(time.Minute), "claude-opus-5-5", 1, 5, 0, 0))...)
+
+	st := fx.compute("all", statsNow)
+	if st.Prompts != 2 || st.Tokens.Output != 15 {
+		t.Errorf("Prompts = %d Output = %d, want 2 and 15", st.Prompts, st.Tokens.Output)
+	}
+	if st.Sessions != 2 {
+		t.Errorf("Sessions = %d, want 2 (orig and its pure copy share every record)", st.Sessions)
+	}
+}
+
+func TestComputeFilters(t *testing.T) {
+	fx := newStatsFixture(t)
+	today := time.Date(2026, 10, 17, 9, 0, 0, 0, time.Local)
+	yesterday := today.AddDate(0, 0, -1).Add(5 * time.Hour)
+	sixDaysAgo := time.Date(2026, 10, 11, 0, 0, 1, 0, time.Local)
+	sevenDaysAgo := time.Date(2026, 10, 10, 23, 59, 0, 0, time.Local)
+	fx.write("-a/today.jsonl", statsPrompt("t1", today, "a"), statsPrompt("t2", today.Add(time.Minute), "b"),
+		statsReply("ta", "m1", "r1", today, "claude-opus-5-5", 0, 10, 0, 0))
+	fx.write("-a/yesterday.jsonl", statsPrompt("y1", yesterday, "a"))
+	fx.write("-a/six.jsonl", statsPrompt("s1", sixDaysAgo, "a"))
+	fx.write("-a/seven.jsonl", statsPrompt("v1", sevenDaysAgo, "a"))
+
+	tests := []struct {
+		filter            string
+		sessions, prompts int
+		days              int
+		since             time.Time
+	}{
+		{"today", 1, 2, 1, time.Date(2026, 10, 17, 0, 0, 0, 0, time.Local)},
+		{"week", 3, 4, 7, time.Date(2026, 10, 11, 0, 0, 0, 0, time.Local)},
+		{"all", 4, 5, 30, sevenDaysAgo.Truncate(time.Second)},
+	}
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := groupModelUsage(tt.usage)
-			if len(result) != tt.wantCount {
-				t.Fatalf("got %d entries, want %d", len(result), tt.wantCount)
+		t.Run(tt.filter, func(t *testing.T) {
+			st := fx.compute(tt.filter, statsNow)
+			if st.Sessions != tt.sessions || st.Prompts != tt.prompts {
+				t.Errorf("Sessions = %d Prompts = %d, want %d and %d", st.Sessions, st.Prompts, tt.sessions, tt.prompts)
 			}
-			if tt.wantCount > 0 && result[0].Family != tt.wantFirst {
-				t.Errorf("first family = %q, want %q", result[0].Family, tt.wantFirst)
+			if len(st.Daily) != tt.days || st.Daily[len(st.Daily)-1].Date != "2026-10-17" {
+				t.Fatalf("Daily = %+v, want %d days ending today", st.Daily, tt.days)
+			}
+			if !st.Since.Equal(tt.since) {
+				t.Errorf("Since = %v, want %v", st.Since, tt.since)
+			}
+			sum := 0
+			for _, d := range st.Daily {
+				sum += d.Prompts
+			}
+			if sum != tt.prompts {
+				t.Errorf("daily buckets sum to %d, want %d", sum, tt.prompts)
+			}
+			if st.BusiestHour != 9 || st.Hourly[9] != 2 {
+				t.Errorf("BusiestHour = %d (Hourly[9] = %d), want 9 with 2", st.BusiestHour, st.Hourly[9])
 			}
 		})
 	}
 }
 
-func TestFindPeakHour(t *testing.T) {
-	tests := []struct {
-		name       string
-		hourCounts map[string]int
-		want       int
-	}{
-		{
-			name:       "nil map returns 0",
-			hourCounts: nil,
-			want:       0,
-		},
-		{
-			name:       "empty map returns 0",
-			hourCounts: map[string]int{},
-			want:       0,
-		},
-		{
-			name:       "single hour",
-			hourCounts: map[string]int{"14": 42},
-			want:       14,
-		},
-		{
-			name:       "multiple hours returns highest",
-			hourCounts: map[string]int{"9": 10, "14": 50, "22": 30},
-			want:       14,
-		},
-		{
-			name:       "hour zero",
-			hourCounts: map[string]int{"0": 100},
-			want:       0,
-		},
-		{
-			name:       "hour 23",
-			hourCounts: map[string]int{"23": 5, "1": 3},
-			want:       23,
-		},
+func TestComputeNoActivity(t *testing.T) {
+	fx := newStatsFixture(t)
+	fx.write("-a/old.jsonl", statsPrompt("o1", statsNow.AddDate(0, 0, -3), "a"))
+	st := fx.compute("today", statsNow)
+	if st.Sessions != 0 || st.Prompts != 0 || st.BusiestHour != -1 || len(st.Projects) != 0 {
+		t.Errorf("got %+v, want an empty period with BusiestHour -1", st)
 	}
+}
 
+func TestProjectLabels(t *testing.T) {
+	home := "/Users/me"
+	tests := []struct {
+		name string
+		cwds []string
+		want map[string]string
+	}{
+		{"home is tilde", []string{"/Users/me"}, map[string]string{"/Users/me": "~"}},
+		{"unique last segment", []string{"/Users/me/git/naviClaude", "/Users/me/git/opmed-tf"},
+			map[string]string{"/Users/me/git/naviClaude": "naviClaude", "/Users/me/git/opmed-tf": "opmed-tf"}},
+		{"shared suffix grows until distinct", []string{
+			"/Users/me/git/claude-marketplace/skills/devops-pr-review",
+			"/Users/me/.agents/skills/devops-pr-review",
+			"/Users/me/git/other",
+		}, map[string]string{
+			"/Users/me/git/claude-marketplace/skills/devops-pr-review": "claude-marketplace/skills/devops-pr-review",
+			"/Users/me/.agents/skills/devops-pr-review":                ".agents/skills/devops-pr-review",
+			"/Users/me/git/other":                                      "other",
+		}},
+		{"region dirs", []string{"/Users/me/tf/dev/us-east-1", "/Users/me/tf/prod/us-east-1"},
+			map[string]string{"/Users/me/tf/dev/us-east-1": "dev/us-east-1", "/Users/me/tf/prod/us-east-1": "prod/us-east-1"}},
+		{"suffix of another path", []string{"/Users/me/x", "/Users/me/a/x", "/x"},
+			map[string]string{"/Users/me/x": "~/x", "/Users/me/a/x": "a/x", "/x": "/x"}},
+		{"duplicates collapse", []string{"/Users/me/p", "/Users/me/p"}, map[string]string{"/Users/me/p": "p"}},
+	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := findPeakHour(tt.hourCounts)
-			if got != tt.want {
-				t.Errorf("findPeakHour() = %d, want %d", got, tt.want)
+			got := projectLabels(tt.cwds, home)
+			for cwd, want := range tt.want {
+				if got[cwd] != want {
+					t.Errorf("label(%q) = %q, want %q", cwd, got[cwd], want)
+				}
 			}
 		})
 	}
 }
 
-func TestFilterDailyActivity(t *testing.T) {
-	today := time.Now().Format("2006-01-02")
+func TestComputeProjectsUseSessionStartDir(t *testing.T) {
+	fx := newStatsFixture(t)
+	at := statsNow.Add(-time.Hour)
+	p := statsPrompt("u1", at, "a")
+	p["cwd"] = "/work/one/app"
+	drift := statsPrompt("u2", at, "b")
+	drift["cwd"] = "/work/one/app/sub" // the shell cd'd; the session still belongs to app
+	fx.write("-work-one-app/s1.jsonl", p, drift)
+	q := statsPrompt("u3", at, "c")
+	q["cwd"] = "/work/two/app"
+	fx.write("-work-two-app/s2.jsonl", q)
 
-	daily := []dailyActivity{
-		{Date: today, MessageCount: 10, SessionCount: 2},
+	st := fx.compute("all", statsNow)
+	names := map[string]int{}
+	for _, pc := range st.Projects {
+		names[pc.Name] = pc.Prompts
+	}
+	if names["one/app"] != 2 || names["two/app"] != 1 || len(names) != 2 {
+		t.Errorf("Projects = %+v, want one/app (2 prompts) and two/app (1)", st.Projects)
+	}
+}
+
+func TestTranscriptCacheInvalidation(t *testing.T) {
+	fx := newStatsFixture(t)
+	at := statsNow.Add(-time.Hour)
+	path := fx.write("-a/s.jsonl", statsPrompt("u1", at, "a"))
+	cachePath := filepath.Join(t.TempDir(), "cache.gob")
+	c := &transcriptCache{path: cachePath}
+	run := func(c *transcriptCache) *stats.Stats { return computeStats(c, fx.dir, 0, "all", statsNow) }
+
+	if got := run(c).Prompts; got != 1 {
+		t.Fatalf("Prompts = %d, want 1", got)
 	}
 
-	t.Run("today filter returns single day", func(t *testing.T) {
-		result := filterDailyActivity(daily, "today")
-		if len(result) != 1 {
-			t.Fatalf("got %d days, want 1", len(result))
-		}
-		if result[0].Date != today {
-			t.Errorf("date = %q, want %q", result[0].Date, today)
-		}
-		if result[0].MessageCount != 10 {
-			t.Errorf("message count = %d, want 10", result[0].MessageCount)
-		}
-	})
+	// Same size and mtime: the cached summary is served without reading the file.
+	info, _ := os.Stat(path)
+	same := statsJSONL(t, statsPrompt("u9", at.Add(time.Hour), "b"))
+	if len(same) != int(info.Size()) {
+		t.Fatalf("statsFixture sizes differ: %d vs %d", len(same), info.Size())
+	}
+	if err := os.WriteFile(path, []byte(same), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, info.ModTime(), info.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	if got := run(c).BusiestHour; got != at.Hour() {
+		t.Fatalf("unchanged (size, mtime) rescanned: BusiestHour = %d, want %d", got, at.Hour())
+	}
+	// The on-disk cache serves a fresh process the same way.
+	if got := run(&transcriptCache{path: cachePath}).BusiestHour; got != at.Hour() {
+		t.Fatalf("disk cache not reused: BusiestHour = %d, want %d", got, at.Hour())
+	}
 
-	t.Run("week filter returns 7 days", func(t *testing.T) {
-		result := filterDailyActivity(daily, "week")
-		if len(result) != 7 {
-			t.Fatalf("got %d days, want 7", len(result))
-		}
-	})
+	// Appending is picked up, parsing from the previous offset.
+	if err := os.WriteFile(path, []byte(statsJSONL(t, statsPrompt("u1", at, "a"))), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = f.WriteString(statsJSONL(t, statsPrompt("u2", at, "c"), statsPrompt("u3", at, "d")))
+	f.Close()
+	if got := run(c).Prompts; got != 3 {
+		t.Errorf("after append Prompts = %d, want 3", got)
+	}
 
-	t.Run("all filter returns 30 days", func(t *testing.T) {
-		result := filterDailyActivity(daily, "all")
-		if len(result) != 30 {
-			t.Fatalf("got %d days, want 30", len(result))
-		}
-	})
+	// A rewrite that shrinks the file forces a full rescan.
+	if err := os.WriteFile(path, []byte(statsJSONL(t, statsPrompt("u7", at, "e"))), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := run(c).Prompts; got != 1 {
+		t.Errorf("after rewrite Prompts = %d, want 1", got)
+	}
 
-	t.Run("today with no matching data returns placeholder", func(t *testing.T) {
-		result := filterDailyActivity(nil, "today")
-		if len(result) != 1 {
-			t.Fatalf("got %d days, want 1", len(result))
-		}
-		if result[0].MessageCount != 0 {
-			t.Errorf("expected zero message count for missing day")
-		}
-	})
-
-	t.Run("week with empty data fills all 7 days", func(t *testing.T) {
-		result := filterDailyActivity(nil, "week")
-		if len(result) != 7 {
-			t.Fatalf("got %d days, want 7", len(result))
-		}
-		for _, d := range result {
-			if d.MessageCount != 0 || d.SessionCount != 0 {
-				t.Errorf("expected zero counts for day %s", d.Date)
-			}
-		}
-	})
+	// Deleted transcripts drop out.
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if got := run(c); got.Prompts != 0 || len(c.files) != 0 {
+		t.Errorf("after delete Prompts = %d cached files = %d, want 0 and 0", got.Prompts, len(c.files))
+	}
 }
 
-func TestCompute(t *testing.T) {
-	t.Run("with valid stats-cache.json", func(t *testing.T) {
-		dir := t.TempDir()
-		cache := claudeStatsCache{
-			TotalSessions:    42,
-			TotalMessages:    100,
-			FirstSessionDate: "2025-01-01",
-			ModelUsage: map[string]modelUsageRaw{
-				"claude-opus-4-6": {InputTokens: 500, OutputTokens: 500},
-			},
-			HourCounts: map[string]int{"14": 20},
-			LongestSession: longestSessionRaw{
-				SessionID:    "abc-123",
-				Duration:     3600000,
-				MessageCount: 50,
-			},
-		}
-		data, _ := json.Marshal(cache)
-		os.WriteFile(filepath.Join(dir, "stats-cache.json"), data, 0o644)
-		os.MkdirAll(filepath.Join(dir, "projects"), 0o755)
-
-		st, err := Compute(dir, 3, "all")
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if st.TotalSessions != 42 {
-			t.Errorf("TotalSessions = %d, want 42", st.TotalSessions)
-		}
-		if st.TotalMessages != 100 {
-			t.Errorf("TotalMessages = %d, want 100", st.TotalMessages)
-		}
-		if st.ActiveCount != 3 {
-			t.Errorf("ActiveCount = %d, want 3", st.ActiveCount)
-		}
-		if st.Filter != "all" {
-			t.Errorf("Filter = %q, want %q", st.Filter, "all")
-		}
-		if st.PeakHour != 14 {
-			t.Errorf("PeakHour = %d, want 14", st.PeakHour)
-		}
-		if st.LongestSession.DurationMins != 60 {
-			t.Errorf("LongestSession.DurationMins = %d, want 60", st.LongestSession.DurationMins)
-		}
-		if len(st.ModelUsage) != 1 || st.ModelUsage[0].Family != "opus" {
-			t.Errorf("ModelUsage unexpected: %+v", st.ModelUsage)
-		}
-		if st.AvgSessionsPerDay <= 0 {
-			t.Error("expected positive AvgSessionsPerDay")
-		}
-	})
-
-	t.Run("missing stats-cache.json returns empty stats", func(t *testing.T) {
-		dir := t.TempDir()
-		os.MkdirAll(filepath.Join(dir, "projects"), 0o755)
-
-		st, err := Compute(dir, 0, "week")
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if st.TotalSessions != 0 {
-			t.Errorf("TotalSessions = %d, want 0", st.TotalSessions)
-		}
-	})
-
-	t.Run("invalid JSON in stats-cache.json is handled", func(t *testing.T) {
-		dir := t.TempDir()
-		os.WriteFile(filepath.Join(dir, "stats-cache.json"), []byte("not json"), 0o644)
-		os.MkdirAll(filepath.Join(dir, "projects"), 0o755)
-
-		st, err := Compute(dir, 0, "all")
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if st.TotalSessions != 0 {
-			t.Errorf("TotalSessions = %d, want 0", st.TotalSessions)
-		}
-	})
+func TestTranscriptCacheDiscardsOtherVersion(t *testing.T) {
+	cachePath := filepath.Join(t.TempDir(), "cache.gob")
+	c := &transcriptCache{path: cachePath, files: map[string]*transcriptSummary{"/x": {Size: 1}}}
+	if err := c.save(); err != nil {
+		t.Fatal(err)
+	}
+	if got := (&transcriptCache{path: cachePath}).load(); len(got) != 1 {
+		t.Fatalf("round-trip lost entries: %v", got)
+	}
+	raw, _ := os.ReadFile(cachePath)
+	_ = os.WriteFile(cachePath, raw[:len(raw)/2], 0o644)
+	if got := (&transcriptCache{path: cachePath}).load(); len(got) != 0 {
+		t.Errorf("torn cache file decoded into %d entries", len(got))
+	}
 }
 
-func TestCountSessionFiles(t *testing.T) {
-	t.Run("counts jsonl files", func(t *testing.T) {
-		dir := t.TempDir()
-		projDir := filepath.Join(dir, "projects", "myproject")
-		os.MkdirAll(projDir, 0o755)
-		os.WriteFile(filepath.Join(projDir, "sess1.jsonl"), []byte("{}"), 0o644)
-		os.WriteFile(filepath.Join(projDir, "sess2.jsonl"), []byte("{}"), 0o644)
-		os.WriteFile(filepath.Join(projDir, "readme.txt"), []byte("hi"), 0o644)
+func TestScanTranscriptLongAndPartialLines(t *testing.T) {
+	fx := newStatsFixture(t)
+	at := statsNow.Add(-time.Hour)
+	huge := map[string]any{"type": "attachment", "content": strings.Repeat("x", 3<<20)}
+	path := fx.write("-a/s.jsonl", huge, statsPrompt("u1", at, "after a 3MB line"))
 
-		got := CountSessionFiles(dir)
-		if got != 2 {
-			t.Errorf("CountSessionFiles = %d, want 2", got)
-		}
-	})
+	// A record still being written has no newline yet and must wait for it.
+	partial := statsJSONL(t, statsPrompt("u2", at, "in flight"))
+	f, _ := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	_, _ = f.WriteString(partial[:len(partial)/2])
+	f.Close()
 
-	t.Run("empty projects dir returns 0", func(t *testing.T) {
-		dir := t.TempDir()
-		os.MkdirAll(filepath.Join(dir, "projects"), 0o755)
+	info, _ := os.Stat(path)
+	s, err := scanTranscript(path, true, info, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(s.Prompts) != 1 {
+		t.Fatalf("Prompts = %d, want 1 (long line skipped, partial line deferred)", len(s.Prompts))
+	}
+	if s.Offset != info.Size()-int64(len(partial)/2) {
+		t.Errorf("Offset = %d, want end of last complete line %d", s.Offset, info.Size()-int64(len(partial)/2))
+	}
 
-		got := CountSessionFiles(dir)
-		if got != 0 {
-			t.Errorf("CountSessionFiles = %d, want 0", got)
-		}
-	})
-
-	t.Run("nonexistent dir returns 0", func(t *testing.T) {
-		got := CountSessionFiles("/nonexistent/path/that/does/not/exist")
-		if got != 0 {
-			t.Errorf("CountSessionFiles = %d, want 0", got)
-		}
-	})
+	f, _ = os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	_, _ = f.WriteString(partial[len(partial)/2:])
+	f.Close()
+	info, _ = os.Stat(path)
+	s, err = scanTranscript(path, true, info, s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(s.Prompts) != 2 || s.Offset != info.Size() {
+		t.Errorf("after completing the line Prompts = %d Offset = %d, want 2 and %d", len(s.Prompts), s.Offset, info.Size())
+	}
 }
 
-func TestScanProjectCounts(t *testing.T) {
-	t.Run("counts projects with no filter", func(t *testing.T) {
-		dir := t.TempDir()
-		proj1 := filepath.Join(dir, "projects", "Users-tom-myapp")
-		proj2 := filepath.Join(dir, "projects", "Users-tom-other")
-		os.MkdirAll(proj1, 0o755)
-		os.MkdirAll(proj2, 0o755)
-		os.WriteFile(filepath.Join(proj1, "a.jsonl"), []byte("{}"), 0o644)
-		os.WriteFile(filepath.Join(proj1, "b.jsonl"), []byte("{}"), 0o644)
-		os.WriteFile(filepath.Join(proj2, "c.jsonl"), []byte("{}"), 0o644)
-
-		counts := scanProjectCounts(dir, "all")
-		if len(counts) != 2 {
-			t.Fatalf("got %d project counts, want 2", len(counts))
-		}
-		// First should be the one with more files.
-		if counts[0].Count != 2 {
-			t.Errorf("top project count = %d, want 2", counts[0].Count)
-		}
-	})
-
-	t.Run("empty projects dir returns nil", func(t *testing.T) {
-		dir := t.TempDir()
-		os.MkdirAll(filepath.Join(dir, "projects"), 0o755)
-
-		counts := scanProjectCounts(dir, "all")
-		if len(counts) != 0 {
-			t.Errorf("expected 0 counts, got %d", len(counts))
-		}
-	})
-
-	t.Run("nonexistent dir returns nil", func(t *testing.T) {
-		counts := scanProjectCounts("/nonexistent", "all")
-		if counts != nil {
-			t.Errorf("expected nil, got %v", counts)
-		}
-	})
-
-	t.Run("limits to top 10", func(t *testing.T) {
-		dir := t.TempDir()
-		for i := 0; i < 15; i++ {
-			projDir := filepath.Join(dir, "projects", "proj"+string(rune('a'+i)))
-			os.MkdirAll(projDir, 0o755)
-			os.WriteFile(filepath.Join(projDir, "s.jsonl"), []byte("{}"), 0o644)
-		}
-		counts := scanProjectCounts(dir, "all")
-		if len(counts) > 10 {
-			t.Errorf("expected at most 10, got %d", len(counts))
-		}
-	})
+func TestListTranscriptsSkipsToolResults(t *testing.T) {
+	fx := newStatsFixture(t)
+	fx.write("-a/one.jsonl", statsPrompt("u1", statsNow, "a"))
+	fx.write("-b/two.jsonl", statsPrompt("u2", statsNow, "a"))
+	fx.write("-b/two/subagents/agent-1.jsonl", statsPrompt("u3", statsNow, "a"))
+	fx.write("-b/two/tool-results/out.jsonl", statsPrompt("u4", statsNow, "a"))
+	if got := listTranscripts(fx.dir); len(got) != 3 {
+		t.Errorf("listTranscripts found %d files, want 3 (tool-results ignored)", len(got))
+	}
 }
 
-func TestScanProjectCountsNaming(t *testing.T) {
-	t.Run("derives name from cwd, not the lossy slug", func(t *testing.T) {
-		// AWS-region dir whose last path component is "us-east-1": the old
-		// slug heuristic (split on "-", take last token) collapses to "1".
-		dir := t.TempDir()
-		proj := filepath.Join(dir, "projects", "-Users-tomhalo-git-opmed-tf-opmed-deployment-ng-prod-us-east-1")
-		os.MkdirAll(proj, 0o755)
-		line := `{"cwd":"/Users/tomhalo/git/opmed-tf/opmed-deployment-ng/prod/us-east-1","type":"user"}`
-		os.WriteFile(filepath.Join(proj, "a.jsonl"), []byte(line+"\n"), 0o644)
-
-		counts := scanProjectCounts(dir, "all")
-		if len(counts) != 1 {
-			t.Fatalf("got %d counts, want 1", len(counts))
+func TestComputeConcurrentCallsShareCache(t *testing.T) {
+	fx := newStatsFixture(t)
+	for i := 0; i < 20; i++ {
+		fx.write(filepath.Join("-a", string(rune('a'+i))+".jsonl"), statsPrompt(string(rune('a'+i)), statsNow.Add(-time.Hour), "x"))
+	}
+	c := &transcriptCache{path: filepath.Join(t.TempDir(), "cache.gob")}
+	done := make(chan int)
+	for i := 0; i < 4; i++ {
+		go func() { done <- computeStats(c, fx.dir, 0, "all", statsNow).Prompts }()
+	}
+	for i := 0; i < 4; i++ {
+		if got := <-done; got != 20 {
+			t.Errorf("Prompts = %d, want 20", got)
 		}
-		if counts[0].Name != "prod/us-east-1" {
-			t.Errorf("name = %q, want %q", counts[0].Name, "prod/us-east-1")
-		}
-	})
-
-	t.Run("finds cwd on a later jsonl line", func(t *testing.T) {
-		// The first line is often a meta record with no cwd.
-		dir := t.TempDir()
-		proj := filepath.Join(dir, "projects", "b-myproj")
-		os.MkdirAll(proj, 0o755)
-		content := "{\"type\":\"meta\",\"sessionId\":\"x\"}\n" +
-			"{\"cwd\":\"/home/tom/work/myproj\",\"type\":\"user\"}\n"
-		os.WriteFile(filepath.Join(proj, "a.jsonl"), []byte(content), 0o644)
-
-		counts := scanProjectCounts(dir, "all")
-		if len(counts) != 1 {
-			t.Fatalf("got %d counts, want 1", len(counts))
-		}
-		if counts[0].Name != "work/myproj" {
-			t.Errorf("name = %q, want %q", counts[0].Name, "work/myproj")
-		}
-	})
-
-	t.Run("uses single component when cwd is shallow", func(t *testing.T) {
-		dir := t.TempDir()
-		proj := filepath.Join(dir, "projects", "-root")
-		os.MkdirAll(proj, 0o755)
-		os.WriteFile(filepath.Join(proj, "a.jsonl"), []byte(`{"cwd":"/root"}`+"\n"), 0o644)
-
-		counts := scanProjectCounts(dir, "all")
-		if len(counts) != 1 {
-			t.Fatalf("got %d counts, want 1", len(counts))
-		}
-		if counts[0].Name != "root" {
-			t.Errorf("name = %q, want %q", counts[0].Name, "root")
-		}
-	})
-
-	t.Run("falls back to slug heuristic when no cwd present", func(t *testing.T) {
-		dir := t.TempDir()
-		proj := filepath.Join(dir, "projects", "Users-tom-myapp")
-		os.MkdirAll(proj, 0o755)
-		os.WriteFile(filepath.Join(proj, "a.jsonl"), []byte("{}\n"), 0o644)
-
-		counts := scanProjectCounts(dir, "all")
-		if len(counts) != 1 {
-			t.Fatalf("got %d counts, want 1", len(counts))
-		}
-		if counts[0].Name != "myapp" {
-			t.Errorf("name = %q, want %q", counts[0].Name, "myapp")
-		}
-	})
+	}
 }

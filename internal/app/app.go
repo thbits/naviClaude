@@ -13,13 +13,13 @@ import (
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/thbits/naviClaude/internal/attention"
 	"github.com/thbits/naviClaude/internal/config"
 	"github.com/thbits/naviClaude/internal/harness"
 	"github.com/thbits/naviClaude/internal/harness/claude"
 	"github.com/thbits/naviClaude/internal/preview"
 	"github.com/thbits/naviClaude/internal/session"
-	"github.com/thbits/naviClaude/internal/stats"
 	"github.com/thbits/naviClaude/internal/styles"
 	"github.com/thbits/naviClaude/internal/tmux"
 	"github.com/thbits/naviClaude/internal/ui"
@@ -105,6 +105,14 @@ type errMsg struct{ err error }
 
 func (e errMsg) Error() string { return e.err.Error() }
 
+// selectionSettledMsg fires once navigation input has paused; gen identifies
+// the move that scheduled it.
+type selectionSettledMsg struct{ gen int }
+
+// selectionSettleDelay is how long navigation must pause before the selected
+// session's pane is resized and its details loaded.
+const selectionSettleDelay = 120 * time.Millisecond
+
 // breathingTickMsg drives the breathing animation for status dots.
 type breathingTickMsg struct{}
 
@@ -165,6 +173,10 @@ type Model struct {
 	currentMetrics   *session.SessionMetrics
 	metricsSessionID string // session ID the metrics belong to
 
+	// Debounced selection sync (see deferSelectionChange).
+	selectionGen     int  // bumped per deferred move; only the latest settle runs
+	selectionPending bool // a settle is due; the panes still show the previous selection
+
 	// Changed-files right sidebar
 	rightPanelOpen        bool      // whether the changed-files sidebar is expanded
 	changedFilesSessionID string    // session ID the loaded changed files belong to
@@ -172,9 +184,6 @@ type Model struct {
 
 	// Session aliases (user-defined display names)
 	aliasStore *session.AliasStore
-
-	// Stats cache
-	statsCache *stats.Cache
 
 	// Animation
 	breathingFrame int
@@ -189,11 +198,16 @@ type Model struct {
 	processNames       []string
 	currentTmuxSession string        // the tmux session naviClaude is running in
 	currentTmuxWin     string        // "session:window" target of naviClaude's window
-	isPopup            bool          // true when running inside tmux display-popup
 	refreshInterval    time.Duration // preview capture tick interval
 
 	viewState           *session.ViewStateStore // persisted last-focused session + group state
 	restoredLastSession bool                    // one-shot guard: restore the focused session only once at startup
+
+	// Mouse click tracking (see mouse.go).
+	lastClickID  string           // session row hit by the previous left press, for double-click
+	lastClickAt  time.Time        // when that press happened
+	pendingPress *mousePress      // left press on a session row awaiting release, for long-press
+	now          func() time.Time // clock override for tests; nil means time.Now
 }
 
 // New creates a fully-wired Model ready to be passed to tea.NewProgram.
@@ -244,9 +258,6 @@ func New(version string) Model {
 		// View state (last focused session + group open/closed state)
 		viewState: session.NewViewStateStore(""),
 
-		// Stats cache
-		statsCache: stats.NewCache(),
-
 		// Configuration
 		cfg:                cfg,
 		version:            version,
@@ -257,7 +268,6 @@ func New(version string) Model {
 		processNames:       cfg.ProcessNames,
 		currentTmuxSession: detectCurrentTmuxSession(),
 		currentTmuxWin:     detectCurrentTmuxWindow(),
-		isPopup:            os.Getenv("TMUX_POPUP") != "",
 		refreshInterval:    refreshInterval,
 	}
 
@@ -267,6 +277,7 @@ func New(version string) Model {
 	}
 	ttls[""] = registry.Default().Info().PromptCacheTTL
 	m.preview.SetCacheTTLs(ttls)
+	m.sidebar.SetContextLimitFunc(contextLimitFunc(registry))
 
 	// Initialize loading spinner.
 	s := spinner.New()
@@ -371,6 +382,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if cmd := m.maybeRefreshChangedFilesCmd(); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
+		if cmd := m.sidebarDetailCmd(); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
 		return m, tea.Batch(cmds...)
 
 	case tickResourceMsg:
@@ -392,6 +406,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.handleResourceRefresh(msg)
 		return m, nil
 
+	case selectionSettledMsg:
+		if msg.gen != m.selectionGen || !m.selectionPending {
+			return m, nil // superseded by a later move or an immediate sync
+		}
+		cmd := m.afterSelectionChange()
+		return m, tea.Batch(cmd, m.capturePreviewCmd())
+
 	case detailDataMsg:
 		// Only apply if the detail popup is still showing the same session the
 		// read was fired for; a slow read must not repaint after the user
@@ -402,12 +423,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case statsComputeMsg:
+		// A result outliving its popup or its filter would land under the wrong badge.
+		if !m.statsModel.IsVisible() {
+			return m, nil
+		}
 		if msg.err != nil {
 			m.err = fmt.Errorf("stats: %w", msg.err)
 			m.statsModel.Hide()
 			m.mode = ModeList
 			m.statusbar.SetMode(ModeList.String())
-		} else {
+		} else if msg.stats != nil && msg.stats.Filter == m.statsModel.FilterString() {
 			m.statsModel.SetStats(msg.stats)
 		}
 		return m, nil
@@ -417,8 +442,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if sel := m.sidebar.SelectedSession(); sel != nil && sel.ID == msg.sessionID {
 			m.currentMetrics = msg.metrics
 			m.metricsSessionID = msg.sessionID
-			m.sidebar.SetMetrics(msg.metrics)
-			m.preview.SetMetrics(msg.metrics)
+			m.sidebar.SetMetrics(msg.sessionID, msg.metrics)
+			m.preview.SetMetrics(msg.sessionID, msg.metrics)
 		}
 		return m, nil
 
@@ -429,7 +454,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.changedFilesSessionID = msg.sessionID
 			m.changedFilesMtime = msg.mtime
 			m.rightSidebar.SetFiles(msg.files, sel.CWD)
+			m.sidebar.SetChangedFiles(msg.sessionID, msg.files)
 		}
+		return m, nil
+
+	case sidebarDetailMsg:
+		m.applySidebarDetail(msg)
 		return m, nil
 
 	case editorDoneMsg:
@@ -483,6 +513,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			combined = append(combined, m.activeSessions...)
 			combined = append(combined, msg.closed...)
 			m.sessions = combined
+			prevSel := m.selectionIdentity()
 			if m.mode != ModeSearch {
 				m.sidebar.SetSessions(combined)
 			}
@@ -505,23 +536,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// absent, the default first-session cursor stands (the fallback).
 			restoreCmd := m.maybeRestoreLastSession()
 			m.restoredLastSession = true
-			if sel := m.sidebar.SelectedSession(); sel != nil {
-				m.preview.SetSession(sel)
-			}
 			if restoreCmd != nil {
 				return m, restoreCmd
+			}
+			if m.selectionIdentity() != prevSel && !m.selectionPending {
+				return m, m.afterSelectionChange()
+			}
+			if sel := m.sidebar.SelectedSession(); sel != nil {
+				m.preview.SetSession(sel)
 			}
 		}
 		return m, nil
 
 	// -- Full combined refresh (from periodic ticker) -----------------------
 	case sessionRefreshMsg:
+		var cmd tea.Cmd
 		if msg.err != nil {
 			m.err = msg.err
 		} else {
-			m.applySessionRefresh(msg)
+			cmd = m.applySessionRefresh(msg)
 		}
-		return m, m.clearSeenAttentionCmd()
+		return m, tea.Batch(cmd, m.clearSeenAttentionCmd())
 
 	case previewCaptureMsg:
 		// Discard stale results: if the user navigated away while the capture
@@ -572,7 +607,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.enterNewSessionPassthrough(placeholder)
 		// Fire a refresh so the real session (with ID etc.) replaces the placeholder.
-		return m, m.refreshSessionsCmd()
+		return m, tea.Batch(m.refreshSessionsCmd(), m.reloadMetricsForSelection(placeholder))
 
 	case resumeMsg:
 		if msg.err != nil {
@@ -616,7 +651,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// last-message time; enterNewSessionPassthrough expands the group so the
 		// row is visible regardless of that (possibly stale) time.
 		m.enterNewSessionPassthrough(placeholder)
-		return m, m.refreshSessionsCmd()
+		return m, tea.Batch(m.refreshSessionsCmd(), m.reloadMetricsForSelection(placeholder))
 
 	case newTmuxSessionMsg:
 		if msg.err != nil {
@@ -648,7 +683,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.selectPreviewSession(placeholder)
 		m.pendingNewTarget = msg.tmuxTarget
 		// Stay in list mode -- the user can press Enter to focus if they want.
-		return m, m.refreshSessionsCmd()
+		return m, tea.Batch(m.refreshSessionsCmd(), m.reloadMetricsForSelection(placeholder))
 
 	case closedPreviewMsg:
 		if msg.err != nil {
@@ -911,6 +946,7 @@ func (m Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.help.Toggle()
 		if m.help.IsVisible() {
 			m.mode = ModeHelp
+			m.statusbar.SetMode(ModeHelp.String())
 		}
 		return m, nil
 
@@ -1018,40 +1054,62 @@ func (m Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	default:
 		// Navigation keys: delegate to sidebar.
+		prev := m.selectionIdentity()
 		var cmd tea.Cmd
-		var cmds []tea.Cmd
 		m.sidebar, cmd = m.sidebar.Update(msg)
-		cmds = append(cmds, cmd)
-		// After navigation, update preview session header.
-		if sel := m.sidebar.SelectedSession(); sel != nil {
-			m.selectPreviewSession(sel)
-			// Fire metrics load if selection changed.
-			if cmd := m.reloadMetricsForSelection(sel); cmd != nil {
-				cmds = append(cmds, cmd)
-			}
-			// Refresh the changed-files list if the panel is open.
-			if m.rightPanelOpen {
-				if cmd := m.reloadChangedFilesForSelection(sel); cmd != nil {
-					cmds = append(cmds, cmd)
-				}
-			}
-			// Auto-load conversation preview for closed sessions.
-			if sel.Status == session.StatusClosed {
-				cmds = append(cmds, m.loadClosedPreviewCmd(sel))
-			}
-		} else if groupName := m.sidebar.SelectedGroupName(); groupName != "" {
-			// Navigated to a group header -- restore any resized pane.
-			m.selectPreviewSession(nil)
-			// Show group summary when hovering on a group header.
-			m.preview.SetGroupSummary(groupName, m.sidebar.GroupSessions(groupName))
-			// No session selected: clear the changed-files list.
-			if m.rightPanelOpen {
-				m.rightSidebar.Reset()
-				m.changedFilesSessionID = ""
-			}
-		}
-		return m, tea.Batch(cmds...)
+		return m, tea.Batch(cmd, m.selectionMoved(prev))
 	}
+}
+
+// selectionMoved syncs the panes after a navigation step. A move to another
+// row is deferred so key repeats and wheel flicks pay for one sync, not one each.
+func (m *Model) selectionMoved(prev string) tea.Cmd {
+	if m.selectionIdentity() != prev {
+		return m.deferSelectionChange()
+	}
+	if m.selectionPending {
+		return nil
+	}
+	return m.afterSelectionChange()
+}
+
+// deferSelectionChange schedules afterSelectionChange for when input settles;
+// the sidebar cursor has already repainted.
+func (m *Model) deferSelectionChange() tea.Cmd {
+	m.selectionGen++
+	m.selectionPending = true
+	gen := m.selectionGen
+	return tea.Tick(selectionSettleDelay, func(time.Time) tea.Msg { return selectionSettledMsg{gen: gen} })
+}
+
+// afterSelectionChange syncs the preview, metrics, and changed-files panel to
+// the sidebar cursor after it moved (keyboard or mouse).
+func (m *Model) afterSelectionChange() tea.Cmd {
+	m.selectionPending = false
+	var cmds []tea.Cmd
+	if sel := m.sidebar.SelectedSession(); sel != nil {
+		m.selectPreviewSession(sel)
+		// Fire metrics load if selection changed.
+		if cmd := m.reloadMetricsForSelection(sel); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+		if cmd := m.reloadChangedFilesForSelection(sel); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+		// Auto-load conversation preview for closed sessions.
+		if sel.Status == session.StatusClosed {
+			cmds = append(cmds, m.loadClosedPreviewCmd(sel))
+		}
+	} else if groupName := m.sidebar.SelectedGroupName(); groupName != "" {
+		// Navigated to a group header -- restore any resized pane.
+		m.selectPreviewSession(nil)
+		// Show group summary when hovering on a group header.
+		m.preview.SetGroupSummary(groupName, m.sidebar.GroupSessions(groupName))
+		// No session selected: clear the changed-files list.
+		m.rightSidebar.Reset()
+		m.changedFilesSessionID = ""
+	}
+	return tea.Batch(cmds...)
 }
 
 // handleChangedFilesKey handles keys while the changed-files sidebar has focus.
@@ -1180,23 +1238,11 @@ func (m Model) handleSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "up", "ctrl+p", "down", "ctrl+n":
-		// Navigate the sidebar (filtered results).
+		// Navigate the filtered results, synced like list-mode navigation.
+		prev := m.selectionIdentity()
 		var cmd tea.Cmd
-		var cmds []tea.Cmd
 		m.sidebar, cmd = m.sidebar.Update(msg)
-		cmds = append(cmds, cmd)
-		if sel := m.sidebar.SelectedSession(); sel != nil {
-			m.selectPreviewSession(sel)
-			// Reload metrics on selection change so they don't go stale while
-			// navigating search results (mirrors list-mode navigation).
-			if mc := m.reloadMetricsForSelection(sel); mc != nil {
-				cmds = append(cmds, mc)
-			}
-			if sel.Status == session.StatusClosed {
-				cmds = append(cmds, m.loadClosedPreviewCmd(sel))
-			}
-		}
-		return m, tea.Batch(cmds...)
+		return m, tea.Batch(cmd, m.selectionMoved(prev))
 
 	default:
 		// All other keys go to the text input for filtering.
@@ -1291,17 +1337,10 @@ func (m Model) handleContextMenuKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch key {
 	case KeyMenuSelect:
-		action := m.contextMenu.SelectedAction()
-		target := m.contextMenu.Session()
-		m.contextMenu.Hide()
-		m.mode = ModeList
-		m.statusbar.SetMode(ModeList.String())
-		return m.executeContextAction(action, target)
+		return m.runContextMenuSelection()
 
 	case KeyMenuCancel:
-		m.contextMenu.Hide()
-		m.mode = ModeList
-		m.statusbar.SetMode(ModeList.String())
+		m.closeContextMenu()
 		return m, nil
 
 	default:
@@ -1316,6 +1355,20 @@ func (m Model) handleContextMenuKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 }
 
+// runContextMenuSelection closes the menu and runs its highlighted action.
+func (m Model) runContextMenuSelection() (tea.Model, tea.Cmd) {
+	action := m.contextMenu.SelectedAction()
+	target := m.contextMenu.Session()
+	m.closeContextMenu()
+	return m.executeContextAction(action, target)
+}
+
+func (m *Model) closeContextMenu() {
+	m.contextMenu.Hide()
+	m.mode = ModeList
+	m.statusbar.SetMode(ModeList.String())
+}
+
 func (m Model) handleHelpKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.help, cmd = m.help.Update(msg)
@@ -1324,93 +1377,6 @@ func (m Model) handleHelpKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.statusbar.SetMode(ModeList.String())
 	}
 	return m, cmd
-}
-
-// ---------------------------------------------------------------------------
-// Mouse handling
-// ---------------------------------------------------------------------------
-
-func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
-	// Ignore mouse input while a modal overlay, picker, or inline input owns the
-	// screen -- a click must not silently re-focus a pane hidden underneath it.
-	// Search is intentionally excluded (see modalActive): it stacks above the
-	// list and keeps list focus, so a sidebar click during search is normal.
-	if m.modalActive() {
-		return m, nil
-	}
-
-	// A mouse interaction also means the user is in control; cancel any pending
-	// startup restore so it cannot later steal focus (mirrors handleKey).
-	m.restoredLastSession = true
-
-	sidebarWidth := m.sidebarWidth()
-	rightWidth := m.rightSidebarWidth()
-	rightPaneLeft := m.width - rightWidth // left edge of the changed-files region
-
-	switch msg.Type {
-	case tea.MouseLeft:
-		switch {
-		case msg.X < sidebarWidth:
-			cmd := m.setFocus(ModeList)
-			return m, cmd
-		case rightWidth > 0 && msg.X >= rightPaneLeft:
-			cmd := m.setFocus(ModeChangedFiles)
-			return m, cmd
-		default:
-			// Preview band: focus passthrough only if the selection can receive
-			// forwarded keys (mirrors nextFocusMode's canPassthrough); otherwise
-			// leave focus unchanged.
-			sel := m.sidebar.SelectedSession()
-			if sel != nil && sel.Status != session.StatusClosed && sel.TmuxTarget != "" {
-				cmd := m.setFocus(ModePassthrough)
-				return m, cmd
-			}
-			return m, nil
-		}
-
-	case tea.MouseRight:
-		if msg.X < sidebarWidth {
-			if sess := m.sidebar.SelectedSession(); sess != nil {
-				m.contextMenu.Show(msg.X, msg.Y, sess, m.menuCaps(sess))
-				m.mode = ModeContextMenu
-				m.statusbar.SetMode(ModeContextMenu.String())
-			}
-		}
-		return m, nil
-
-	case tea.MouseWheelUp, tea.MouseWheelDown:
-		switch {
-		case rightWidth > 0 && msg.X >= rightPaneLeft:
-			var cmd tea.Cmd
-			m.rightSidebar, cmd = m.rightSidebar.Update(msg)
-			return m, cmd
-		case msg.X < sidebarWidth:
-			// The session list does not scroll on wheel; no-op.
-			return m, nil
-		default:
-			var cmd tea.Cmd
-			m.preview, cmd = m.preview.Update(msg)
-			return m, cmd
-		}
-	}
-
-	return m, nil
-}
-
-// modalActive reports whether a modal overlay, picker, or inline input owns the
-// screen, in which case mouse clicks must not re-focus panes underneath it.
-// Search is deliberately excluded: it keeps list focus, so clicks stay valid.
-func (m Model) modalActive() bool {
-	return m.confirmKill ||
-		m.help.IsVisible() ||
-		m.statsModel.IsVisible() ||
-		m.themePicker.IsVisible() ||
-		m.dirPicker.IsVisible() ||
-		m.resumePicker.IsVisible() ||
-		m.detail.IsVisible() ||
-		m.contextMenu.IsVisible() ||
-		m.nameInput.IsActive() ||
-		m.renameInput.IsActive()
 }
 
 // ---------------------------------------------------------------------------
@@ -1440,6 +1406,7 @@ func (m Model) killSelected() (tea.Model, tea.Cmd) {
 	}
 	// Show inline kill confirmation on the sidebar item.
 	m.confirmKill = true
+	m.statusbar.SetConfirmKill(true)
 	m.confirmSession = sess
 	m.sidebar.ConfirmKillTarget = sess.TmuxTarget
 	return m, nil
@@ -1458,6 +1425,7 @@ func (m Model) handleKillConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.removeSession(m.confirmSession.TmuxTarget)
 		}
 		m.confirmKill = false
+		m.statusbar.SetConfirmKill(false)
 		m.confirmSession = nil
 		m.sidebar.ConfirmKillTarget = ""
 		cmds = append(cmds, m.refreshSessionsCmd())
@@ -1465,6 +1433,7 @@ func (m Model) handleKillConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	default:
 		// Any other key cancels.
 		m.confirmKill = false
+		m.statusbar.SetConfirmKill(false)
 		m.confirmSession = nil
 		m.sidebar.ConfirmKillTarget = ""
 		return m, nil
@@ -2019,7 +1988,9 @@ func (m Model) refreshSessionsCmd() tea.Cmd {
 	}
 }
 
-func (m *Model) applySessionRefresh(msg sessionRefreshMsg) {
+func (m *Model) applySessionRefresh(msg sessionRefreshMsg) tea.Cmd {
+	prevSel := m.selectionIdentity()
+
 	// Store active sessions for progressive merge.
 	msg.active = m.mergePendingPlaceholder(msg.active)
 	m.activeSessions = msg.active
@@ -2045,6 +2016,7 @@ func (m *Model) applySessionRefresh(msg sessionRefreshMsg) {
 		}
 		if !found {
 			m.confirmKill = false
+			m.statusbar.SetConfirmKill(false)
 			m.confirmSession = nil
 			m.sidebar.ConfirmKillTarget = ""
 		}
@@ -2071,10 +2043,30 @@ func (m *Model) applySessionRefresh(msg sessionRefreshMsg) {
 		m.sidebar.SetSessions(m.search.Results())
 	}
 
-	// Update the preview header for the currently selected session.
+	return m.syncSelectionAfterRebuild(prevSel)
+}
+
+// selectionIdentity names the current sidebar selection across list rebuilds.
+func (m Model) selectionIdentity() string {
+	if sel := m.sidebar.SelectedSession(); sel != nil {
+		return "s|" + clickID(sel)
+	}
+	return "g|" + m.sidebar.SelectedGroupName()
+}
+
+// syncSelectionAfterRebuild re-syncs the panes after SetSessions: a full sync if
+// the cursor fell onto another row, else a header refresh (unless a settle is due).
+func (m *Model) syncSelectionAfterRebuild(prev string) tea.Cmd {
+	if m.selectionPending {
+		return nil
+	}
+	if m.selectionIdentity() != prev {
+		return m.afterSelectionChange()
+	}
 	if sel := m.sidebar.SelectedSession(); sel != nil {
 		m.selectPreviewSession(sel)
 	}
+	return nil
 }
 
 // clearSeenAttentionCmd drops hook markers the user no longer needs: the
@@ -2183,7 +2175,9 @@ func (m *Model) restorePreviewedPane() {
 
 func (m Model) capturePreviewCmd() tea.Cmd {
 	sess := m.sidebar.SelectedSession()
-	if sess == nil {
+	if sess == nil || m.selectionPending {
+		// Mid-navigation the preview still shows the previous session; the
+		// settle captures the new one.
 		return nil
 	}
 
@@ -2345,12 +2339,10 @@ func (m Model) previewPaneDimensions() (int, int) {
 	return paneW, paneH
 }
 
+// renderTitleBar draws the one-row title: app name and per-status session
+// counts on the left, the current tmux session on the right.
 func (m Model) renderTitleBar() string {
-	left := styles.TitleBarName.Render(" naviClaude")
-	info := styles.TitleBarDim.Render(fmt.Sprintf("%d sessions", m.sidebar.ActiveCount()))
-	sep := styles.TitleBarDim.Render(" \u2022 ")
-
-	leftLine := left + sep + info
+	name := styles.TitleBarName.Render(" naviClaude")
 
 	tmuxSess := m.currentTmuxSession
 	if tmuxSess == "" {
@@ -2358,14 +2350,20 @@ func (m Model) renderTitleBar() string {
 	}
 	right := styles.TitleBarDim.Render(tmuxSess + " ")
 
-	leftWidth := lipgloss.Width(leftLine)
-	rightWidth := lipgloss.Width(right)
-	gap := m.width - leftWidth - rightWidth
+	const summaryGap = "  "
+	leftLine := name
+	budget := m.width - lipgloss.Width(name) - len(summaryGap) - lipgloss.Width(right) - 1
+	if summary := renderStatusSummary(countStatuses(m.sessions), budget); summary != "" {
+		leftLine += summaryGap + summary
+	}
+
+	gap := m.width - lipgloss.Width(leftLine) - lipgloss.Width(right)
 	if gap < 1 {
 		gap = 1
 	}
-	bar := leftLine + strings.Repeat(" ", gap) + right
-	return styles.TitleBar.Width(m.width).Render(bar)
+	bar := ansi.Truncate(leftLine+strings.Repeat(" ", gap)+right, m.width, "")
+	// No underline: the pane headers right below already separate the title.
+	return styles.TitleBar.BorderBottom(false).Width(m.width).Render(bar)
 }
 
 func (m Model) sidebarWidth() int {
@@ -2422,20 +2420,21 @@ func (m *Model) selectSessionInSidebar(target *session.Session) {
 // ID). Shared by list-mode and search-mode navigation so metrics never go
 // stale on the search path.
 func (m *Model) reloadMetricsForSelection(sel *session.Session) tea.Cmd {
-	if sel == nil || sel.ID == "" || sel.ID == m.metricsSessionID {
+	if sel == nil || sel.ID == m.metricsSessionID {
 		return nil
 	}
 	m.currentMetrics = nil
 	m.metricsSessionID = sel.ID
-	m.sidebar.SetMetrics(nil)
-	m.preview.SetMetrics(nil)
-	return loadMetricsCmd(m.harnessFor(sel), sel)
+	m.sidebar.SetMetrics(sel.ID, nil)
+	m.preview.SetMetrics(sel.ID, nil)
+	if sel.ID == "" {
+		return nil // placeholder: nothing to load until the real session is detected
+	}
+	return tea.Batch(loadMetricsCmd(m.harnessFor(sel), sel), loadSidebarDetailCmd(m.harnessFor(sel), sel))
 }
 
-// reloadChangedFilesForSelection clears the changed-files list and reloads it
-// when the selection differs from the one currently loaded. It returns the load
-// command (or nil when the selection is unchanged or has no ID). Only meaningful
-// while the right panel is open; callers guard on m.rightPanelOpen.
+// reloadChangedFilesForSelection reloads the changed files for a new selection;
+// they feed the sidebar repo line too, so this runs with the panel closed.
 func (m *Model) reloadChangedFilesForSelection(sel *session.Session) tea.Cmd {
 	if sel == nil || sel.ID == "" || sel.ID == m.changedFilesSessionID {
 		return nil
@@ -2446,20 +2445,16 @@ func (m *Model) reloadChangedFilesForSelection(sel *session.Session) tea.Cmd {
 	return loadChangedFilesCmd(m.harnessFor(sel), sel)
 }
 
-// maybeRefreshChangedFilesCmd returns a reload command when the open changed-
-// files panel is stale: the selected session's transcript has been written to
-// since the last load (the agent edited more files). It stats the transcript --
-// cheap enough to run on every session tick -- and only triggers the heavier
-// transcript scan + git diff when the mtime actually advanced. The cursor is
-// preserved across the reload by SetFiles. Returns nil when the panel is
-// closed, no session is selected, or a load is already pending.
+// maybeRefreshChangedFilesCmd reloads the selected session's changed files once
+// its transcript advanced; the stat is per-tick cheap, the scan + git diff are not.
 func (m *Model) maybeRefreshChangedFilesCmd() tea.Cmd {
-	if !m.rightPanelOpen {
+	sel := m.sidebar.SelectedSession()
+	if sel == nil || sel.ID == "" || m.selectionPending {
 		return nil
 	}
-	sel := m.sidebar.SelectedSession()
-	if sel == nil || sel.ID == "" || sel.ID != m.changedFilesSessionID {
-		return nil
+	if sel.ID != m.changedFilesSessionID {
+		// Selected without a sync (startup, restore): load it now.
+		return m.reloadChangedFilesForSelection(sel)
 	}
 	if m.changedFilesMtime.IsZero() {
 		return nil // initial (or post-switch) load still in flight

@@ -113,6 +113,31 @@ func (m ThemePickerModel) Update(msg tea.Msg) (ThemePickerModel, string, bool) {
 	return m, "", false
 }
 
+// themePickerFirstRow is the popup-local row of the first theme: border (1) +
+// padding (1) + title (1) + blank line (1).
+const themePickerFirstRow = 4
+
+// RowAt returns the theme index drawn at popup-local row y.
+func (m ThemePickerModel) RowAt(y int) (int, bool) {
+	i := y - themePickerFirstRow
+	if i < 0 || i >= len(m.themes) {
+		return 0, false
+	}
+	return i, true
+}
+
+// Cursor returns the highlighted theme index.
+func (m ThemePickerModel) Cursor() int { return m.cursor }
+
+// SetCursor highlights theme i and returns its key so the app can preview it.
+func (m *ThemePickerModel) SetCursor(i int) (string, bool) {
+	if i < 0 || i >= len(m.themes) || i == m.cursor {
+		return "", false
+	}
+	m.cursor = i
+	return m.themes[i].Key, true
+}
+
 // swatch renders a row of colored blocks for a palette so you can see
 // the accent colors before applying the theme.
 func swatch(p styles.Palette) string {

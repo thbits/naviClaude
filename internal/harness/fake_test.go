@@ -53,5 +53,4 @@ func (f *fullHarness) LoadChangedFiles(*session.Session) ([]session.ChangedFile,
 	return nil, nil
 }
 func (f *fullHarness) ChangeStamp(*session.Session) time.Time         { return time.Time{} }
-func (f *fullHarness) StatsKey() int                                  { return 0 }
 func (f *fullHarness) ComputeStats(int, string) (*stats.Stats, error) { return nil, nil }

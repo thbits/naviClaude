@@ -65,6 +65,18 @@ type MetricsProvider interface {
 	LoadMetrics(s *session.Session) (*session.SessionMetrics, error)
 }
 
+// ContextLimiter sizes a session's context window from its model id (family as
+// the fallback) and token use.
+type ContextLimiter interface {
+	ContextLimit(modelID, family string, tokensUsed int) int
+}
+
+// ActivityProvider reports what a live session is doing now (tool in flight,
+// turn start, subagents), cheap enough to poll every tick.
+type ActivityProvider interface {
+	LoadActivity(s *session.Session) (*session.SessionActivity, error)
+}
+
 // ChangedFilesProvider lists files the agent edited. ChangeStamp moves forward
 // whenever the list may have changed.
 type ChangedFilesProvider interface {
@@ -72,10 +84,8 @@ type ChangedFilesProvider interface {
 	ChangeStamp(s *session.Session) time.Time
 }
 
-// StatsProvider computes aggregate usage statistics. StatsKey changes whenever
-// a cached result would be stale.
+// StatsProvider computes aggregate usage statistics.
 type StatsProvider interface {
-	StatsKey() int
 	ComputeStats(activeCount int, filter string) (*stats.Stats, error)
 }
 
@@ -96,6 +106,12 @@ func AsConversation(h Harness) (ConversationProvider, bool) {
 
 // AsMetrics returns h as a MetricsProvider when supported.
 func AsMetrics(h Harness) (MetricsProvider, bool) { p, ok := h.(MetricsProvider); return p, ok }
+
+// AsContextLimiter returns h as a ContextLimiter when supported.
+func AsContextLimiter(h Harness) (ContextLimiter, bool) { p, ok := h.(ContextLimiter); return p, ok }
+
+// AsActivity returns h as an ActivityProvider when supported.
+func AsActivity(h Harness) (ActivityProvider, bool) { p, ok := h.(ActivityProvider); return p, ok }
 
 // AsChangedFiles returns h as a ChangedFilesProvider when supported.
 func AsChangedFiles(h Harness) (ChangedFilesProvider, bool) {

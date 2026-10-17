@@ -200,3 +200,35 @@ func TestPreviewStatus(t *testing.T) {
 		t.Errorf("no prompt should be the Active sentinel, got %v", got)
 	}
 }
+
+func TestDetectSkipsOwnPane(t *testing.T) {
+	h := &coreHarness{name: "claude", procs: map[string]bool{"claude": true}}
+	panes := &fakePanes{panes: []tmux.PaneInfo{
+		// naviClaude's floating pane: sh -c naviclaude, with a matching child.
+		{SessionName: "s", Target: "s:1.1", PaneID: "%9", CurrentCommand: "naviclaude", PID: 500},
+		{SessionName: "s", Target: "s:1.0", PaneID: "%1", CurrentCommand: "claude", PID: 600},
+	}}
+	cases := map[string]*session.ProcessTree{
+		"self in ps snapshot": session.NewProcessTree([]session.Proc{
+			{PID: 500, PPID: 1, Name: "sh"}, {PID: 501, PPID: 500, Name: "naviclaude"},
+			{PID: 502, PPID: 501, Name: "claude"}, {PID: 600, PPID: 1, Name: "claude"},
+		}),
+		"self missing from ps snapshot": session.NewProcessTree([]session.Proc{
+			{PID: 500, PPID: 1, Name: "sh"}, {PID: 502, PPID: 500, Name: "claude"},
+			{PID: 600, PPID: 1, Name: "claude"},
+		}),
+	}
+	for name, tree := range cases {
+		t.Run(name, func(t *testing.T) {
+			d := newTestDetector(panes, tree, h)
+			d.selfPID, d.parentPID = 501, 500
+			got, err := d.Detect()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(got) != 1 || got[0].TmuxPaneID != "%1" {
+				t.Fatalf("Detect = %d sessions (%+v), want only %%1", len(got), got)
+			}
+		})
+	}
+}

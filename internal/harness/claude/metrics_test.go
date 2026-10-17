@@ -21,6 +21,26 @@ func TestContextLimitForModel(t *testing.T) {
 		{"haiku", 200_000},
 		{"unknown", 200_000},
 		{"", 200_000},
+		// Claude 5 family ids, with and without a minor version.
+		{"claude-opus-5-5", 1_000_000},
+		{"claude-sonnet-5-5", 1_000_000},
+		{"claude-haiku-5-5", 1_000_000},
+		{"claude-sonnet-5", 1_000_000},
+		{"claude-opus-5", 1_000_000},
+		{"claude-fable-5-1", 1_000_000},
+		{"Claude-Haiku-5-5", 1_000_000},
+		// Explicit 1M variants.
+		{"sonnet[1m]", 1_000_000},
+		{"claude-sonnet-4-5[1m]", 1_000_000},
+		{"claude-haiku-4-5[1M]", 1_000_000},
+		// Legacy ids keep their old windows.
+		{"claude-opus-4-8", 1_000_000},
+		{"claude-opus-4-6", 1_000_000},
+		{"claude-sonnet-4-5", 200_000},
+		{"claude-haiku-4-5", 200_000},
+		{"claude-3-5-sonnet-20241022", 200_000},
+		{"claude-3-5-haiku-20241022", 200_000},
+		{"<synthetic>", 200_000},
 	}
 
 	for _, tt := range tests {
@@ -146,34 +166,31 @@ func TestLoadMetrics(t *testing.T) {
 		}
 	})
 
-	t.Run("recent activity bucketing", func(t *testing.T) {
+	t.Run("counts messages spread over time", func(t *testing.T) {
 		dir := t.TempDir()
 		filePath := filepath.Join(dir, "test-activity.jsonl")
 
-		// Adaptive bucketing: 10 equal slots across session lifetime.
-		// Session spans 50 minutes (from t+0 to t+47m).
-		// Each bucket covers ~5 minutes.
 		base := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
 
 		records := []map[string]interface{}{
 			{
 				"type":      "user",
-				"timestamp": base.Format(time.RFC3339Nano), // bucket 0
+				"timestamp": base.Format(time.RFC3339Nano),
 				"message":   map[string]interface{}{"content": "start"},
 			},
 			{
 				"type":      "user",
-				"timestamp": base.Add(10 * time.Minute).Format(time.RFC3339Nano), // ~bucket 2
+				"timestamp": base.Add(10 * time.Minute).Format(time.RFC3339Nano),
 				"message":   map[string]interface{}{"content": "mid1"},
 			},
 			{
 				"type":      "assistant",
-				"timestamp": base.Add(10 * time.Minute).Format(time.RFC3339Nano), // ~bucket 2
+				"timestamp": base.Add(10 * time.Minute).Format(time.RFC3339Nano),
 				"message":   map[string]interface{}{"content": "reply", "usage": map[string]interface{}{"input_tokens": 10, "output_tokens": 5}},
 			},
 			{
 				"type":      "user",
-				"timestamp": base.Add(47 * time.Minute).Format(time.RFC3339Nano), // bucket 9 (last)
+				"timestamp": base.Add(47 * time.Minute).Format(time.RFC3339Nano),
 				"message":   map[string]interface{}{"content": "end"},
 			},
 		}
@@ -189,24 +206,6 @@ func TestLoadMetrics(t *testing.T) {
 			t.Errorf("MessageCount = %d, want 4", m.MessageCount)
 		}
 
-		// All 4 messages should land in some bucket.
-		total := 0
-		for _, v := range m.RecentActivity {
-			total += v
-		}
-		if total != 4 {
-			t.Errorf("total RecentActivity = %d, want 4", total)
-		}
-
-		// First message should be in bucket 0.
-		if m.RecentActivity[0] != 1 {
-			t.Errorf("RecentActivity[0] = %d, want 1", m.RecentActivity[0])
-		}
-
-		// Last message should be in bucket 9.
-		if m.RecentActivity[9] != 1 {
-			t.Errorf("RecentActivity[9] = %d, want 1", m.RecentActivity[9])
-		}
 	})
 
 	t.Run("counts only conversational turns", func(t *testing.T) {
@@ -272,29 +271,40 @@ func TestLoadMetrics(t *testing.T) {
 		}
 	})
 
-	t.Run("oversized line yields partial metrics plus error", func(t *testing.T) {
+	t.Run("oversized line does not stop the scan", func(t *testing.T) {
 		dir := t.TempDir()
 		filePath := filepath.Join(dir, "oversized.jsonl")
 
-		// One valid turn, then a single line larger than the 4MB scanner buffer.
+		// A line well past any fixed buffer, then the record carrying the model.
 		valid := `{"type":"user","timestamp":"2025-03-01T10:00:00Z","message":{"content":"before the big line"}}` + "\n"
-		huge := `{"type":"user","message":{"content":"` + strings.Repeat("x", 5*1024*1024) + `"}}` + "\n"
-		if err := os.WriteFile(filePath, []byte(valid+huge), 0o644); err != nil {
+		huge := `{"type":"user","message":{"content":"` + strings.Repeat("x", 6*1024*1024) + `"}}` + "\n"
+		after := `{"type":"assistant","timestamp":"2025-03-01T10:00:02Z","message":{"model":"claude-sonnet-5-5","content":[{"type":"text","text":"hi"}],"usage":{"input_tokens":150000}}}` + "\n"
+		if err := os.WriteFile(filePath, []byte(valid+huge+after), 0o644); err != nil {
 			t.Fatal(err)
 		}
 
 		m, err := LoadMetrics(filePath, "sonnet")
-		if err == nil {
-			t.Fatal("expected a scanner error for the oversized line")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
 		}
-		// The caller relies on this: partial metrics are still returned (non-nil)
-		// so the detail popup / preview can show counts accumulated before the
-		// failure rather than blanking out.
-		if m == nil {
-			t.Fatal("LoadMetrics returned nil metrics on scan error; want partial data")
+		if m.MessageCount != 3 {
+			t.Errorf("MessageCount = %d, want 3", m.MessageCount)
 		}
-		if m.MessageCount != 1 {
-			t.Errorf("partial MessageCount = %d, want 1", m.MessageCount)
+		if m.ModelID != "claude-sonnet-5-5" || m.ContextLimit != 1_000_000 || m.TokensUsed != 150_000 {
+			t.Errorf("got model %q limit %d tokens %d, want claude-sonnet-5-5 / 1M / 150K read past the huge line",
+				m.ModelID, m.ContextLimit, m.TokensUsed)
+		}
+	})
+
+	t.Run("final line without newline", func(t *testing.T) {
+		filePath := filepath.Join(t.TempDir(), "nonl.jsonl")
+		rec := `{"type":"assistant","timestamp":"2025-03-01T10:00:02Z","message":{"model":"claude-opus-5-5","content":[{"type":"text","text":"hi"}],"usage":{"input_tokens":10}}}`
+		if err := os.WriteFile(filePath, []byte(rec), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		m, err := LoadMetrics(filePath, "opus")
+		if err != nil || m.MessageCount != 1 || m.ModelID != "claude-opus-5-5" {
+			t.Errorf("got %+v err %v, want the unterminated record parsed", m, err)
 		}
 	})
 
@@ -367,7 +377,7 @@ func TestLoadMetrics(t *testing.T) {
 		}
 	})
 
-	t.Run("single message goes to last bucket", func(t *testing.T) {
+	t.Run("single message", func(t *testing.T) {
 		dir := t.TempDir()
 		filePath := filepath.Join(dir, "single.jsonl")
 
@@ -387,14 +397,127 @@ func TestLoadMetrics(t *testing.T) {
 		if m.MessageCount != 1 {
 			t.Errorf("MessageCount = %d, want 1", m.MessageCount)
 		}
-		// Single message should go to bucket 9.
-		if m.RecentActivity[9] != 1 {
-			t.Errorf("RecentActivity[9] = %d, want 1", m.RecentActivity[9])
-		}
 	})
 }
 
 // writeJSONL is a test helper that writes a slice of records as JSONL.
+func TestResolveContextLimit(t *testing.T) {
+	tests := []struct {
+		name     string
+		modelID  string
+		fallback string
+		tokens   int
+		want     int
+	}{
+		{"id wins over family", "claude-haiku-5-5", "haiku", 62_000, 1_000_000},
+		{"fallback when no id", "", "sonnet", 62_000, 200_000},
+		{"fallback opus", "", "opus", 0, 1_000_000},
+		{"legacy within limit", "claude-sonnet-4-5", "sonnet", 199_999, 200_000},
+		{"legacy at limit", "claude-sonnet-4-5", "sonnet", 200_000, 200_000},
+		{"over 200K bumps to 1M", "claude-sonnet-4-5", "sonnet", 200_001, 1_000_000},
+		{"unknown over 200K bumps", "", "", 250_000, 1_000_000},
+		{"beyond largest tier stays largest", "claude-opus-5-5", "opus", 1_200_000, 1_000_000},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := resolveContextLimit(tt.modelID, tt.fallback, tt.tokens)
+			if got != tt.want {
+				t.Errorf("resolveContextLimit(%q, %q, %d) = %d, want %d",
+					tt.modelID, tt.fallback, tt.tokens, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestLoadMetricsContextLimitFromTranscript(t *testing.T) {
+	assistant := func(ts, model string, input int) map[string]interface{} {
+		return map[string]interface{}{
+			"type":      "assistant",
+			"timestamp": ts,
+			"message": map[string]interface{}{
+				"model":   model,
+				"content": "ok",
+				"usage":   map[string]interface{}{"input_tokens": input},
+			},
+		}
+	}
+
+	tests := []struct {
+		name       string
+		records    []map[string]interface{}
+		family     string
+		wantLimit  int
+		wantTokens int
+		wantModel  string
+	}{
+		{
+			// Classified family "haiku" alone would yield 200K.
+			name:       "haiku 5.5 id overrides family",
+			records:    []map[string]interface{}{assistant("2026-10-16T22:03:49Z", "claude-haiku-5-5", 62_718)},
+			family:     "haiku",
+			wantLimit:  1_000_000,
+			wantTokens: 62_718,
+			wantModel:  "claude-haiku-5-5",
+		},
+		{
+			name: "latest record's model is used",
+			records: []map[string]interface{}{
+				assistant("2026-10-16T10:00:00Z", "claude-sonnet-5-5", 1_000),
+				assistant("2026-10-16T11:00:00Z", "claude-sonnet-4-5", 2_000),
+			},
+			family:     "sonnet",
+			wantLimit:  200_000,
+			wantTokens: 2_000,
+			wantModel:  "claude-sonnet-4-5",
+		},
+		{
+			name: "synthetic record keeps prior model",
+			records: []map[string]interface{}{
+				assistant("2026-10-16T10:00:00Z", "claude-haiku-5-5", 1_000),
+				assistant("2026-10-16T11:00:00Z", "<synthetic>", 0),
+			},
+			family:     "haiku",
+			wantLimit:  1_000_000,
+			wantTokens: 0,
+			wantModel:  "claude-haiku-5-5",
+		},
+		{
+			name:       "no model in transcript falls back to family",
+			records:    []map[string]interface{}{assistant("2026-10-16T10:00:00Z", "", 5_000)},
+			family:     "sonnet",
+			wantLimit:  200_000,
+			wantTokens: 5_000,
+		},
+		{
+			name:       "usage beyond window bumps tier",
+			records:    []map[string]interface{}{assistant("2026-10-16T10:00:00Z", "", 250_000)},
+			family:     "sonnet",
+			wantLimit:  1_000_000,
+			wantTokens: 250_000,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			filePath := filepath.Join(t.TempDir(), "s.jsonl")
+			writeJSONL(t, filePath, tt.records)
+			m, err := LoadMetrics(filePath, tt.family)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if m.TokensUsed != tt.wantTokens {
+				t.Errorf("TokensUsed = %d, want %d", m.TokensUsed, tt.wantTokens)
+			}
+			if m.ContextLimit != tt.wantLimit {
+				t.Errorf("ContextLimit = %d, want %d", m.ContextLimit, tt.wantLimit)
+			}
+			if m.ModelID != tt.wantModel {
+				t.Errorf("ModelID = %q, want %q", m.ModelID, tt.wantModel)
+			}
+		})
+	}
+}
+
 func writeJSONL(t *testing.T, filePath string, records []map[string]interface{}) {
 	t.Helper()
 	var content []byte

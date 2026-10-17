@@ -105,29 +105,14 @@ func (m Model) statsProvider() (harness.StatsProvider, bool) {
 func (m Model) computeStatsCmd() tea.Cmd {
 	activeCount := len(m.activeSessions)
 	filter := m.statsModel.FilterString()
-	cache := m.statsCache
 	sp, ok := m.statsProvider()
 
 	return func() tea.Msg {
 		if !ok {
 			return statsComputeMsg{err: fmt.Errorf("no harness provides stats")}
 		}
-		// The key changes when the provider's underlying data changes, so a
-		// stale entry is never served.
-		cacheKey := sp.StatsKey()
-		if cached := cache.Load(cacheKey); cached != nil && cached.Filter == filter {
-			return statsComputeMsg{stats: cached}
-		}
-
 		s, err := sp.ComputeStats(activeCount, filter)
-		if err != nil {
-			return statsComputeMsg{err: err}
-		}
-
-		// Save to cache.
-		_ = cache.Save(s, cacheKey)
-
-		return statsComputeMsg{stats: s}
+		return statsComputeMsg{stats: s, err: err}
 	}
 }
 

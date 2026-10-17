@@ -394,6 +394,44 @@ func (m DirPickerModel) visibleRows() int {
 	return rows
 }
 
+// window returns the [start, end) slice of m.filtered shown around the cursor.
+func (m DirPickerModel) window() (int, int) {
+	max := m.visibleRows()
+	start := 0
+	if m.cursor >= max {
+		start = m.cursor - max + 1
+	}
+	end := start + max
+	if end > len(m.filtered) {
+		end = len(m.filtered)
+	}
+	return start, end
+}
+
+// dirPickerFirstRow is the popup-local row of the first candidate: border (1)
+// + padding (1) + title, base line, input, separator (4).
+const dirPickerFirstRow = 6
+
+// RowAt returns the candidate index drawn at popup-local row y.
+func (m DirPickerModel) RowAt(y int) (int, bool) {
+	start, end := m.window()
+	i := start + y - dirPickerFirstRow
+	if y < dirPickerFirstRow || i >= end {
+		return 0, false
+	}
+	return i, true
+}
+
+// Cursor returns the highlighted candidate index.
+func (m DirPickerModel) Cursor() int { return m.cursor }
+
+// SetCursor highlights candidate i.
+func (m *DirPickerModel) SetCursor(i int) {
+	if i >= 0 && i < len(m.filtered) {
+		m.cursor = i
+	}
+}
+
 // View renders the picker popup (placement is done by the caller via PlaceOverlay).
 func (m DirPickerModel) View() string {
 	if !m.visible {
@@ -420,16 +458,7 @@ func (m DirPickerModel) View() string {
 	if len(m.filtered) == 0 {
 		rows = append(rows, lipgloss.NewStyle().Foreground(styles.ColorGray).Render("  (no matching directories)"))
 	} else {
-		// Scroll window around the cursor.
-		max := m.visibleRows()
-		start := 0
-		if m.cursor >= max {
-			start = m.cursor - max + 1
-		}
-		end := start + max
-		if end > len(m.filtered) {
-			end = len(m.filtered)
-		}
+		start, end := m.window()
 		for i := start; i < end; i++ {
 			c := m.filtered[i]
 			marker := lipgloss.NewStyle().Foreground(styles.ColorAmber).Render(sourceMarker(c.Source))

@@ -19,9 +19,8 @@ func loadMetricsCmd(h harness.Harness, sess *session.Session) tea.Cmd {
 		if h == nil || !ok {
 			return metricsMsg{sessionID: sess.ID}
 		}
-		// A scan error (e.g. a transcript line over the scanner buffer) still
-		// yields useful partial metrics, so only a nil result -- an outright
-		// open failure -- is treated as "no data".
+		// A read error mid-file still yields useful partial metrics; only a nil
+		// result (an open failure) means "no data".
 		m, _ := mp.LoadMetrics(sess)
 		if m == nil {
 			return metricsMsg{sessionID: sess.ID}

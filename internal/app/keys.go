@@ -104,7 +104,7 @@ func (km KeyMap) HelpBindings() []HelpBinding {
 		{km.RenameSession, "Rename session"},
 		{km.KillSession, "Kill session"},
 		// Inspect the selected session
-		{km.ToggleChanged, "Changed files (e opens in $EDITOR)"},
+		{km.ToggleChanged, "Changed files panel"},
 		{km.Detail, "Detail"},
 		{km.Stats, "Stats"},
 		// App
@@ -114,24 +114,16 @@ func (km KeyMap) HelpBindings() []HelpBinding {
 	}
 }
 
-// StatusHints returns the list-mode status bar hints reflecting the current config.
+// StatusHints returns the configured list-mode hints, most useful first; help comes
+// last and is never dropped, and everything else lives in the help overlay.
 func (km KeyMap) StatusHints() []HelpBinding {
 	return []HelpBinding{
-		// Move around / find
-		{km.Search, "search"},
-		// Act on the selected session
-		{"Enter", "focus/resume"},
+		{"Enter", "open"},
 		{km.Jump, "jump"},
 		{km.NewSession, "new"},
-		{km.NewTmuxSession, "new tmux session"},
-		{km.RenameSession, "rename"},
+		{km.Search, "search"},
 		{km.KillSession, "kill"},
-		// Inspect the selected session
-		{km.ToggleChanged, "changed files"},
-		{km.Detail, "detail"},
-		{km.Stats, "stats"},
-		// App
-		{km.Help, "help"},
+		{km.Help, "more"},
 	}
 }
 

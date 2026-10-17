@@ -17,6 +17,7 @@ import (
 func TestPreviewFitsHeightBudget(t *testing.T) {
 	// A session with enough header content to overflow narrow widths and wrap.
 	sess := &session.Session{
+		ID:           "s1",
 		ProjectName:  "some-long-project-name",
 		GitBranch:    "feature/really-long-branch-name",
 		Status:       session.StatusActive,
@@ -37,7 +38,7 @@ func TestPreviewFitsHeightBudget(t *testing.T) {
 			p := NewPreview(tc.w, tc.h)
 			p.SetSize(tc.w, tc.h)
 			p.SetSession(sess)
-			p.SetMetrics(metrics)
+			p.SetMetrics(sess.ID, metrics)
 			p.SetPassthrough(passthrough)
 			p.SetContent(content.String())
 

@@ -3,7 +3,6 @@ package claude
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/thbits/naviClaude/internal/harness"
@@ -62,6 +61,13 @@ func (h *Harness) LoadMetrics(s *session.Session) (*session.SessionMetrics, erro
 	return LoadMetrics(path, s.Model)
 }
 
+var _ harness.ContextLimiter = (*Harness)(nil)
+
+// ContextLimit implements harness.ContextLimiter.
+func (h *Harness) ContextLimit(modelID, family string, tokensUsed int) int {
+	return resolveContextLimit(modelID, family, tokensUsed)
+}
+
 // LoadChangedFiles implements harness.ChangedFilesProvider.
 func (h *Harness) LoadChangedFiles(s *session.Session) ([]session.ChangedFile, error) {
 	path := transcriptPath(s)
@@ -93,31 +99,6 @@ func transcriptPath(s *session.Session) string {
 }
 
 var _ harness.StatsProvider = (*Harness)(nil)
-
-// StatsKey combines the transcript count with the newest transcript mtime so
-// the stats cache invalidates when existing files grow, not just when new
-// files appear.
-func (h *Harness) StatsKey() int {
-	fileCount := CountSessionFiles("")
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return fileCount
-	}
-	files, err := filepath.Glob(filepath.Join(home, ".claude", "projects", "*", "*.jsonl"))
-	if err != nil {
-		return fileCount
-	}
-	var maxMod int64
-	for _, f := range files {
-		if info, err := os.Stat(f); err == nil {
-			if mod := info.ModTime().Unix(); mod > maxMod {
-				maxMod = mod
-			}
-		}
-	}
-	// The shift keeps the count from colliding with the mtime component.
-	return fileCount + int(maxMod<<20)
-}
 
 // ComputeStats implements harness.StatsProvider.
 func (h *Harness) ComputeStats(activeCount int, filter string) (*stats.Stats, error) {

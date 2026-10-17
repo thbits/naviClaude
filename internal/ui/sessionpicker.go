@@ -263,6 +263,52 @@ func (m SessionPickerModel) visibleRows() int {
 	return rows
 }
 
+// window returns the [start, end) slice of n rows shown around the cursor.
+func (m SessionPickerModel) window(n int) (int, int) {
+	max := m.visibleRows()
+	start := 0
+	if m.cursor >= max {
+		start = m.cursor - max + 1
+	}
+	end := start + max
+	if end > n {
+		end = n
+	}
+	return start, end
+}
+
+// sessionPickerFirstRow is the popup-local row of the first candidate: border
+// (1) + padding (1) + title, input, separator (3).
+const sessionPickerFirstRow = 5
+
+// RowAt returns the row index drawn at popup-local row y, skipping the
+// "similar" divider View draws before the first loose match.
+func (m SessionPickerModel) RowAt(y int) (int, bool) {
+	start, end := m.window(len(m.rows()))
+	looseAt := m.firstLooseRow()
+	line := sessionPickerFirstRow
+	for i := start; i < end; i++ {
+		if i == looseAt {
+			line++
+		}
+		if line == y {
+			return i, true
+		}
+		line++
+	}
+	return 0, false
+}
+
+// Cursor returns the highlighted row index.
+func (m SessionPickerModel) Cursor() int { return m.cursor }
+
+// SetCursor highlights row i.
+func (m *SessionPickerModel) SetCursor(i int) {
+	if i >= 0 && i < len(m.rows()) {
+		m.cursor = i
+	}
+}
+
 // View renders the picker popup (placement is done by the caller via
 // PlaceOverlay).
 func (m SessionPickerModel) View() string {
@@ -289,15 +335,7 @@ func (m SessionPickerModel) View() string {
 		lines = append(lines, lipgloss.NewStyle().Foreground(styles.ColorGray).
 			Render("  (no tmux sessions -- type a name to create one)"))
 	} else {
-		max := m.visibleRows()
-		start := 0
-		if m.cursor >= max {
-			start = m.cursor - max + 1
-		}
-		end := start + max
-		if end > len(rows) {
-			end = len(rows)
-		}
+		start, end := m.window(len(rows))
 		looseAt := m.firstLooseRow()
 		for i := start; i < end; i++ {
 			// Divider before the loose (fuzzy fallback) section.

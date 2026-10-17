@@ -74,6 +74,12 @@ func BuildProcessTree() *ProcessTree {
 // Name returns the executable basename of pid, or "" when unknown.
 func (t *ProcessTree) Name(pid int) string { return t.names[pid] }
 
+// Parent returns pid's parent PID and whether pid was in the snapshot.
+func (t *ProcessTree) Parent(pid int) (int, bool) {
+	ppid, ok := t.ppid[pid]
+	return ppid, ok
+}
+
 // Stats returns CPU % and memory MB for a PID from the pre-built tree.
 func (t *ProcessTree) Stats(pid int) (cpu float64, memMB float64) {
 	return t.cpu[pid], t.rss[pid] / 1024.0

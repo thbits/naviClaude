@@ -71,3 +71,18 @@ func partitionByHarness(reg *harness.Registry, list []*session.Session) map[stri
 	}
 	return out
 }
+
+// contextLimitFunc sizes a session's context window through its harness.
+func contextLimitFunc(reg *harness.Registry) ui.ContextLimitFunc {
+	return func(s *session.Session, modelID string, tokensUsed int) int {
+		h, ok := reg.For(s)
+		if !ok {
+			return 0
+		}
+		cl, ok := harness.AsContextLimiter(h)
+		if !ok {
+			return 0
+		}
+		return cl.ContextLimit(modelID, s.Model, tokensUsed)
+	}
+}

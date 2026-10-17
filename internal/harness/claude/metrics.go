@@ -2,11 +2,17 @@ package claude
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
-	"github.com/thbits/naviClaude/internal/session"
+	"errors"
+	"io"
 	"os"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/thbits/naviClaude/internal/session"
 )
 
 // metricsRecord captures the fields we need from each .jsonl line for metrics.
@@ -84,8 +90,9 @@ func isConversationalTurn(rec metricsRecord) bool {
 	return false
 }
 
-// metricsUsage captures token counts nested inside an assistant message.
+// metricsUsage captures the model id and token counts of an assistant message.
 type metricsUsage struct {
+	Model string `json:"model"`
 	Usage struct {
 		InputTokens              int `json:"input_tokens"`
 		OutputTokens             int `json:"output_tokens"`
@@ -95,8 +102,8 @@ type metricsUsage struct {
 }
 
 // LoadMetrics reads a Claude JSONL session file and extracts aggregate metrics.
-// The model parameter should be a classified model family string (e.g. "opus",
-// "sonnet", "haiku") used to determine context limits.
+// The context limit comes from the latest assistant record's model id; model
+// (a family like "opus" or a full id) is the fallback when none is recorded.
 func LoadMetrics(filePath, model string) (*session.SessionMetrics, error) {
 	f, err := os.Open(filePath)
 	if err != nil {
@@ -104,12 +111,10 @@ func LoadMetrics(filePath, model string) (*session.SessionMetrics, error) {
 	}
 	defer f.Close()
 
-	m := &session.SessionMetrics{
-		ContextLimit: ContextLimitForModel(model),
-	}
-
-	// Collect all message timestamps in first pass, count tokens along the way.
-	var msgTimes []time.Time
+	m := &session.SessionMetrics{}
+	// Full model id of the chosen usage record; the family-only param can't
+	// tell a 1M Claude 5 model from a 200K legacy one.
+	var modelID string
 
 	// Track the assistant record carrying the LATEST timestamp; its usage is
 	// the current context fill. File order is not guaranteed to be
@@ -120,19 +125,10 @@ func LoadMetrics(filePath, model string) (*session.SessionMetrics, error) {
 		tokensSeen     bool      // whether any assistant usage record has been chosen yet
 	)
 
-	scanner := bufio.NewScanner(f)
-	buf := make([]byte, 0, 64*1024)
-	scanner.Buffer(buf, 4*1024*1024)
-
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		if len(line) == 0 {
-			continue
-		}
-
+	handle := func(line []byte) {
 		var rec metricsRecord
 		if err := json.Unmarshal(line, &rec); err != nil {
-			continue
+			return
 		}
 
 		var recTime time.Time
@@ -149,9 +145,6 @@ func LoadMetrics(filePath, model string) (*session.SessionMetrics, error) {
 
 		if isConversationalTurn(rec) {
 			m.MessageCount++
-			if !recTime.IsZero() {
-				msgTimes = append(msgTimes, recTime)
-			}
 		}
 
 		// Track the latest assistant record's context usage (not cumulative).
@@ -182,54 +175,94 @@ func LoadMetrics(filePath, model string) (*session.SessionMetrics, error) {
 					tokensSeen = true
 					tokensTime = recTime
 					tokensHaveTime = !recTime.IsZero()
+					if usage.Model != "" && usage.Model != syntheticModel {
+						modelID = usage.Model
+					}
 				}
 			}
 		}
 	}
 
-	if err := scanner.Err(); err != nil {
-		return m, err
+	// Lines can exceed any fixed buffer (inlined images reach 15MB+), so read
+	// each one whole rather than stopping at the first oversized line.
+	r := bufio.NewReaderSize(f, 256*1024)
+	var long []byte
+	var readErr error
+	for {
+		chunk, err := r.ReadSlice('\n')
+		if errors.Is(err, bufio.ErrBufferFull) {
+			long = append(long, chunk...)
+			continue
+		}
+		line := chunk
+		if long != nil {
+			line = append(long, chunk...)
+			long = nil
+		}
+		if err != nil && !errors.Is(err, io.EOF) {
+			readErr = err
+			break
+		}
+		if line = bytes.TrimSpace(line); len(line) > 0 {
+			handle(line)
+		}
+		if err != nil {
+			break
+		}
 	}
 
-	// Bucket messages across the session's lifetime into 10 slots.
-	// Uses the full span from first to last message (adaptive window).
-	if len(msgTimes) >= 2 {
-		first := msgTimes[0]
-		last := msgTimes[len(msgTimes)-1]
-		span := last.Sub(first)
-		if span < time.Minute {
-			span = time.Minute // avoid division by zero for very short sessions
-		}
-		bucketDuration := span / 10
-
-		for _, t := range msgTimes {
-			bucket := int(t.Sub(first) / bucketDuration)
-			if bucket < 0 {
-				bucket = 0
-			}
-			if bucket >= 10 {
-				bucket = 9
-			}
-			m.RecentActivity[bucket]++
-		}
-	} else if len(msgTimes) == 1 {
-		m.RecentActivity[9] = 1 // single message goes in the last bucket
-	}
-
-	return m, nil
+	m.ModelID = modelID
+	m.ContextLimit = resolveContextLimit(modelID, model, m.TokensUsed)
+	return m, readErr
 }
 
-// ContextLimitForModel returns the context window size for a given model family.
-// Opus models get 1,000,000 tokens; all others default to 200,000.
-func ContextLimitForModel(model string) int {
-	switch strings.ToLower(model) {
-	case "opus":
-		return 1_000_000
-	case "sonnet":
-		return 200_000
-	case "haiku":
-		return 200_000
-	default:
-		return 200_000
+// syntheticModel marks locally generated assistant records (e.g. API errors)
+// that carry no real model.
+const syntheticModel = "<synthetic>"
+
+// contextTiers are the known context window sizes, ascending.
+var contextTiers = []int{200_000, 1_000_000}
+
+// modelIDPattern captures family and major version from ids like
+// "claude-haiku-5-5" or "claude-sonnet-5"; legacy "claude-3-5-sonnet" won't match.
+var modelIDPattern = regexp.MustCompile(`^claude-([a-z]+)-(\d+)`)
+
+// resolveContextLimit picks the limit for the observed model id (falling back
+// to the caller's model), bumped to a larger tier if usage already exceeds it.
+func resolveContextLimit(modelID, fallback string, tokensUsed int) int {
+	if modelID == "" {
+		modelID = fallback
 	}
+	limit := ContextLimitForModel(modelID)
+	if tokensUsed <= limit {
+		return limit
+	}
+	for _, tier := range contextTiers {
+		if tier >= tokensUsed {
+			return tier
+		}
+	}
+	return contextTiers[len(contextTiers)-1]
+}
+
+// ContextLimitForModel returns the context window for a full model id (e.g.
+// "claude-opus-5-5", "claude-sonnet-4-5[1m]") or a bare family name.
+func ContextLimitForModel(model string) int {
+	lower := strings.ToLower(strings.TrimSpace(model))
+	if strings.HasSuffix(lower, "[1m]") {
+		return 1_000_000
+	}
+	if sm := modelIDPattern.FindStringSubmatch(lower); sm != nil {
+		if sm[1] == "fable" {
+			return 1_000_000
+		}
+		if major, err := strconv.Atoi(sm[2]); err == nil && major >= 5 {
+			return 1_000_000
+		}
+	}
+	// Legacy ids and bare families: only Opus had a 1M window.
+	if strings.Contains(lower, "opus") {
+		return 1_000_000
+	}
+	return 200_000
 }

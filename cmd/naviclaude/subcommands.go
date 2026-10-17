@@ -28,6 +28,8 @@ func runSubcommand(args []string) (handled bool, code int) {
 		return true, runHooks(args[1:])
 	case "sound":
 		return true, runSound(args[1:])
+	case "open":
+		return true, runOpen(args[1:])
 	}
 	return false, 0
 }

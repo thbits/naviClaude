@@ -182,17 +182,13 @@ func (m *ContextMenuModel) buildItems(s *session.Session, caps MenuCaps) []MenuI
 	}
 }
 
-// View renders the context menu at its x,y position.
-func (m ContextMenuModel) View() string {
-	if !m.visible || len(m.items) == 0 {
-		return ""
-	}
-
+// renderBox renders the bordered menu without positioning margins.
+func (m ContextMenuModel) renderBox() string {
 	var rows []string
 	maxWidth := 0
 
 	// Measure widths in display columns (lipgloss.Width), not bytes, so the
-	// column math matches the lipgloss.Width-based placement clamp below and
+	// column math matches the lipgloss.Width-based placement clamp in Rect and
 	// stays correct for multibyte labels/shortcuts.
 	for _, item := range m.items {
 		w := lipgloss.Width(item.Label)
@@ -242,28 +238,71 @@ func (m ContextMenuModel) View() string {
 		rows = append(rows, row)
 	}
 
-	content := strings.Join(rows, "\n")
-	menu := styles.ContextMenuBorder.Render(content)
+	return styles.ContextMenuBorder.Render(strings.Join(rows, "\n"))
+}
 
-	// Clamp position so the menu stays within the terminal.
-	menuW := lipgloss.Width(menu)
-	menuH := lipgloss.Height(menu)
-	x := m.x
-	y := m.y
-	if m.termW > 0 && x+menuW > m.termW {
-		x = m.termW - menuW
+// Rect returns the menu's on-screen rectangle after clamping it inside the
+// terminal; all zero when the menu is hidden or empty.
+func (m ContextMenuModel) Rect() (x, y, w, h int) {
+	if !m.visible || len(m.items) == 0 {
+		return 0, 0, 0, 0
+	}
+	return m.place(m.renderBox())
+}
+
+func (m ContextMenuModel) place(menu string) (x, y, w, h int) {
+	w = lipgloss.Width(menu)
+	h = lipgloss.Height(menu)
+	x, y = m.x, m.y
+	if m.termW > 0 && x+w > m.termW {
+		x = m.termW - w
 	}
 	if x < 0 {
 		x = 0
 	}
-	if m.termH > 0 && y+menuH > m.termH {
-		y = m.termH - menuH
+	if m.termH > 0 && y+h > m.termH {
+		y = m.termH - h
 	}
 	if y < 0 {
 		y = 0
 	}
+	return x, y, w, h
+}
 
-	// Position the menu at clamped x,y using lipgloss.
+// Contains reports whether the screen cell (px, py) is inside the menu box.
+func (m ContextMenuModel) Contains(px, py int) bool {
+	x, y, w, h := m.Rect()
+	return InRect(px, py, x, y, w, h)
+}
+
+// ItemAt returns the index of the selectable item at screen cell (px, py).
+// Borders and separators are not selectable.
+func (m ContextMenuModel) ItemAt(px, py int) (int, bool) {
+	x, y, w, h := m.Rect()
+	if !InRect(px, py, x+1, y+1, w-2, h-2) {
+		return 0, false
+	}
+	idx := py - y - 1
+	if idx < 0 || idx >= len(m.items) || m.items[idx].IsSep {
+		return 0, false
+	}
+	return idx, true
+}
+
+// SetCursor highlights item idx when it is a selectable row.
+func (m *ContextMenuModel) SetCursor(idx int) {
+	if idx >= 0 && idx < len(m.items) && !m.items[idx].IsSep {
+		m.cursor = idx
+	}
+}
+
+// View renders the context menu at its clamped x,y position.
+func (m ContextMenuModel) View() string {
+	if !m.visible || len(m.items) == 0 {
+		return ""
+	}
+	menu := m.renderBox()
+	x, y, _, _ := m.place(menu)
 	return lipgloss.NewStyle().
 		MarginLeft(x).
 		MarginTop(y).

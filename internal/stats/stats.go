@@ -1,42 +1,52 @@
 package stats
 
-// Stats holds computed statistics for display in the stats popup.
+import "time"
+
+// Stats holds usage statistics computed from session transcripts for one period.
 type Stats struct {
-	TotalSessions     int
-	TotalMessages     int
-	ActiveCount       int
-	AvgSessionsPerDay float64
-	ProjectCounts     []ProjectCount
-	WeeklyActivity    []DayActivity
-	HourlyActivity    [24]int // message count per hour, only populated for "today" filter
-	ModelUsage        []ModelUsageEntry
-	LongestSession    LongestInfo
-	PeakHour          int
-	Filter            string // "all", "week", "today"
+	Filter string // "all", "week", "today"
+	// Since is the start of the period; for "all" it is the oldest retained
+	// transcript record, since Claude Code prunes old transcripts.
+	Since       time.Time
+	ActiveCount int
+	Sessions    int // main sessions with any activity in the period
+	Prompts     int // prompts the user sent (not tool results, commands or meta)
+	Tokens      Tokens
+	Projects    []ProjectCount
+	Daily       []DayActivity // prompts per local day, oldest first
+	Hourly      [24]int       // prompts per local hour of day
+	BusiestHour int           // hour with the most prompts, -1 when there are none
+	Models      []ModelUsageEntry
 }
 
-// ProjectCount is a project name with its session count.
+// Tokens sums API usage across assistant messages, each message counted once.
+type Tokens struct {
+	Input      int64
+	Output     int64
+	CacheRead  int64
+	CacheWrite int64
+}
+
+// Total is every token billed in or out, cache reads and writes included.
+func (t Tokens) Total() int64 {
+	return t.Input + t.Output + t.CacheRead + t.CacheWrite
+}
+
+// ProjectCount is a project's activity in the period.
 type ProjectCount struct {
-	Name  string
-	Count int
+	Name     string // shortest unambiguous path label, "~" for the home dir
+	Sessions int
+	Prompts  int
 }
 
-// DayActivity is a single day's activity metrics.
+// DayActivity is one local day's prompt count.
 type DayActivity struct {
-	Date         string
-	MessageCount int
-	SessionCount int
+	Date    string // YYYY-MM-DD
+	Prompts int
 }
 
-// ModelUsageEntry is a model family with its usage count.
+// ModelUsageEntry is a model family's total tokens in the period.
 type ModelUsageEntry struct {
-	Family string // "opus", "sonnet", "haiku"
-	Count  int
-}
-
-// LongestInfo describes the longest session.
-type LongestInfo struct {
-	SessionID    string
-	DurationMins int
-	MessageCount int
+	Family string // "opus", "sonnet", "haiku", "fable", "other"
+	Tokens int64
 }

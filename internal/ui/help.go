@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/thbits/naviClaude/internal/styles"
 )
 
@@ -95,37 +96,56 @@ func (m HelpModel) View() string {
 		// Fallback defaults if SetKeyBindings was never called.
 		listBindings = []helpBinding{
 			{"j/k", "Navigate sessions"},
-			{"Enter/Tab", "Focus / resume closed"},
-			{"f", "Jump / fast-resume closed"},
+			{"Tab/Shift+Tab", "Cycle panes"},
+			{"Ctrl+U/Ctrl+D", "Scroll preview"},
 			{"/", "Search"},
+			{"Enter", "Focus / resume closed"},
+			{"f", "Jump / fast-resume closed"},
 			{"n", "New session"},
+			{"N", "New tmux session"},
+			{"r", "Rename session"},
 			{"K", "Kill session"},
+			{"F", "Changed files panel"},
 			{"d", "Detail"},
 			{"s", "Stats"},
+			{"T", "Theme picker"},
 			{"?", "Help"},
 			{"q", "Quit"},
 		}
 	}
 
 	passthroughBindings := []helpBinding{
-		{"Tab/Ctrl+]", "Exit passthrough"},
+		{"Tab/Shift+Tab", "Next / previous pane"},
+		{"Ctrl+]", "Back to list"},
 		{"Ctrl+f", "Jump to pane"},
 	}
 
-	var lines []string
-	lines = append(lines, title)
-	lines = append(lines, "")
-	lines = append(lines, styles.HelpTitle.Render("List Mode"))
-	lines = append(lines, renderBindings(listBindings)...)
-	lines = append(lines, "")
-	lines = append(lines, styles.HelpTitle.Render("Passthrough Mode"))
-	lines = append(lines, renderBindings(passthroughBindings)...)
-	lines = append(lines, "")
-	lines = append(lines, styles.HelpDesc.Render("Press any key to close"))
+	changedFilesBindings := []helpBinding{
+		{"j/k", "Navigate files"},
+		{"Enter/e", "Open in $EDITOR"},
+		{"Esc", "Back to list"},
+	}
 
-	content := strings.Join(lines, "\n")
+	listCol := append([]string{styles.HelpTitle.Render("List Mode")}, renderBindings(listBindings)...)
+	otherCol := append([]string{styles.HelpTitle.Render("Passthrough Mode")}, renderBindings(passthroughBindings)...)
+	otherCol = append(otherCol, "", styles.HelpTitle.Render("Changed Files"))
+	otherCol = append(otherCol, renderBindings(changedFilesBindings)...)
 
-	return styles.HelpBorder.Render(content)
+	footer := styles.HelpDesc.Render("Press any key to close")
+	render := func(body string) string {
+		return styles.HelpBorder.Render(strings.Join([]string{title, "", body, "", footer}, "\n"))
+	}
+
+	stacked := render(strings.Join(listCol, "\n") + "\n\n" + strings.Join(otherCol, "\n"))
+	if m.height <= 0 || lipgloss.Height(stacked) <= m.height {
+		return stacked
+	}
+	// Too tall for the terminal: put the sections side by side when that fits.
+	side := render(lipgloss.JoinHorizontal(lipgloss.Top, strings.Join(listCol, "\n"), "    ", strings.Join(otherCol, "\n")))
+	if lipgloss.Width(side) <= m.width {
+		return side
+	}
+	return stacked
 }
 
 func renderBindings(bindings []helpBinding) []string {

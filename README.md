@@ -91,6 +91,22 @@ naviclaude
 
 All key bindings except navigation and passthrough exit keys are configurable.
 
+### Mouse
+
+| Action | Effect |
+|---|---|
+| Click a session | Select it (and focus the session list) |
+| Double-click a session | Same as `Enter`: focus an active session, open the resume picker for a closed one |
+| Click a group header | Collapse / expand the group |
+| Right-click a session | Open the context menu for that session |
+| Long-press a session (hold ~0.5s) | Open the context menu -- for tmux setups whose `MouseDown3Pane` binding swallows right-click |
+| Wheel over the session list | Move the selection up / down |
+| Wheel over the preview / changed files | Scroll them |
+| Click the preview / changed files | Focus that pane |
+| Click a hint in the bottom bar | Run that key |
+| Click a menu item / picker row | Run it / select it (click the selected row again to confirm) |
+| Click outside a popup or menu | Close it |
+
 ## Configuration
 
 Config file location: `~/.config/naviclaude/config.yaml`
