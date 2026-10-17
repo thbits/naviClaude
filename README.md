@@ -179,6 +179,7 @@ active_window_secs: 5
 cpu_active_threshold: 5
 theme: "tokyo-night"
 claude_command: "claude"
+window_name: "{project}"
 check_for_updates: true
 focus_last_session: true
 remember_group_state: true
@@ -202,6 +203,7 @@ remember_group_state: true
 | `cpu_active_threshold` | `5` | Process-subtree CPU% above which a session counts as "working" |
 | `theme` | `tokyo-night` | Color theme name |
 | `claude_command` | `claude` | Command to start Claude (sent via send-keys, supports aliases) |
+| `window_name` | `{project}` | tmux window name for sessions naviClaude creates or resumes; `{project}` (directory name) and `{harness}` expand, e.g. `"{harness}: {project}"`. The name is locked (`allow-rename off`) so your shell's title escapes cannot turn it into `cd` |
 | `check_for_updates` | `true` | Check GitHub on startup for a newer release and show "update available" in the status bar |
 | `focus_last_session` | `true` | On startup, re-focus the session you last had selected; falls back to the first session if it no longer exists |
 | `remember_group_state` | `true` | On startup, restore the open/closed state of groups you manually toggled |
@@ -225,6 +227,7 @@ Restart running Claude sessions afterwards; hooks are read at session start. The
 | Permission prompt, question (`AskUserQuestion`), plan approval, MCP input | **request** sound, a yellow bell `` is appended to the window name -- the marker clears as soon as Claude stops waiting (answered, Esc, ...) or you switch to the pane |
 | Turn finished in a pane you are not looking at | **done** sound, a green check `` is appended until you visit it or send the next prompt |
 | Turn finished while you are looking at it | nothing (unless `done_sound_when_focused`) |
+| Prompt submitted | a blue spinner `` is appended while Claude works, even in the pane you are looking at; the bell and check take precedence over it |
 
 Hooks are only triggers: before ringing, naviClaude confirms the state with Claude's own status file (`~/.claude/sessions/<pid>.json`), so prompts that auto mode approves instantly stay silent and the marker never sticks. Sounds respect a global cooldown so several sessions finishing together ring once. Outside tmux the hooks do nothing.
 
@@ -241,6 +244,7 @@ notifications:
   window_marker: true
   waiting_marker: "#[fg=yellow,bold]#[nobold]"   # nf-fa-bell; any text, tmux #[...] styles allowed
   done_marker: "#[fg=green,bold]#[nobold]"      # nf-fa-check
+  busy_marker: "#[fg=blue,bold]#[nobold]"       # nf-fa-spinner; "none" hides it
 ```
 
 The markers need a [Nerd Font](https://www.nerdfonts.com/); swap in plain text such as `!` / `+` if you do not use one. The marker is a suffix, so your `window-status-format` colors after `#W` stay intact; the original name and its `automatic-rename` setting are restored when it clears. If you rename the window while it is marked, your new name is kept. To debug, `touch ~/Library/Caches/naviclaude/hook.log` and watch it.

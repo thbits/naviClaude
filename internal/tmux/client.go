@@ -104,6 +104,11 @@ func (c *Client) KillPane(target string) error {
 	return nil
 }
 
+// PaneExists reports whether target names a live pane.
+func (c *Client) PaneExists(target string) bool {
+	return exec.Command("tmux", "display-message", "-p", "-t", target, "#{pane_id}").Run() == nil
+}
+
 // SendKeys sends key strokes to a pane.  keys may be a literal string or a
 // named key such as "Enter".
 func (c *Client) SendKeys(target, keys string) error {
@@ -213,8 +218,7 @@ type NewSessionOptions struct {
 // NewSessionPrint creates a new detached tmux session and returns the target
 // identifier of its first pane (e.g. "newsess:0.0").
 func (c *Client) NewSessionPrint(opts NewSessionOptions) (string, error) {
-	format := "#{session_name}:#{window_index}.#{pane_index}"
-	args := []string{"new-session", "-d", "-P", "-F", format}
+	args := []string{"new-session", "-d", "-P", "-F", printFormat}
 	if opts.Name != "" {
 		args = append(args, "-s", opts.Name)
 	}
@@ -228,7 +232,23 @@ func (c *Client) NewSessionPrint(opts NewSessionOptions) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("tmux new-session: %w", err)
 	}
-	return strings.TrimSpace(string(out)), nil
+	return createdTarget(out, opts.WindowName), nil
+}
+
+// printFormat makes new-session/new-window print the window id and pane target.
+const printFormat = "#{window_id}\t#{session_name}:#{window_index}.#{pane_index}"
+
+// createdTarget parses printFormat output into the pane target. A named window
+// gets allow-rename off, so shell title escapes (zsh retitling it to the
+// command being run, e.g. "cd") cannot overwrite the name; the name is
+// re-applied in case the shell's first prompt already did.
+func createdTarget(out []byte, name string) string {
+	id, target, _ := strings.Cut(strings.TrimSpace(string(out)), "\t")
+	if name != "" && id != "" {
+		exec.Command("tmux", "set-option", "-w", "-t", id, "allow-rename", "off", ";",
+			"rename-window", "-t", id, name).Run()
+	}
+	return target
 }
 
 // HasSession reports whether a tmux session with exactly the given name exists.
@@ -390,7 +410,7 @@ type NewWindowOptions struct {
 // NewWindow creates a new window in the target session and optionally runs a
 // command in it.
 func (c *Client) NewWindow(opts NewWindowOptions) error {
-	args := []string{"new-window"}
+	args := []string{"new-window", "-P", "-F", printFormat}
 	if opts.Target != "" {
 		args = append(args, "-t", opts.Target)
 	}
@@ -400,17 +420,18 @@ func (c *Client) NewWindow(opts NewWindowOptions) error {
 	if opts.Command != "" {
 		args = append(args, opts.Command)
 	}
-	if err := exec.Command("tmux", args...).Run(); err != nil {
+	out, err := exec.Command("tmux", args...).Output()
+	if err != nil {
 		return fmt.Errorf("tmux new-window: %w", err)
 	}
+	createdTarget(out, opts.Name)
 	return nil
 }
 
 // NewWindowPrint creates a new window and returns its target identifier
 // (e.g. "session:3.0"). Uses -P -F to print the pane info.
 func (c *Client) NewWindowPrint(opts NewWindowOptions) (string, error) {
-	format := "#{session_name}:#{window_index}.#{pane_index}"
-	args := []string{"new-window", "-d", "-P", "-F", format}
+	args := []string{"new-window", "-d", "-P", "-F", printFormat}
 	if opts.Target != "" {
 		args = append(args, "-t", opts.Target)
 	}
@@ -424,7 +445,7 @@ func (c *Client) NewWindowPrint(opts NewWindowOptions) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("tmux new-window: %w", err)
 	}
-	return strings.TrimSpace(string(out)), nil
+	return createdTarget(out, opts.Name), nil
 }
 
 // parseVersionString parses a version string like "3.4", "3.4a" or

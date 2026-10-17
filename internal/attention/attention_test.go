@@ -32,7 +32,7 @@ func TestClassify(t *testing.T) {
 		{Payload{HookEventName: "Stop"}, KindDone},
 		{Payload{HookEventName: "Stop", BackgroundTasks: bg}, KindIgnore},
 		{Payload{HookEventName: "StopFailure"}, KindDone},
-		{Payload{HookEventName: "UserPromptSubmit"}, KindClear},
+		{Payload{HookEventName: "UserPromptSubmit"}, KindBusy},
 		{Payload{HookEventName: "SessionEnd"}, KindClear},
 		{Payload{HookEventName: "SubagentStop"}, KindIgnore},
 	}
@@ -161,7 +161,7 @@ func (f *fakeTmux) Pane(p string) (paneState, error) {
 		return paneState{}, errors.New("no pane")
 	}
 	su, _ := strconv.ParseInt(fp.opts[optAttnSU], 10, 64)
-	return paneState{Window: fp.window, Attn: fp.opts[optAttn], AttnSU: su, Token: fp.opts[optToken], OnScreen: fp.onScreen, Session: "s"}, nil
+	return paneState{Window: fp.window, Attn: fp.opts[optAttn], AttnSU: su, Token: fp.opts[optToken], OnScreen: fp.onScreen, Session: "s", Busy: fp.opts[optBusy]}, nil
 }
 
 func setOpts(m map[string]string, kv map[string]string) {
@@ -181,13 +181,13 @@ func (f *fakeTmux) SetPaneOptions(p string, kv map[string]string) error {
 	return nil
 }
 
-func (f *fakeTmux) WindowAttns(w string) ([]string, error) {
+func (f *fakeTmux) WindowPanes(w string) ([]paneMarks, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	var out []string
+	var out []paneMarks
 	for _, p := range f.panes {
 		if p.window == w {
-			out = append(out, p.opts[optAttn])
+			out = append(out, paneMarks{Attn: p.opts[optAttn], Busy: p.opts[optBusy]})
 		}
 	}
 	return out, nil
@@ -422,5 +422,71 @@ func TestLegacyPrefixMarkerIsRestored(t *testing.T) {
 	te.Clear("%1")
 	if got := te.fake.windowName(); got != "cc" {
 		t.Errorf("legacy marker not restored: %q", got)
+	}
+}
+
+func TestBusyMarksWindowUntilTurnEnds(t *testing.T) {
+	marks := config.DefaultConfig().Notifications
+	status := []string{"idle", "busy", "waiting", "busy", "idle"} // stale idle, then the turn
+	polls := 0
+	var te *testEngine
+	te = newTestEngine(func() claude.NativeState {
+		want := marks.BusyMarker
+		if status[polls] == "waiting" {
+			te.fake.panes["%1"].opts[optAttn] = Waiting
+			te.syncWindow("@1")
+			want = marks.WaitingMarker
+		} else if polls > 0 && status[polls-1] == "waiting" {
+			te.Clear("%1") // the waiting watcher resolves once answered
+		}
+		if got := te.fake.windowName(); got != markedName("cc", want) {
+			t.Errorf("poll %d (%s): window = %q, want %q marker", polls, status[polls], got, want)
+		}
+		st := claude.NativeState{Status: status[polls]}
+		polls++
+		return st
+	})
+	te.Busy("%1", "sid")
+	if got := te.fake.windowName(); got != "cc" {
+		t.Errorf("window after turn = %q, want %q", got, "cc")
+	}
+	if polls != len(status) {
+		t.Errorf("polled %d times, want %d", polls, len(status))
+	}
+}
+
+func TestDoneReplacesBusy(t *testing.T) {
+	te := newTestEngine(func() claude.NativeState { return claude.NativeState{Status: "idle", UpdatedAt: 3} })
+	te.fake.panes["%1"].opts[optBusy] = "tok"
+	te.fake.panes["%1"].onScreen = true
+	te.Raise(KindDone, "%1", "sid")
+	if b := te.fake.panes["%1"].opts[optBusy]; b != "" {
+		t.Errorf("busy left set: %q", b)
+	}
+	if got := te.fake.windowName(); got != "cc" {
+		t.Errorf("window = %q, want %q", got, "cc")
+	}
+}
+
+func TestPreviewClearKeepsBusy(t *testing.T) {
+	te := newTestEngine(nil)
+	te.fake.panes["%1"].opts[optBusy] = "tok"
+	te.Clear("%1")
+	if got := te.fake.windowName(); got != markedName("cc", config.DefaultConfig().Notifications.BusyMarker) {
+		t.Errorf("window = %q, want busy marker", got)
+	}
+	te.End("%1")
+	if got := te.fake.windowName(); got != "cc" {
+		t.Errorf("window after SessionEnd = %q", got)
+	}
+}
+
+func TestBusyMarkerNone(t *testing.T) {
+	te := newTestEngine(nil)
+	te.cfg.BusyMarker = "none"
+	te.fake.panes["%1"].opts[optBusy] = "tok"
+	te.syncWindow("@1")
+	if got := te.fake.windowName(); got != "cc" {
+		t.Errorf("window = %q, want no marker", got)
 	}
 }

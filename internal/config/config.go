@@ -31,6 +31,7 @@ type Config struct {
 	CPUActiveThreshold float64       `yaml:"cpu_active_threshold"` // process-subtree CPU% above which a session counts as working (default 5)
 	Theme              string        `yaml:"theme"`                // color theme name (default "tokyo-night")
 	ClaudeCommand      string        `yaml:"claude_command"`       // command to start Claude in new sessions (default "claude")
+	WindowName         string        `yaml:"window_name"`          // tmux window name for new/resumed sessions; {project} and {harness} expand (default "{project}")
 	NewSessionDir      string        `yaml:"new_session_dir"`      // working directory for new tmux sessions (default "~")
 	GroupSortOrder     string        `yaml:"group_sort_order"`     // "name" (alphabetical, default) or "activity"
 	SessionSortOrder   string        `yaml:"session_sort_order"`   // "name" (alphabetical, default) or "activity"
@@ -54,6 +55,7 @@ type Notifications struct {
 	WindowMarker         bool    `yaml:"window_marker"`           // suffix the tmux window name while a pane needs you (default true)
 	WaitingMarker        string  `yaml:"waiting_marker"`          // window-name suffix for "needs input"; may hold tmux #[...] styles
 	DoneMarker           string  `yaml:"done_marker"`             // window-name suffix for "finished, unseen"; may hold tmux #[...] styles
+	BusyMarker           string  `yaml:"busy_marker"`             // window-name suffix while Claude is working; "none" hides it
 }
 
 // KeyBindings maps user-facing actions to key names (tea.KeyMsg.String() format).
@@ -101,6 +103,7 @@ func DefaultConfig() Config {
 		CPUActiveThreshold: 5.0,
 		Theme:              "tokyo-night",
 		ClaudeCommand:      "claude",
+		WindowName:         "{project}",
 		GroupSortOrder:     "name",
 		SessionSortOrder:   "name",
 		CheckForUpdates:    true,
@@ -113,6 +116,7 @@ func DefaultConfig() Config {
 			WindowMarker:  true,
 			WaitingMarker: "#[fg=yellow,bold]\uf0f3#[nobold]", // nerd font bell
 			DoneMarker:    "#[fg=green,bold]\uf00c#[nobold]",  // nerd font check
+			BusyMarker:    "#[fg=blue,bold]\uf110#[nobold]",   // nerd font spinner
 		},
 	}
 }
@@ -219,6 +223,9 @@ func sanitizeConfig(cfg *Config) {
 	if cfg.Theme == "" {
 		cfg.Theme = d.Theme
 	}
+	if cfg.WindowName == "" {
+		cfg.WindowName = d.WindowName
+	}
 	if cfg.ClaudeCommand == "" {
 		cfg.ClaudeCommand = d.ClaudeCommand
 	}
@@ -240,6 +247,9 @@ func sanitizeConfig(cfg *Config) {
 	}
 	if n.DoneMarker == "" {
 		n.DoneMarker = d.Notifications.DoneMarker
+	}
+	if n.BusyMarker == "" {
+		n.BusyMarker = d.Notifications.BusyMarker
 	}
 
 	// Sort-order enums must be one of the allowed values; otherwise fall back.

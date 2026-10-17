@@ -39,20 +39,22 @@ func TestResumeShellCommand(t *testing.T) {
 	}
 }
 
-func TestResumeWindowName(t *testing.T) {
+func TestNameWindow(t *testing.T) {
 	tests := []struct {
-		name string
-		s    Session
-		want string
+		name, format, project, harness, want string
 	}{
-		{"project name wins", Session{ProjectName: "proj", Harness: "claude"}, "proj"},
-		{"falls back to harness", Session{Harness: "claude"}, "claude"},
-		{"unstamped falls back to generic", Session{}, "session"},
+		{"project name wins", "", "proj", "claude", "proj"},
+		{"falls back to harness", "{project}", "", "claude", "claude"},
+		{"root dir falls back to harness", "{project}", "/", "claude", "claude"},
+		{"unstamped falls back to generic", "{project}", "", "", "session"},
+		{"template expands both", "{harness}: {project}", "proj", "codex", "codex: proj"},
+		{"literal name", "agent", "proj", "claude", "agent"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := resumeWindowName(&tt.s); got != tt.want {
-				t.Errorf("resumeWindowName = %q, want %q", got, tt.want)
+			m := NewManager(nil, tt.format)
+			if got := m.nameWindow(tt.project, tt.harness); got != tt.want {
+				t.Errorf("nameWindow(%q, %q) = %q, want %q", tt.project, tt.harness, got, tt.want)
 			}
 		})
 	}

@@ -248,7 +248,7 @@ func New(version string) Model {
 		tmuxClient:    tc,
 		registry:      registry,
 		detector:      harness.NewDetector(tc, registry, cfg.ActiveWindowSecs, cfg.CPUActiveThreshold),
-		manager:       session.NewManager(tc),
+		manager:       session.NewManager(tc, cfg.WindowName),
 		captureEngine: preview.NewCaptureEngine(tc),
 		passthrough:   preview.NewPassthrough(tc),
 

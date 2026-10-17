@@ -12,6 +12,7 @@ const (
 	optAttn      = "@naviclaude_attn"      // pane: "waiting" | "done" | ""
 	optAttnSU    = "@naviclaude_attn_su"   // pane: native statusUpdatedAt the attention was raised for
 	optToken     = "@naviclaude_token"     // pane: id of the watcher that owns the attention
+	optBusy      = "@naviclaude_busy"      // pane: id of the watcher tracking a running turn
 	optMarker    = "@naviclaude_marker"    // window: marker currently prefixed to the name
 	optOrigName  = "@naviclaude_orig_name" // window: name before marking
 	optOrigAuto  = "@naviclaude_orig_auto" // window: local automatic-rename before marking ("" = inherited)
@@ -19,7 +20,7 @@ const (
 	fieldSep     = "\x1f"
 	paneStateFmt = "#{window_id}" + fieldSep + "#{" + optAttn + "}" + fieldSep + "#{" + optAttnSU + "}" + fieldSep +
 		"#{" + optToken + "}" + fieldSep + "#{pane_active}" + fieldSep + "#{window_active}" + fieldSep +
-		"#{session_attached}" + fieldSep + "#{session_name}"
+		"#{session_attached}" + fieldSep + "#{session_name}" + fieldSep + "#{" + optBusy + "}"
 	windowStateFmt = "#{window_name}" + fieldSep + "#{" + optMarker + "}" + fieldSep + "#{" + optOrigName + "}" + fieldSep +
 		"#{" + optOrigAuto + "}"
 )
@@ -33,6 +34,13 @@ type paneState struct {
 	Token    string
 	OnScreen bool // active pane of the active window of an attached session
 	Session  string
+	Busy     string
+}
+
+// paneMarks is what one pane contributes to its window's marker.
+type paneMarks struct {
+	Attn string
+	Busy string
 }
 
 // windowState is a window's name and naviClaude's marker bookkeeping.
@@ -48,7 +56,7 @@ type windowState struct {
 type tmuxAPI interface {
 	Pane(pane string) (paneState, error)
 	SetPaneOptions(pane string, kv map[string]string) error
-	WindowAttns(window string) ([]string, error)
+	WindowPanes(window string) ([]paneMarks, error)
 	Window(window string) (windowState, error)
 	LocalAutoRename(window string) string
 	RenameWindow(window, name string) error
@@ -75,7 +83,7 @@ func (t execTmux) Pane(pane string) (paneState, error) {
 		return paneState{}, err
 	}
 	f := strings.Split(out, fieldSep)
-	if len(f) != 8 || f[0] == "" {
+	if len(f) != 9 || f[0] == "" {
 		return paneState{}, fmt.Errorf("tmux: pane %s not found", pane)
 	}
 	su, _ := strconv.ParseInt(f[2], 10, 64)
@@ -87,6 +95,7 @@ func (t execTmux) Pane(pane string) (paneState, error) {
 		Token:    f[3],
 		OnScreen: f[4] == "1" && f[5] == "1" && attached > 0,
 		Session:  f[7],
+		Busy:     f[8],
 	}, nil
 }
 
@@ -113,12 +122,17 @@ func (t execTmux) SetWindowOptions(window string, kv map[string]string) error {
 	return t.setOptions("-w", window, kv)
 }
 
-func (t execTmux) WindowAttns(window string) ([]string, error) {
-	out, err := t.run("list-panes", "-t", window, "-F", "#{"+optAttn+"}")
+func (t execTmux) WindowPanes(window string) ([]paneMarks, error) {
+	out, err := t.run("list-panes", "-t", window, "-F", "#{"+optAttn+"}"+fieldSep+"#{"+optBusy+"}")
 	if err != nil {
 		return nil, err
 	}
-	return strings.Split(out, "\n"), nil
+	var marks []paneMarks
+	for _, line := range strings.Split(out, "\n") {
+		attn, busy, _ := strings.Cut(line, fieldSep)
+		marks = append(marks, paneMarks{Attn: attn, Busy: busy})
+	}
+	return marks, nil
 }
 
 func (t execTmux) Window(window string) (windowState, error) {

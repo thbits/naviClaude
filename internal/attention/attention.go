@@ -33,8 +33,12 @@ const (
 	KindIgnore    Kind = ""
 	KindAttention Kind = "attention"
 	KindDone      Kind = "done"
+	KindBusy      Kind = "busy"
 	KindClear     Kind = "clear"
 )
+
+// busyGrace is how long a new turn may still read as idle before it starts.
+const busyGrace = 3 * time.Second
 
 // engine holds the injectable dependencies; tests swap them out.
 type engine struct {
@@ -105,6 +109,9 @@ func (e *engine) Raise(kind Kind, pane, sessionID string) {
 		unlock()
 		e.logf("%s %s: %v", kind, pane, err)
 		return
+	}
+	if kind == KindDone && ps.Busy != "" {
+		_ = e.tmux.SetPaneOptions(pane, map[string]string{optBusy: ""})
 	}
 	visible := ps.OnScreen && e.tmux.SessionFocused(ps.Session)
 	su := strconv.FormatInt(st.UpdatedAt, 10)
@@ -208,23 +215,81 @@ func (e *engine) clearIfOwned(pane, token string) {
 // Clear drops any attention on pane and re-derives its window marker.
 func (e *engine) Clear(pane string) { e.clearIfOwned(pane, "") }
 
-// syncWindow makes the window name's marker match its panes' attention:
-// waiting beats done. Call with the lock held.
+// End drops everything tracked on pane once its session exits.
+func (e *engine) End(pane string) {
+	unlock := e.lock()
+	defer unlock()
+	ps, err := e.tmux.Pane(pane)
+	if err != nil {
+		return
+	}
+	_ = e.tmux.SetPaneOptions(pane, map[string]string{optAttn: "", optToken: "", optBusy: ""})
+	e.syncWindow(ps.Window)
+}
+
+// Busy marks pane as running a turn, replacing any attention, and watches until
+// Claude goes idle: an interrupted turn fires no Stop hook to clear it.
+func (e *engine) Busy(pane, sessionID string) {
+	token := newToken()
+	unlock := e.lock()
+	ps, err := e.tmux.Pane(pane)
+	if err != nil {
+		unlock()
+		return
+	}
+	_ = e.tmux.SetPaneOptions(pane, map[string]string{optAttn: "", optToken: "", optBusy: token})
+	e.syncWindow(ps.Window)
+	unlock()
+
+	start, started := e.now(), false
+	for e.now().Sub(start) < e.maxLife {
+		e.sleep(e.poll)
+		cur, err := e.tmux.Pane(pane)
+		if err != nil {
+			unlock := e.lock()
+			e.syncWindow(ps.Window)
+			unlock()
+			return
+		}
+		if cur.Busy != token {
+			return
+		}
+		if st, ok := e.native(sessionID); ok {
+			started = started || !isIdle(st.Status)
+			if isIdle(st.Status) && (started || e.now().Sub(start) > busyGrace) {
+				break
+			}
+		}
+	}
+	unlock = e.lock()
+	defer unlock()
+	if cur, err := e.tmux.Pane(pane); err == nil && cur.Busy == token {
+		_ = e.tmux.SetPaneOptions(pane, map[string]string{optBusy: ""})
+		e.syncWindow(cur.Window)
+	}
+}
+
+// syncWindow makes the window name's marker match its panes' state: waiting
+// beats done beats busy. Call with the lock held.
 func (e *engine) syncWindow(window string) {
 	want := ""
 	if e.cfg.WindowMarker {
-		attns, err := e.tmux.WindowAttns(window)
+		panes, err := e.tmux.WindowPanes(window)
 		if err != nil {
 			return
 		}
-		for _, a := range attns {
+		rank := 0
+		for _, p := range panes {
 			switch {
-			case a == Waiting:
-				want = e.cfg.WaitingMarker
-			case a == Done && want == "":
-				want = e.cfg.DoneMarker
+			case p.Attn == Waiting:
+				rank = max(rank, 3)
+			case p.Attn == Done:
+				rank = max(rank, 2)
+			case p.Busy != "" && e.cfg.BusyMarker != "none":
+				rank = max(rank, 1)
 			}
 		}
+		want = [...]string{"", e.cfg.BusyMarker, e.cfg.DoneMarker, e.cfg.WaitingMarker}[rank]
 	}
 	ws, err := e.tmux.Window(window)
 	if err != nil {

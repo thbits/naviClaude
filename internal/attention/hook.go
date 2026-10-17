@@ -42,15 +42,17 @@ func Classify(p Payload) Kind {
 		}
 	case "StopFailure":
 		return KindDone
-	case "UserPromptSubmit", "SessionEnd":
+	case "UserPromptSubmit":
+		return KindBusy
+	case "SessionEnd":
 		return KindClear
 	}
 	return KindIgnore
 }
 
 // RunHook handles one Claude Code hook invocation: the payload is on stdin and
-// the pane is $TMUX_PANE. Clears run inline; attention and done events re-exec
-// a detached watcher so Claude never waits on the confirm delay or the sound.
+// the pane is $TMUX_PANE. Clears run inline; other events re-exec a detached
+// watcher so Claude never waits on the confirm delay, the sound or the turn.
 func RunHook(stdin io.Reader) error {
 	pane := os.Getenv("TMUX_PANE")
 	if pane == "" || os.Getenv("TMUX") == "" {
@@ -68,8 +70,8 @@ func RunHook(stdin io.Reader) error {
 	debugLogf("hook %s pane=%s session=%s type=%s tool=%s -> %q", p.HookEventName, pane, p.SessionID, p.NotificationType, p.ToolName, kind)
 	switch kind {
 	case KindClear:
-		newEngine(cfg.Notifications).Clear(pane)
-	case KindAttention, KindDone:
+		newEngine(cfg.Notifications).End(pane)
+	case KindAttention, KindDone, KindBusy:
 		return spawnWatcher(kind, pane, p.SessionID)
 	}
 	return nil
@@ -91,5 +93,9 @@ func spawnWatcher(kind Kind, pane, sessionID string) error {
 // RunWatcher is the detached half of RunHook.
 func RunWatcher(kind, pane, sessionID string) {
 	cfg, _ := config.Load("")
+	if Kind(kind) == KindBusy {
+		newEngine(cfg.Notifications).Busy(pane, sessionID)
+		return
+	}
 	newEngine(cfg.Notifications).Raise(Kind(kind), pane, sessionID)
 }

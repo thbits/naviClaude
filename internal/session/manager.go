@@ -15,11 +15,29 @@ import (
 // shell commands.
 type Manager struct {
 	tmuxClient *tmux.Client
+	windowName string // window-name template; {project} and {harness} expand
 }
 
 // NewManager creates a Manager backed by the given tmux client.
-func NewManager(client *tmux.Client) *Manager {
-	return &Manager{tmuxClient: client}
+func NewManager(client *tmux.Client, windowName string) *Manager {
+	return &Manager{tmuxClient: client, windowName: windowName}
+}
+
+// nameWindow fills the window-name template; an unusable project name falls
+// back to the harness name.
+func (m *Manager) nameWindow(project, harness string) string {
+	if project == "" || project == "." || project == "/" {
+		project = harness
+	}
+	format := m.windowName
+	if format == "" {
+		format = "{project}"
+	}
+	name := strings.TrimSpace(strings.NewReplacer("{project}", project, "{harness}", harness).Replace(format))
+	if name == "" {
+		return "session"
+	}
+	return name
 }
 
 // shellSingleQuote returns s wrapped so it is safe to embed in a POSIX shell
@@ -43,7 +61,7 @@ func (m *Manager) Resume(sess *Session, targetTmuxSession, command string) error
 	}
 	return m.tmuxClient.NewWindow(tmux.NewWindowOptions{
 		Target:  targetTmuxSession + ":",
-		Name:    resumeWindowName(sess),
+		Name:    m.nameWindow(sess.ProjectName, sess.Harness),
 		Command: resumeShellCommand(sess.CWD, command),
 	})
 }
@@ -55,18 +73,6 @@ func resumeShellCommand(cwd, command string) string {
 		cwd = "."
 	}
 	return fmt.Sprintf("cd %s && %s", shellSingleQuote(cwd), command)
-}
-
-// resumeWindowName is the tmux window/session name for a resumed session: the
-// project name, falling back to the harness name.
-func resumeWindowName(sess *Session) string {
-	if sess.ProjectName != "" {
-		return sess.ProjectName
-	}
-	if sess.Harness != "" {
-		return sess.Harness
-	}
-	return "session"
 }
 
 // ResumeInSession resumes the closed session in the tmux session named
@@ -90,7 +96,7 @@ func (m *Manager) ResumeInSession(sess *Session, targetName, command string) (st
 		// Existing session: open the resume in a new window and return its target.
 		target, err := m.tmuxClient.NewWindowPrint(tmux.NewWindowOptions{
 			Target:  targetName + ":",
-			Name:    resumeWindowName(sess),
+			Name:    m.nameWindow(sess.ProjectName, sess.Harness),
 			Command: cmd,
 		})
 		if err != nil {
@@ -105,7 +111,7 @@ func (m *Manager) ResumeInSession(sess *Session, targetName, command string) (st
 	}
 	target, err := m.tmuxClient.NewSessionPrint(tmux.NewSessionOptions{
 		Name:       targetName,
-		WindowName: resumeWindowName(sess),
+		WindowName: m.nameWindow(sess.ProjectName, sess.Harness),
 		StartDir:   cwd,
 	})
 	if err != nil {
@@ -148,12 +154,12 @@ func (m *Manager) CreateNewTmuxSession(cwd, command, sessionName, fallbackName s
 	if cwd == "" {
 		cwd = "."
 	}
-	windowName := filepath.Base(cwd)
-	if windowName == "" || windowName == "." || windowName == "/" {
-		windowName = fallbackName
+	base := filepath.Base(cwd)
+	if base == "" || base == "." || base == "/" {
+		base = fallbackName
 	}
 	if sessionName == "" {
-		sessionName = windowName
+		sessionName = base
 	}
 
 	// If a tmux session with this name already exists, open the agent in a new
@@ -170,7 +176,7 @@ func (m *Manager) CreateNewTmuxSession(cwd, command, sessionName, fallbackName s
 
 	target, err = m.tmuxClient.NewSessionPrint(tmux.NewSessionOptions{
 		Name:       sessionName,
-		WindowName: windowName,
+		WindowName: m.nameWindow(base, fallbackName),
 		StartDir:   cwd,
 	})
 	if err == nil {
@@ -215,13 +221,9 @@ func (m *Manager) CreateNewWithTarget(cwd, targetTmuxSession, command, fallbackN
 	if command == "" {
 		return "", fmt.Errorf("new session: empty start command")
 	}
-	name := filepath.Base(cwd)
-	if name == "" || name == "." {
-		name = fallbackName
-	}
 	target, err := m.tmuxClient.NewWindowPrint(tmux.NewWindowOptions{
 		Target: targetTmuxSession + ":",
-		Name:   name,
+		Name:   m.nameWindow(filepath.Base(cwd), fallbackName),
 	})
 	if err != nil {
 		return "", fmt.Errorf("create window: %w", err)
