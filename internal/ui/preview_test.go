@@ -120,3 +120,15 @@ func TestCacheExpiredZeroTTLNeverWarns(t *testing.T) {
 		t.Error("a harness without a prompt cache (ttl 0) must never show the chip")
 	}
 }
+
+func TestPreviewSelectionWideChars(t *testing.T) {
+	m := NewPreview(40, 10)
+	m.SetSize(40, 10)
+	m.SetContent("\x1b[32m日本語\x1b[0m text")
+	// Columns 2-5 cover the second and third double-width characters.
+	m.StartSelection(1+2, 2)
+	m.ExtendSelection(1+5, 2)
+	if text, dragged := m.EndSelection(); !dragged || text != "本語" {
+		t.Errorf("EndSelection() = %q, %v; want %q, true", text, dragged, "本語")
+	}
+}

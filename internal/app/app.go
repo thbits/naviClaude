@@ -212,10 +212,11 @@ type Model struct {
 	restoredLastSession bool                    // one-shot guard: restore the focused session only once at startup
 
 	// Mouse click tracking (see mouse.go).
-	lastClickID  string           // session row hit by the previous left press, for double-click
-	lastClickAt  time.Time        // when that press happened
-	pendingPress *mousePress      // left press on a session row awaiting release, for long-press
-	now          func() time.Time // clock override for tests; nil means time.Now
+	lastClickID  string             // session row hit by the previous left press, for double-click
+	lastClickAt  time.Time          // when that press happened
+	pendingPress *mousePress        // left press on a session row awaiting release, for long-press
+	copyText     func(string) error // clipboard writer; nil uses copyToClipboard
+	now          func() time.Time   // clock override for tests; nil means time.Now
 
 	// Preview scroll forwarding (see forwardWheel).
 	wheelTarget           string       // pane the last capture found taking wheel events; "" scrolls locally
@@ -745,6 +746,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// -- Mouse input ---------------------------------------------------------
 	case tea.MouseMsg:
 		return m.handleMouse(msg)
+
+	case clipboardCopiedMsg:
+		if msg.err != nil {
+			m.statusbar.SetError("copy failed: " + msg.err.Error())
+		} else if msg.lines == 1 {
+			m.statusbar.SetNotice("copied 1 line")
+		} else {
+			m.statusbar.SetNotice(fmt.Sprintf("copied %d lines", msg.lines))
+		}
+		return m, nil
 	}
 
 	// Route unmatched messages to the open picker: its candidate-load result is
@@ -909,6 +920,8 @@ func (m Model) View() string {
 
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.statusbar.ClearError()
+	// A key ends a drag whose release never arrived, unfreezing the preview.
+	m.preview.ClearSelection()
 	// Any keystroke puts the user in control, so cancel a pending history-driven
 	// restore that would otherwise steal focus.
 	m.restoredLastSession = true
@@ -2102,6 +2115,7 @@ func (m *Model) selectPreviewSession(s *session.Session) {
 		m.restorePreviewedPane()
 
 		m.previewTarget = target
+		m.preview.ClearSelection()
 		m.preview.SetContent("")
 		m.preview.ResetScroll()
 
@@ -2632,22 +2646,22 @@ func detectCurrentTmuxSession() string {
 	return strings.TrimSpace(string(out))
 }
 
-// copyToClipboard attempts to copy text to the system clipboard.
-// It tries pbcopy (macOS), then xclip, then xsel. Errors are silently ignored.
-func copyToClipboard(text string) {
+// copyToClipboard copies text to the system clipboard via pbcopy, xclip, then
+// xsel, returning the last tool's error if none works.
+func copyToClipboard(text string) error {
 	cmd := exec.Command("pbcopy")
 	cmd.Stdin = strings.NewReader(text)
 	if cmd.Run() == nil {
-		return
+		return nil
 	}
 	cmd = exec.Command("xclip", "-selection", "clipboard")
 	cmd.Stdin = strings.NewReader(text)
 	if cmd.Run() == nil {
-		return
+		return nil
 	}
 	cmd = exec.Command("xsel", "--clipboard", "--input")
 	cmd.Stdin = strings.NewReader(text)
-	_ = cmd.Run()
+	return cmd.Run()
 }
 
 // maybeRestoreLastSession re-selects the session focused at last quit, once, if

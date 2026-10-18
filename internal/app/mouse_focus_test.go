@@ -9,6 +9,13 @@ import (
 	"github.com/thbits/naviClaude/internal/ui"
 )
 
+// clickAt sends a left press and release on the same cell.
+func clickAt(m Model, x, y int) Model {
+	next, _ := m.handleMouse(tea.MouseMsg{Button: tea.MouseButtonLeft, Action: tea.MouseActionPress, X: x, Y: y})
+	next, _ = next.(Model).handleMouse(tea.MouseMsg{Button: tea.MouseButtonLeft, Action: tea.MouseActionRelease, X: x, Y: y})
+	return next.(Model)
+}
+
 // mouseModel builds a Model wide enough to have distinct pane regions, with one
 // active session selected. width=100, sidebarWidthPct=0 -> sidebarWidth()=20
 // (min clamp); with the right panel open rightSidebarWidth()=24, so the preview
@@ -29,8 +36,7 @@ func mouseModel(rightOpen bool) Model {
 func TestMouseClickPreviewEntersPassthrough(t *testing.T) {
 	m := mouseModel(false)
 	m.mode = ModeList
-	updated, _ := m.handleMouse(tea.MouseMsg{Button: tea.MouseButtonLeft, Action: tea.MouseActionPress, X: 50, Y: 5})
-	got := updated.(Model)
+	got := clickAt(m, 50, 5)
 	if got.mode != ModePassthrough {
 		t.Errorf("mode = %v, want passthrough", got.mode)
 	}
@@ -72,8 +78,7 @@ func TestMouseClickRightPaneFocusesChangedFiles(t *testing.T) {
 func TestMouseClickRightEdgeWithPanelClosedIsPreview(t *testing.T) {
 	m := mouseModel(false)
 	m.mode = ModeList
-	updated, _ := m.handleMouse(tea.MouseMsg{Button: tea.MouseButtonLeft, Action: tea.MouseActionPress, X: 90, Y: 4})
-	got := updated.(Model)
+	got := clickAt(m, 90, 4)
 	if got.mode != ModePassthrough {
 		t.Errorf("mode = %v, want passthrough", got.mode)
 	}

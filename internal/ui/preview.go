@@ -30,6 +30,21 @@ type PreviewModel struct {
 	viewport     viewport.Model
 	width        int
 	height       int
+
+	sel textSelection
+	// Captures landing mid-drag wait here so the text doesn't slide under the cursor.
+	pending    string
+	hasPending bool
+}
+
+// textCell is a content line index and display column.
+type textCell struct{ line, col int }
+
+// textSelection is a mouse drag over the preview, from anchor to head inclusive.
+type textSelection struct {
+	active       bool
+	moved        bool
+	anchor, head textCell
 }
 
 // SetCacheTTLs sets each harness's prompt-cache lifetime (keyed by harness
@@ -53,6 +68,10 @@ func NewPreview(width, height int) PreviewModel {
 // SetContent updates the terminal capture shown in the viewport, following the
 // bottom unless the user has scrolled up.
 func (m *PreviewModel) SetContent(content string) {
+	if m.sel.active {
+		m.pending, m.hasPending = content, true
+		return
+	}
 	m.content = content
 	m.viewport.SetContent(m.truncateToWidth(content))
 	// Only auto-scroll to bottom if the user hasn't scrolled away.
@@ -155,6 +174,105 @@ func (m *PreviewModel) HalfViewHeight() int {
 	return h
 }
 
+// cellAt maps a point relative to the preview's top-left to a content cell,
+// clamped to the viewport so a drag past its edge selects up to that edge.
+func (m *PreviewModel) cellAt(x, y int) textCell {
+	// Content starts right of the 1-column padding, below the 2-row header.
+	col := min(max(x-1, 0), max(m.viewport.Width-1, 0))
+	row := min(max(y-2, 0), max(m.viewport.Height-1, 0))
+	return textCell{line: m.viewport.YOffset + row, col: col}
+}
+
+// StartSelection anchors a drag at (x, y), relative to the preview's top-left.
+func (m *PreviewModel) StartSelection(x, y int) {
+	c := m.cellAt(x, y)
+	m.sel = textSelection{active: true, anchor: c, head: c}
+}
+
+// ExtendSelection moves the drag's free end to (x, y).
+func (m *PreviewModel) ExtendSelection(x, y int) {
+	if !m.sel.active {
+		return
+	}
+	if c := m.cellAt(x, y); c != m.sel.head {
+		m.sel.head = c
+		m.sel.moved = true
+	}
+}
+
+// Selecting reports whether a drag is in progress.
+func (m *PreviewModel) Selecting() bool { return m.sel.active }
+
+// EndSelection finishes the drag and returns its plain text; dragged is false
+// for a press and release without motion, i.e. a click.
+func (m *PreviewModel) EndSelection() (text string, dragged bool) {
+	if !m.sel.active {
+		return "", false
+	}
+	sel := m.sel
+	if sel.moved {
+		text = m.selectedText()
+	}
+	m.ClearSelection()
+	return text, sel.moved
+}
+
+// ClearSelection drops any drag and applies a capture held back during it.
+func (m *PreviewModel) ClearSelection() {
+	m.sel = textSelection{}
+	if m.hasPending {
+		content := m.pending
+		m.pending, m.hasPending = "", false
+		m.SetContent(content)
+	}
+}
+
+// selectionRange returns the selection's start and end in reading order.
+func (m *PreviewModel) selectionRange() (textCell, textCell) {
+	a, b := m.sel.anchor, m.sel.head
+	if b.line < a.line || (b.line == a.line && b.col < a.col) {
+		a, b = b, a
+	}
+	return a, b
+}
+
+// lineSpan returns the [from, to) columns of line i covered by the selection.
+func (m *PreviewModel) lineSpan(i int, start, end textCell) (int, int) {
+	from, to := 0, m.viewport.Width
+	if i == start.line {
+		from = start.col
+	}
+	if i == end.line {
+		to = end.col + 1
+	}
+	return from, to
+}
+
+func (m *PreviewModel) selectedText() string {
+	lines := strings.Split(m.truncateToWidth(m.content), "\n")
+	start, end := m.selectionRange()
+	var out []string
+	for i := start.line; i <= end.line && i < len(lines); i++ {
+		from, to := m.lineSpan(i, start, end)
+		out = append(out, strings.TrimRight(ansi.Strip(ansi.Cut(lines[i], from, to)), " "))
+	}
+	return strings.Join(out, "\n")
+}
+
+// highlighted returns the viewport content with the selection in reverse video.
+func (m *PreviewModel) highlighted() string {
+	lines := strings.Split(m.truncateToWidth(m.content), "\n")
+	start, end := m.selectionRange()
+	hl := lipgloss.NewStyle().Reverse(true)
+	for i := start.line; i <= end.line && i < len(lines); i++ {
+		from, to := m.lineSpan(i, start, end)
+		line := lines[i]
+		mid := ansi.Strip(ansi.Cut(line, from, to))
+		lines[i] = ansi.Cut(line, 0, from) + "\x1b[0m" + hl.Render(mid) + ansi.Cut(line, to, ansi.StringWidth(line))
+	}
+	return strings.Join(lines, "\n")
+}
+
 // Init satisfies the tea.Model interface.
 func (m PreviewModel) Init() tea.Cmd {
 	return nil
@@ -178,6 +296,10 @@ func (m PreviewModel) Update(msg tea.Msg) (PreviewModel, tea.Cmd) {
 // here -- the sidebar's right border serves as the separator.
 func (m PreviewModel) View() string {
 	header := m.renderHeader()
+	if m.sel.active && m.sel.moved {
+		// Value receiver: this only touches the local viewport copy.
+		m.viewport.SetContent(m.highlighted())
+	}
 	body := m.viewport.View()
 
 	inner := lipgloss.JoinVertical(lipgloss.Left, header, body)

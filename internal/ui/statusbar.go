@@ -17,6 +17,7 @@ type StatusBarModel struct {
 	updateAvailable bool         // a newer release exists on GitHub
 	listHints       []statusHint // configurable list-mode hints
 	errText         string
+	notice          bool // errText is a success notice, not an error
 	confirmKill     bool // the kill prompt is up, whatever the mode
 }
 
@@ -87,7 +88,12 @@ func (m *StatusBarModel) SetSize(w int) {
 
 // SetError shows a transient error message in the status bar.
 func (m *StatusBarModel) SetError(msg string) {
-	m.errText = msg
+	m.errText, m.notice = msg, false
+}
+
+// SetNotice shows a transient success message in the slot SetError uses.
+func (m *StatusBarModel) SetNotice(msg string) {
+	m.errText, m.notice = msg, true
 }
 
 // ClearError removes the transient error message.
@@ -109,6 +115,9 @@ func (m StatusBarModel) Update(msg tea.Msg) (StatusBarModel, tea.Cmd) {
 func (m StatusBarModel) View() string {
 	if m.errText != "" {
 		errStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#f7768e")).Bold(true)
+		if m.notice {
+			errStyle = lipgloss.NewStyle().Foreground(styles.ColorGreen).Bold(true)
+		}
 		bar := errStyle.Render(" " + m.errText)
 		return m.renderBar(bar)
 	}

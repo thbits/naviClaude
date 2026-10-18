@@ -138,6 +138,7 @@ All key bindings except navigation and passthrough exit keys are configurable. A
 | Wheel over the session list | Move the selection up / down |
 | Wheel over the preview / changed files | Scroll them |
 | Click the preview / changed files | Focus that pane (the preview only for a live session) |
+| Drag over the preview | Select text and copy it to the clipboard on release, without focusing the pane |
 | Click a hint in the bottom bar | Run that key |
 | Click a menu item / picker row | Run it / select it (click the selected row again to confirm) |
 | Click a filter tab in the statistics popup | Switch to that filter |

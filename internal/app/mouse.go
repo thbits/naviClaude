@@ -45,14 +45,21 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	switch msg.Action {
 	case tea.MouseActionRelease:
 		return m.handleMouseRelease(msg)
+	case tea.MouseActionMotion:
+		// Cell-motion mode reports motion only while a button is held.
+		if msg.Button == tea.MouseButtonLeft && m.preview.Selecting() {
+			m.preview.ExtendSelection(m.previewPoint(msg.X, msg.Y))
+		}
+		return m, nil
 	case tea.MouseActionPress:
 	default:
-		return m, nil // drag motion
+		return m, nil
 	}
 
 	// Any other button event between a press and its release cancels a
-	// pending long press.
+	// pending long press or preview drag.
 	m.pendingPress = nil
+	m.preview.ClearSelection()
 
 	// Inline inputs and the kill prompt keep ignoring the mouse; a click must
 	// never act on what sits underneath them.
@@ -89,13 +96,8 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			cmd := m.setFocus(ModeChangedFiles)
 			return m, cmd
 		default:
-			// Preview band: focus passthrough only if the selection can receive
-			// forwarded keys (mirrors nextFocusMode's canPassthrough).
-			sel := m.sidebar.SelectedSession()
-			if sel != nil && sel.Status != session.StatusClosed && sel.TmuxTarget != "" {
-				cmd := m.setFocus(ModePassthrough)
-				return m, cmd
-			}
+			// Preview band: the release decides between a click and a drag.
+			m.preview.StartSelection(m.previewPoint(msg.X, msg.Y))
 			return m, nil
 		}
 
@@ -129,6 +131,9 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 // handleMouseRelease turns a left press held on the same session row for at
 // least longPressThreshold into the context menu, as right-click would.
 func (m Model) handleMouseRelease(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	if m.preview.Selecting() {
+		return m.finishPreviewSelection(msg)
+	}
 	p := m.pendingPress
 	m.pendingPress = nil
 	if p == nil || m.overlayOpen() || m.mode == ModeSearch ||
@@ -143,6 +148,42 @@ func (m Model) handleMouseRelease(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	return m.openContextMenu(hit, p.x, p.y)
+}
+
+// finishPreviewSelection copies a drag's text to the clipboard; a release where
+// the press landed is a click, which focuses the preview.
+func (m Model) finishPreviewSelection(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	m.preview.ExtendSelection(m.previewPoint(msg.X, msg.Y))
+	text, dragged := m.preview.EndSelection()
+	if !dragged {
+		// Focus passthrough only if the selection can receive forwarded keys
+		// (mirrors nextFocusMode's canPassthrough).
+		sel := m.sidebar.SelectedSession()
+		if sel != nil && sel.Status != session.StatusClosed && sel.TmuxTarget != "" {
+			return m, m.setFocus(ModePassthrough)
+		}
+		return m, nil
+	}
+	if strings.TrimSpace(text) == "" {
+		return m, nil
+	}
+	write := m.copyText
+	if write == nil {
+		write = copyToClipboard
+	}
+	lines := strings.Count(text, "\n") + 1
+	return m, func() tea.Msg { return clipboardCopiedMsg{lines: lines, err: write(text)} }
+}
+
+// clipboardCopiedMsg reports a preview selection copy.
+type clipboardCopiedMsg struct {
+	lines int
+	err   error
+}
+
+// previewPoint converts a terminal cell to coordinates relative to the preview.
+func (m Model) previewPoint(x, y int) (int, int) {
+	return x - m.sidebarWidth(), y - lipgloss.Height(m.renderTitleBar())
 }
 
 // statusBarTop is the first terminal row of the status bar.
