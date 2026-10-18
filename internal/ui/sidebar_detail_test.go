@@ -7,6 +7,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/thbits/naviClaude/internal/attention"
 	"github.com/thbits/naviClaude/internal/harness/claude"
 	"github.com/thbits/naviClaude/internal/session"
 	"github.com/thbits/naviClaude/internal/styles"
@@ -348,5 +349,24 @@ func TestBackgroundLineOnUnselectedRows(t *testing.T) {
 		if w := ansi.StringWidth(l); w > width {
 			t.Errorf("line %d is %d cells: %q", i, w, ansi.Strip(l))
 		}
+	}
+}
+
+func TestSessionIconIdleWithBackgroundBreathesAsActive(t *testing.T) {
+	idle := &session.Session{ID: "a", Status: session.StatusIdle, Attention: attention.Done}
+	for frame := 0; frame < 4; frame++ {
+		gotFg, gotCh := sessionIconProps(idle, session.Background{Shells: 1}, frame)
+		wantFg, wantCh := statusIconProps(session.StatusActive, frame)
+		if gotFg != wantFg || gotCh != wantCh {
+			t.Errorf("frame %d: idle with background work = (%v, %q), want active (%v, %q)", frame, gotFg, gotCh, wantFg, wantCh)
+		}
+	}
+	if fg, ch := sessionIconProps(idle, session.Background{}, 0); fg != styles.ColorBlue || ch != styles.IconDone {
+		t.Errorf("idle without background work = (%v, %q), want done icon", fg, ch)
+	}
+	waiting := &session.Session{ID: "b", Status: session.StatusWaiting}
+	gotFg, gotCh := sessionIconProps(waiting, session.Background{Agents: 1}, 0)
+	if wantFg, wantCh := statusIconProps(session.StatusWaiting, 0); gotFg != wantFg || gotCh != wantCh {
+		t.Errorf("waiting with background work should stay waiting, got (%v, %q)", gotFg, gotCh)
 	}
 }

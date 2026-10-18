@@ -975,7 +975,7 @@ func (m SidebarModel) renderSessionItem(s *session.Session, isCursor bool) []str
 		if isConfirmingKill {
 			selBg = styles.ColorBgHover
 		}
-		iconStyled := sessionIconWithBg(s, selBg, m.breathingFrame)
+		iconStyled := m.sessionIconWithBg(s, selBg)
 		nameStyled := lipgloss.NewStyle().Foreground(styles.ColorBlue).Background(selBg).Bold(true).Render(displayName)
 		timeStyled := lipgloss.NewStyle().Foreground(styles.ColorGray).Background(selBg).Render(relTime)
 
@@ -1052,7 +1052,7 @@ func (m SidebarModel) renderSessionItem(s *session.Session, isCursor bool) []str
 
 	// Normal item. The status icon keeps its semantic color even when dimmed so
 	// session status stays glanceable across panes; only the text dims.
-	icon := sessionIcon(s, m.breathingFrame)
+	icon := m.sessionIcon(s)
 	nameStyle := styles.SidebarProjectName
 	timeStyle := styles.SidebarTime
 	summaryStyle := styles.SidebarSummary
@@ -1110,22 +1110,23 @@ func statusIconProps(s session.SessionStatus, frame int) (lipgloss.Color, string
 	}
 }
 
-// sessionIconProps is statusIconProps plus the hook-raised "finished while you
-// were away" state, which only applies to an otherwise idle session.
-func sessionIconProps(s *session.Session, frame int) (lipgloss.Color, string) {
-	if s.Status == session.StatusIdle && s.Attention == attention.Done {
+// sessionIconProps is statusIconProps of the effective status plus the hook-raised
+// "finished while you were away" state, which only applies to an idle session.
+func sessionIconProps(s *session.Session, bg session.Background, frame int) (lipgloss.Color, string) {
+	status := session.EffectiveStatus(s, bg)
+	if status == session.StatusIdle && s.Attention == attention.Done {
 		return styles.ColorBlue, styles.IconDone
 	}
-	return statusIconProps(s.Status, frame)
+	return statusIconProps(status, frame)
 }
 
-func sessionIcon(s *session.Session, frame int) string {
-	fg, ch := sessionIconProps(s, frame)
+func (m *SidebarModel) sessionIcon(s *session.Session) string {
+	fg, ch := sessionIconProps(s, m.background[s.ID], m.breathingFrame)
 	return lipgloss.NewStyle().Foreground(fg).Render(ch)
 }
 
-func sessionIconWithBg(s *session.Session, bg lipgloss.Color, frame int) string {
-	fg, ch := sessionIconProps(s, frame)
+func (m *SidebarModel) sessionIconWithBg(s *session.Session, bg lipgloss.Color) string {
+	fg, ch := sessionIconProps(s, m.background[s.ID], m.breathingFrame)
 	return lipgloss.NewStyle().Foreground(fg).Background(bg).Render(ch)
 }
 

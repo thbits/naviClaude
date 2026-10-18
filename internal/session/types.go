@@ -56,6 +56,18 @@ type Background struct {
 	Shells int
 }
 
+// Busy reports whether any subagent or shell is still running.
+func (b Background) Busy() bool { return b.Agents > 0 || b.Shells > 0 }
+
+// EffectiveStatus is s.Status, except an idle session with background work still
+// running is active.
+func EffectiveStatus(s *Session, bg Background) SessionStatus {
+	if s.Status == StatusIdle && bg.Busy() {
+		return StatusActive
+	}
+	return s.Status
+}
+
 // ChangedFile is a file the session edited, with line counts estimated from the
 // transcript unless replaced by a live git diff (see GitDiffStats).
 type ChangedFile struct {

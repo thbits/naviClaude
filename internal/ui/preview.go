@@ -19,7 +19,8 @@ import (
 // PreviewModel is the right panel that shows captured terminal content for the
 // selected session.
 type PreviewModel struct {
-	cacheTTLs    map[string]time.Duration // harness name -> prompt-cache TTL; "" = default harness
+	cacheTTLs    map[string]time.Duration      // harness name -> prompt-cache TTL; "" = default harness
+	background   map[string]session.Background // session ID -> running subagents and shells
 	content      string
 	session      *session.Session
 	metrics      *session.SessionMetrics
@@ -34,6 +35,10 @@ type PreviewModel struct {
 // SetCacheTTLs sets each harness's prompt-cache lifetime (keyed by harness
 // name, "" for unstamped sessions); harnesses without one show no expiry chip.
 func (m *PreviewModel) SetCacheTTLs(ttls map[string]time.Duration) { m.cacheTTLs = ttls }
+
+// SetBackground records every session's running subagents and shells, which keep
+// an idle session shown as active.
+func (m *PreviewModel) SetBackground(bg map[string]session.Background) { m.background = bg }
 
 // NewPreview creates a PreviewModel with the given dimensions.
 func NewPreview(width, height int) PreviewModel {
@@ -196,6 +201,7 @@ func (m PreviewModel) renderHeader() string {
 	}
 
 	s := m.session
+	status := session.EffectiveStatus(s, m.background[s.ID])
 
 	projectName := s.ProjectName
 	if projectName == "" {
@@ -204,7 +210,7 @@ func (m PreviewModel) renderHeader() string {
 
 	// Status label shared by both render paths.
 	statusLabel := "CLOSED"
-	switch s.Status {
+	switch status {
 	case session.StatusActive:
 		statusLabel = "ACTIVE"
 	case session.StatusWaiting:
@@ -278,7 +284,7 @@ func (m PreviewModel) renderHeader() string {
 
 		// Left of band: status (semantic color), cache warning, tmux target.
 		statusFg := styles.ColorGray
-		switch s.Status {
+		switch status {
 		case session.StatusActive:
 			statusFg = styles.ColorGreen
 		case session.StatusWaiting:
@@ -364,7 +370,7 @@ func (m *PreviewModel) SetGroupSummary(groupName string, sessions []*session.Ses
 	var newest time.Time
 
 	for _, s := range sessions {
-		switch s.Status {
+		switch session.EffectiveStatus(s, m.background[s.ID]) {
 		case session.StatusActive:
 			active++
 		case session.StatusWaiting:

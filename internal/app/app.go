@@ -189,6 +189,8 @@ type Model struct {
 	changedFilesSessionID string    // session ID the loaded changed files belong to
 	changedFilesMtime     time.Time // transcript mtime at last load, gates live refresh
 
+	background backgroundMsg // session ID -> running subagents and shells
+
 	// Session aliases (user-defined display names)
 	aliasStore *session.AliasStore
 
@@ -489,7 +491,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case backgroundMsg:
+		m.background = msg
 		m.sidebar.SetBackground(msg)
+		m.preview.SetBackground(msg)
 		return m, nil
 
 	case editorDoneMsg:
@@ -2339,7 +2343,7 @@ func (m Model) renderTitleBar() string {
 	const summaryGap = "  "
 	leftLine := name
 	budget := m.width - lipgloss.Width(name) - len(summaryGap) - lipgloss.Width(right) - 1
-	if summary := renderStatusSummary(countStatuses(m.sessions), budget); summary != "" {
+	if summary := renderStatusSummary(countStatuses(m.sessions, m.background), budget); summary != "" {
 		leftLine += summaryGap + summary
 	}
 

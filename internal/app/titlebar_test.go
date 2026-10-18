@@ -30,8 +30,22 @@ func summaryModel(width int) Model {
 }
 
 func TestCountStatuses(t *testing.T) {
-	got := countStatuses(summaryModel(200).sessions)
+	got := countStatuses(summaryModel(200).sessions, nil)
 	want := statusCounts{working: 2, waiting: 1, done: 1, idle: 3}
+	if got != want {
+		t.Errorf("countStatuses = %+v, want %+v", got, want)
+	}
+}
+
+func TestCountStatusesIdleWithBackgroundIsWorking(t *testing.T) {
+	bg := backgroundMsg{
+		"d1": {Shells: 1},
+		"i1": {Agents: 2},
+		"q1": {Shells: 1}, // waiting stays waiting
+		"c1": {Shells: 1}, // closed is never counted
+	}
+	got := countStatuses(summaryModel(200).sessions, bg)
+	want := statusCounts{working: 4, waiting: 1, done: 0, idle: 2}
 	if got != want {
 		t.Errorf("countStatuses = %+v, want %+v", got, want)
 	}

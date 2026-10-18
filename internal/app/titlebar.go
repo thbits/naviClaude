@@ -15,10 +15,11 @@ type statusCounts struct {
 	working, waiting, done, idle int
 }
 
-func countStatuses(sessions []*session.Session) statusCounts {
+// countStatuses tallies by effective status, so background work counts as working.
+func countStatuses(sessions []*session.Session, bg backgroundMsg) statusCounts {
 	var c statusCounts
 	for _, s := range sessions {
-		switch s.Status {
+		switch session.EffectiveStatus(s, bg[s.ID]) {
 		case session.StatusActive:
 			c.working++
 		case session.StatusWaiting:

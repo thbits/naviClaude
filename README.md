@@ -15,7 +15,7 @@ layers on top of your existing tmux setup instead of replacing it.
 - **Background work on every row** -- sessions you are not on show the same `󰚩 2 agents ·  1 shell` line under their summary while anything is still running
 - **Context usage bar** -- current token usage vs the context window (`ctx ━━━──── 62K/1M (6%)`), amber from 60% and red above 85%; the window size is inferred from the model id (1M for Claude 5 models, Fable, Opus and `[1m]` variants, 200K otherwise, bumped if usage already exceeds it)
 - **Repo, branch and changes line** -- the session's git repo, branch and its edited files at a glance (` naviClaude ⎇ main · 3 files +120/−8`); the repo name is dropped when the pane is too narrow for both
-- **Breathing status dots** -- active sessions pulse green, waiting sessions pulse amber, a blue `◉` marks a session that finished while you were away
+- **Breathing status dots** -- active sessions pulse green (including ones whose subagents or background shells are still running), waiting sessions pulse amber, a blue `◉` marks a session that finished while you were away
 - **Attention alerts** -- a sound and a colored bell / check after the tmux window name when Claude needs you or finishes, even while naviClaude is closed (see [Notifications](#notifications))
 - **Passthrough mode** -- type directly into a session without leaving the TUI
 - **Changed-files sidebar** -- a right-hand panel listing the files the selected session edited, with per-file `+/-` counts (live `git diff` while uncommitted, a persistent transcript estimate afterwards); open any file in your editor
