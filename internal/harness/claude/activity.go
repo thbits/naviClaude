@@ -32,13 +32,18 @@ func (h *Harness) LoadActivity(s *session.Session) (*session.SessionActivity, er
 	if path == "" {
 		return nil, nil
 	}
-	return LoadActivity(path)
+	var since time.Time
+	if s.PID > 0 {
+		since = lookupProc(s.PID).start
+	}
+	return loadActivity(path, since)
 }
 
 type activityCacheEntry struct {
-	size int64
-	mod  time.Time
-	act  session.SessionActivity
+	size  int64
+	mod   time.Time
+	since time.Time
+	act   session.SessionActivity
 }
 
 var (
@@ -49,6 +54,12 @@ var (
 // LoadActivity reports what the transcript at path is doing now from its tail,
 // cached by size and mtime so polling an unchanged file costs one stat.
 func LoadActivity(path string) (*session.SessionActivity, error) {
+	return loadActivity(path, time.Time{})
+}
+
+// loadActivity is LoadActivity for a process started at since (zero if unknown),
+// so background work from an earlier run of the session is not counted.
+func loadActivity(path string, since time.Time) (*session.SessionActivity, error) {
 	fi, err := os.Stat(path)
 	if err != nil {
 		return nil, err
@@ -56,7 +67,7 @@ func LoadActivity(path string) (*session.SessionActivity, error) {
 	activityMu.Lock()
 	prev, hit := activityCache[path]
 	activityMu.Unlock()
-	if hit && prev.size == fi.Size() && prev.mod.Equal(fi.ModTime()) {
+	if hit && prev.size == fi.Size() && prev.mod.Equal(fi.ModTime()) && prev.since.Equal(since) {
 		act := prev.act
 		return &act, nil
 	}
@@ -65,12 +76,12 @@ func LoadActivity(path string) (*session.SessionActivity, error) {
 	if err != nil {
 		return nil, err
 	}
-	act, sawTurn := parseActivity(data, truncated)
+	act, sawTurn := parseActivity(data, truncated, since)
 	if !sawTurn && truncated {
 		// Large attachment and request records can crowd a short turn out.
 		if more, trunc, err := readActivityTail(path, activityTailMaxBytes); err == nil {
 			data, truncated = more, trunc
-			act, sawTurn = parseActivity(data, truncated)
+			act, sawTurn = parseActivity(data, truncated, since)
 		}
 	}
 	// No turn start in the window means none happened since the last read, as
@@ -88,7 +99,7 @@ func LoadActivity(path string) (*session.SessionActivity, error) {
 	}
 
 	activityMu.Lock()
-	activityCache[path] = activityCacheEntry{size: fi.Size(), mod: fi.ModTime(), act: act}
+	activityCache[path] = activityCacheEntry{size: fi.Size(), mod: fi.ModTime(), since: since, act: act}
 	activityMu.Unlock()
 	return &act, nil
 }
@@ -166,9 +177,10 @@ type pendingTool struct {
 
 var notificationToolUseID = regexp.MustCompile(`<tool-use-id>([^<]+)</tool-use-id>`)
 
-// parseActivity derives the main thread's current activity from transcript
-// lines in file order. sawTurn reports whether a turn start was in the data.
-func parseActivity(data []byte, truncated bool) (act session.SessionActivity, sawTurn bool) {
+// parseActivity derives the main thread's current activity from transcript lines
+// in file order. Tools, agents and shells recorded before since are dropped.
+// sawTurn reports whether a turn start was in the data.
+func parseActivity(data []byte, truncated bool, since time.Time) (act session.SessionActivity, sawTurn bool) {
 	var (
 		pending   []pendingTool
 		async     = map[string]bool{}   // background agents awaiting a completion notification
@@ -178,9 +190,22 @@ func parseActivity(data []byte, truncated bool) (act session.SessionActivity, sa
 		earliest  time.Time
 		tokensAt  time.Time
 		modelAt   time.Time
-		bgFloor   int // pendingBackgroundAgentCount at the latest turn end
-		bgDoneAft int // completion notifications since that turn end
+		bgFloor   int  // pendingBackgroundAgentCount at the latest turn end
+		bgDoneAft int  // completion notifications since that turn end
+		priorRun  bool // records from before since are being tracked
 	)
+	// An earlier run's tools, agents and shells died with its process (e.g. a
+	// resumed session), so they are dropped once its records end.
+	dropPriorRun := func() {
+		if priorRun {
+			turnOpen = false
+			pending = nil
+			clear(async)
+			clear(shells)
+			bgFloor, bgDoneAft = 0, 0
+			priorRun = false
+		}
+	}
 	startTurn := func(ts time.Time) {
 		act.TurnStart = ts
 		turnOpen = true
@@ -218,6 +243,13 @@ func parseActivity(data []byte, truncated bool) (act session.SessionActivity, sa
 		ts := parseTimestamp(rec.Timestamp)
 		if !ts.IsZero() && (earliest.IsZero() || ts.Before(earliest)) {
 			earliest = ts
+		}
+		if !since.IsZero() && !ts.IsZero() {
+			if ts.Before(since) {
+				priorRun = true
+			} else {
+				dropPriorRun()
+			}
 		}
 
 		switch rec.Type {
@@ -323,6 +355,8 @@ func parseActivity(data []byte, truncated bool) (act session.SessionActivity, sa
 			}
 		}
 	}
+
+	dropPriorRun()
 
 	if !sawTurn {
 		act.TurnStart = earliest

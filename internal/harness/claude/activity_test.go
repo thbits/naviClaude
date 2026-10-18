@@ -109,6 +109,55 @@ func TestLoadActivityShells(t *testing.T) {
 	}
 }
 
+func TestLoadActivityDropsPriorRun(t *testing.T) {
+	bash := func(sec int, id string) string {
+		return toolUse(sec, id, "Bash", map[string]any{"command": "make watch", "run_in_background": true})
+	}
+	agent := func(sec int, id string) string {
+		return toolUse(sec, id, "Agent", map[string]any{"description": "dig", "run_in_background": true})
+	}
+	prior := []string{prompt(0, "go"), bash(1, "s1"), bgShellResult(1, "s1", "b1"),
+		agent(2, "a1"), toolResult(2, "a1", true), assistantText(3, "ok"), turnEnd(4, 1)}
+	tests := []struct {
+		name           string
+		lines          []string
+		since          int // seconds after actBase the process started; -1 = unknown
+		shells, agents int
+	}{
+		{"unknown start keeps everything", prior, -1, 1, 1},
+		{"run still live keeps everything", prior, 0, 1, 1},
+		{"resumed with no new records", prior, 60, 0, 0},
+		{"resumed run counts only its own shells", append(append([]string{}, prior...),
+			prompt(61, "again"), bash(62, "s2"), bgShellResult(62, "s2", "b2")), 60, 1, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var since time.Time
+			if tt.since >= 0 {
+				since = actBase.Add(time.Duration(tt.since) * time.Second)
+			}
+			got, err := loadActivity(writeTranscript(t, tt.lines...), since)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Shells != tt.shells || got.Agents != tt.agents {
+				t.Errorf("shells/agents = %d/%d, want %d/%d", got.Shells, got.Agents, tt.shells, tt.agents)
+			}
+		})
+	}
+}
+
+func TestLoadActivityCacheKeysOnStart(t *testing.T) {
+	path := writeTranscript(t, prompt(0, "go"), toolUse(1, "s1", "Bash", map[string]any{"command": "make watch", "run_in_background": true}),
+		bgShellResult(1, "s1", "b1"))
+	if got, _ := loadActivity(path, actBase); got.Shells != 1 {
+		t.Fatalf("live run: shells = %d, want 1", got.Shells)
+	}
+	if got, _ := loadActivity(path, actBase.Add(time.Minute)); got.Shells != 0 {
+		t.Errorf("after restart the cached count leaked: shells = %d, want 0", got.Shells)
+	}
+}
+
 func sidechain(sec int, id, name string) string {
 	return jl(map[string]any{"type": "assistant", "isSidechain": true, "timestamp": ats(sec), "message": map[string]any{
 		"content": []any{map[string]any{"type": "tool_use", "id": id, "name": name, "input": map[string]any{"command": "ls"}}},
