@@ -513,3 +513,22 @@ func TestBusyMarkerNone(t *testing.T) {
 		t.Errorf("window = %q, want no marker", got)
 	}
 }
+
+func TestMarkDoneMarksWindowAndDropsToken(t *testing.T) {
+	te := newTestEngine(nil)
+	te.fake.panes["%1"].opts[optToken] = "old"
+	te.MarkDone("%1")
+	if got := te.fake.panes["%1"].opts[optAttn]; got != Done {
+		t.Errorf("attn = %q, want %q", got, Done)
+	}
+	if got := te.fake.panes["%1"].opts[optToken]; got != "" {
+		t.Errorf("token = %q, want cleared so the old watcher stands down", got)
+	}
+	if got := te.fake.windowName(); got != markedName("cc", config.DefaultConfig().Notifications.DoneMarker) {
+		t.Errorf("window = %q", got)
+	}
+	te.Clear("%1")
+	if got := te.fake.windowName(); got != "cc" {
+		t.Errorf("window after clear = %q, want %q", got, "cc")
+	}
+}

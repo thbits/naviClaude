@@ -36,12 +36,21 @@ type flatItem struct {
 	groupCount int
 }
 
+// itemKey identifies a row across rebuilds of flatItems.
+func (it flatItem) key() string {
+	if it.isGroup {
+		return "group\x00" + it.groupName
+	}
+	return it.session.Key() + "|" + it.session.TmuxTarget
+}
+
 // SidebarModel is the left panel showing sessions grouped by tmux session name.
 type SidebarModel struct {
 	Sessions          []*session.Session
 	groups            []sessionGroup
 	flatItems         []flatItem
 	cursor            int
+	hoverKey          string // itemKey of the row under the mouse; survives refreshes
 	width             int
 	height            int
 	collapsed         map[string]bool
@@ -183,6 +192,12 @@ func (m *SidebarModel) SetBranch(cwd string, ref session.GitRef, inRepo bool) {
 		delete(m.branches, cwd)
 	}
 	m.syncViewport()
+}
+
+// Branch returns the repo and branch last recorded for cwd.
+func (m *SidebarModel) Branch(cwd string) (session.GitRef, bool) {
+	ref, ok := m.branches[cwd]
+	return ref, ok && cwd != ""
 }
 
 // SetBackground records the running subagents and shells of every session, so
@@ -510,11 +525,12 @@ func (m *SidebarModel) syncViewport() {
 	m.lineItems = make([]int, 0, len(m.lineItems))
 	for i, item := range m.flatItems {
 		isCursor := i == m.cursor
+		hovered := !isCursor && m.hoverKey != "" && item.key() == m.hoverKey
 		if isCursor {
 			m.cursorLineStart = len(lines)
 		}
 		if item.isGroup {
-			rendered := m.renderGroupHeader(item.groupName, item.groupCount, item.groupIdx, isCursor)
+			rendered := m.renderGroupHeader(item.groupName, item.groupCount, item.groupIdx, isCursor, hovered)
 			// Split on embedded newlines -- Width().Render() may wrap text.
 			for j, l := range strings.Split(rendered, "\n") {
 				owner := i
@@ -525,7 +541,7 @@ func (m *SidebarModel) syncViewport() {
 				m.lineItems = append(m.lineItems, owner)
 			}
 		} else {
-			for _, rl := range m.renderSessionItem(item.session, isCursor) {
+			for _, rl := range m.renderSessionItem(item.session, isCursor, hovered) {
 				// Each rendered line may itself contain embedded newlines
 				// from Width().Render() wrapping.
 				for _, l := range strings.Split(rl, "\n") {
@@ -540,6 +556,20 @@ func (m *SidebarModel) syncViewport() {
 	}
 	m.vp.SetContent(strings.Join(lines, "\n"))
 	m.scrollToCursor()
+}
+
+// SetHover marks flat item idx as under the mouse; -1 clears it. It re-renders
+// only when the hovered row changes.
+func (m *SidebarModel) SetHover(idx int) {
+	key := ""
+	if idx >= 0 && idx < len(m.flatItems) {
+		key = m.flatItems[idx].key()
+	}
+	if key == m.hoverKey {
+		return
+	}
+	m.hoverKey = key
+	m.syncViewport()
 }
 
 // SidebarHitKind classifies what lies under a sidebar coordinate.
@@ -889,7 +919,7 @@ func groupRecentActivity(sessions []*session.Session) time.Time {
 
 // renderGroupHeader renders a group header row; count and idx come from the
 // flatItems walk to avoid rescanning m.groups every frame.
-func (m SidebarModel) renderGroupHeader(name string, count, idx int, isCursor bool) string {
+func (m SidebarModel) renderGroupHeader(name string, count, idx int, isCursor, hovered bool) string {
 	arrow := "\u25bc" // down-pointing triangle (expanded)
 	if m.collapsed[name] {
 		arrow = "\u25b6" // right-pointing triangle (collapsed)
@@ -922,20 +952,27 @@ func (m SidebarModel) renderGroupHeader(name string, count, idx int, isCursor bo
 		ghStyle = lipgloss.NewStyle().Foreground(styles.ColorDimText).PaddingLeft(1)
 		gcStyle = lipgloss.NewStyle().Foreground(styles.ColorDimText)
 	}
+	fill := lipgloss.NewStyle()
+	if hovered {
+		ghStyle, gcStyle, fill = ghStyle.Background(styles.ColorBgHover), gcStyle.Background(styles.ColorBgHover), fill.Background(styles.ColorBgHover)
+	}
 	left := ghStyle.Render(fmt.Sprintf("%s %s", arrow, name))
 	right := gcStyle.Render(fmt.Sprintf("%d", count))
 	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right) - 1
 	if gap < 1 {
 		gap = 1
 	}
-	line := left + strings.Repeat(" ", gap) + right
+	line := left + fill.Render(strings.Repeat(" ", gap)) + right
+	if hovered {
+		line += fill.Render(" ")
+	}
 	if idx > 0 {
 		return "\n" + line
 	}
 	return line
 }
 
-func (m SidebarModel) renderSessionItem(s *session.Session, isCursor bool) []string {
+func (m SidebarModel) renderSessionItem(s *session.Session, isCursor, hovered bool) []string {
 	relTime := relativeTime(time.Since(s.LastActivity))
 
 	displayName := sessionTitle(s)
@@ -1061,6 +1098,16 @@ func (m SidebarModel) renderSessionItem(s *session.Session, isCursor bool) []str
 		timeStyle = lipgloss.NewStyle().Foreground(styles.ColorDimText)
 		summaryStyle = lipgloss.NewStyle().Foreground(styles.ColorDimText).PaddingLeft(4)
 	}
+	// Hover paints every segment, since an inner ANSI reset drops a parent background.
+	var hoverBg lipgloss.Color
+	fill := lipgloss.NewStyle()
+	if hovered {
+		hoverBg = styles.ColorBgHover
+		icon = m.sessionIconWithBg(s, hoverBg)
+		nameStyle, timeStyle, fill = nameStyle.Background(hoverBg), timeStyle.Background(hoverBg), fill.Background(hoverBg)
+		summaryStyle = summaryStyle.Background(hoverBg).Width(m.width)
+	}
+	pad := func(n int) string { return fill.Render(strings.Repeat(" ", n)) }
 	nameStyled := nameStyle.Render(displayName)
 	timeStyled := timeStyle.Render(relTime)
 
@@ -1072,7 +1119,7 @@ func (m SidebarModel) renderSessionItem(s *session.Session, isCursor bool) []str
 	if gap < 1 {
 		gap = 1
 	}
-	line1 := "  " + icon + " " + nameStyled + strings.Repeat(" ", gap) + timeStyled + " "
+	line1 := pad(2) + icon + pad(1) + nameStyled + pad(gap) + timeStyled + pad(1)
 	if noPrompt {
 		summaryStyle = summaryStyle.Foreground(styles.ColorDimText).Italic(true)
 	}
@@ -1080,7 +1127,11 @@ func (m SidebarModel) renderSessionItem(s *session.Session, isCursor bool) []str
 
 	if bg := m.background[s.ID]; s.ID != "" && s.Status != session.StatusClosed && bg != (session.Background{}) {
 		// Same indent as the summary; the selected row shows this in its activity line.
-		return []string{line1, line2, "    " + renderSegments(backgroundSegments(bg), "", m.width-5)}
+		line3 := pad(4) + renderSegments(backgroundSegments(bg), hoverBg, m.width-5)
+		if w := lipgloss.Width(line3); hovered && w < m.width {
+			line3 += pad(m.width - w)
+		}
+		return []string{line1, line2, line3}
 	}
 	return []string{line1, line2}
 }

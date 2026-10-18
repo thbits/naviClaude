@@ -32,11 +32,24 @@ func (m Model) defaultInfo() harness.Info {
 func (m Model) menuCaps(s *session.Session) ui.MenuCaps {
 	h := m.harnessFor(s)
 	if h == nil {
-		return ui.MenuCaps{}
+		return ui.MenuCaps{Branch: m.branchFor(s)}
 	}
 	_, canResume := harness.AsResumer(h)
 	_, canFork := harness.AsForker(h)
-	return ui.MenuCaps{CanResume: canResume, CanFork: canFork}
+	return ui.MenuCaps{CanResume: canResume, CanFork: canFork, Branch: m.branchFor(s)}
+}
+
+// branchFor is the branch a live session is on now, or the one a closed session
+// worked on; "" when unknown or detached.
+func (m Model) branchFor(s *session.Session) string {
+	branch := s.GitBranch
+	if ref, ok := m.sidebar.Branch(s.CWD); ok && (s.Status != session.StatusClosed || branch == "") {
+		branch = ref.Branch
+	}
+	if branch == "detached" {
+		return ""
+	}
+	return branch
 }
 
 // resumeCommandFor returns the shell command that resumes s (forked when fork).

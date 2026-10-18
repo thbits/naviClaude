@@ -77,9 +77,9 @@ func main() {
 	})
 
 	m := app.New(version)
-	// Cell motion covers presses, drags and wheel without AllMotion's event flood,
-	// which also blocks terminal text selection.
-	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
+	// All motion adds buttonless moves for hover highlighting; hover ignores moves
+	// that stay on the same row, so the flood costs a View and no re-render.
+	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseAllMotion())
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)

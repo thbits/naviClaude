@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -210,6 +211,7 @@ type Model struct {
 
 	viewState           *session.ViewStateStore // persisted last-focused session + group state
 	restoredLastSession bool                    // one-shot guard: restore the focused session only once at startup
+	unreadHoldPane      string                  // pane set as unread while selected; kept from the seen-clear until the preview moves
 
 	// Mouse click tracking (see mouse.go).
 	lastClickID  string             // session row hit by the previous left press, for double-click
@@ -1269,6 +1271,7 @@ func (m Model) handleSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		// Select and enter passthrough for active sessions.
 		m.selectSessionInSidebar(sess)
+		m.unreadHoldPane = ""
 		m.mode = ModePassthrough
 		m.preview.SetPassthrough(true)
 		m.statusbar.SetMode(ModePassthrough.String())
@@ -1425,15 +1428,81 @@ func (m Model) jumpToPane() (tea.Model, tea.Cmd) {
 	if sess == nil || sess.TmuxTarget == "" {
 		return m, nil
 	}
-	m.persistViewState()
-	m.restorePreviewedPane()
 	if sess.Attention != "" {
 		attention.Clear(m.cfg.Notifications, sess.TmuxPaneID)
 	}
-	// Switch tmux client to the session's pane.
-	_ = m.tmuxClient.SwitchClient(sess.TmuxTarget)
-	_ = m.tmuxClient.SelectPane(sess.TmuxTarget)
+	return m.switchAway(sess.TmuxTarget)
+}
+
+// switchAway hands the tmux client to target and quits naviClaude.
+func (m Model) switchAway(target string) (tea.Model, tea.Cmd) {
+	m.persistViewState()
+	m.restorePreviewedPane()
+	_ = m.tmuxClient.SwitchClient(target)
+	_ = m.tmuxClient.SelectPane(target)
 	return m, tea.Quit
+}
+
+// openInEditor opens sess's folder in the editor. A GUI editor just launches; a
+// terminal one gets a new window in the session's tmux session (naviClaude's own
+// for a closed one), and the client switches there.
+func (m Model) openInEditor(sess *session.Session) (tea.Model, tea.Cmd) {
+	if err := checkDir(sess.CWD); err != nil {
+		m.statusbar.SetError(err.Error())
+		return m, nil
+	}
+	fields := resolveEditorFields(m.cfg.Editor)
+	if isGUIEditor(fields[0]) {
+		cmd := exec.Command(fields[0], append(fields[1:], sess.CWD)...)
+		cmd.Dir = sess.CWD
+		return m, func() tea.Msg { return editorDoneMsg{err: cmd.Run()} }
+	}
+	quoted := make([]string, 0, len(fields)+1)
+	for _, f := range append(fields, sess.CWD) {
+		quoted = append(quoted, tmux.ShellQuote(f))
+	}
+	tmuxSession := sess.TmuxSession
+	if sess.Status == session.StatusClosed || tmuxSession == "" {
+		tmuxSession = m.currentTmuxSession
+	}
+	if tmuxSession == "" {
+		m.statusbar.SetError("cannot determine the tmux session")
+		return m, nil
+	}
+	target, err := m.tmuxClient.NewWindowPrint(tmux.NewWindowOptions{
+		Target:  tmuxSession + ":",
+		Name:    sess.ProjectName,
+		Command: fmt.Sprintf("cd %s && %s", tmux.ShellQuote(sess.CWD), strings.Join(quoted, " ")),
+	})
+	if err != nil {
+		m.statusbar.SetError("open in editor: " + err.Error())
+		return m, nil
+	}
+	return m.switchAway(target)
+}
+
+// openFolder reveals dir in the desktop file manager.
+func openFolder(dir string) error {
+	if err := checkDir(dir); err != nil {
+		return err
+	}
+	opener := "xdg-open"
+	if runtime.GOOS == "darwin" {
+		opener = "open"
+	}
+	cmd := exec.Command(opener, dir)
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("%s: %w", opener, err)
+	}
+	go func() { _ = cmd.Wait() }()
+	return nil
+}
+
+func checkDir(dir string) error {
+	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
+		return fmt.Errorf("folder not found: %s", dir)
+	}
+	return nil
 }
 
 func (m Model) killSelected() (tea.Model, tea.Cmd) {
@@ -1826,10 +1895,25 @@ func (m Model) executeContextAction(action string, sess *session.Session) (tea.M
 		if sess.Status == session.StatusClosed {
 			return m.resumeSession(sess)
 		}
+		m.unreadHoldPane = ""
 		m.mode = ModePassthrough
 		m.preview.SetPassthrough(true)
 		m.statusbar.SetMode(ModePassthrough.String())
 		return m, nil
+
+	case "mark_unread":
+		m.mode = ModeList
+		m.statusbar.SetMode(ModeList.String())
+		if sess.TmuxPaneID == "" {
+			return m, nil
+		}
+		m.unreadHoldPane = sess.TmuxPaneID
+		sess.Attention = attention.Done // show it now; the next refresh reads it back from tmux
+		cfg, pane := m.cfg.Notifications, sess.TmuxPaneID
+		return m, func() tea.Msg {
+			attention.MarkDone(cfg, pane)
+			return nil
+		}
 
 	case "jump":
 		m.mode = ModeList
@@ -1879,6 +1963,41 @@ func (m Model) executeContextAction(action string, sess *session.Session) (tea.M
 		m.statusbar.SetMode(ModeList.String())
 		if sess.CWD != "" {
 			copyToClipboard(sess.CWD)
+		}
+		return m, nil
+
+	case "copy_branch":
+		m.mode = ModeList
+		m.statusbar.SetMode(ModeList.String())
+		if branch := m.branchFor(sess); branch != "" {
+			copyToClipboard(branch)
+		}
+		return m, nil
+
+	case "copy_resume":
+		m.mode = ModeList
+		m.statusbar.SetMode(ModeList.String())
+		cmd, err := resumeCommandFor(m.harnessFor(sess), sess, false)
+		if err != nil {
+			m.statusbar.SetError(err.Error())
+			return m, nil
+		}
+		if sess.CWD != "" {
+			cmd = fmt.Sprintf("cd %s && %s", tmux.ShellQuote(sess.CWD), cmd)
+		}
+		copyToClipboard(cmd)
+		return m, nil
+
+	case "open_editor":
+		m.mode = ModeList
+		m.statusbar.SetMode(ModeList.String())
+		return m.openInEditor(sess)
+
+	case "open_folder":
+		m.mode = ModeList
+		m.statusbar.SetMode(ModeList.String())
+		if err := openFolder(sess.CWD); err != nil {
+			m.statusbar.SetError(err.Error())
 		}
 		return m, nil
 	}
@@ -2085,7 +2204,7 @@ func (m *Model) clearSeenAttentionCmd() tea.Cmd {
 		if s.Attention == "" || s.TmuxPaneID == "" {
 			continue
 		}
-		seen := sel != nil && sel.TmuxPaneID == s.TmuxPaneID
+		seen := sel != nil && sel.TmuxPaneID == s.TmuxPaneID && s.TmuxPaneID != m.unreadHoldPane
 		stale := s.Attention == attention.Waiting && s.NativeStatus && s.Status != session.StatusWaiting
 		if seen || stale {
 			panes = append(panes, s.TmuxPaneID)
@@ -2112,6 +2231,7 @@ func (m *Model) selectPreviewSession(s *session.Session) {
 	}
 
 	if target != m.previewTarget {
+		m.unreadHoldPane = ""
 		m.restorePreviewedPane()
 
 		m.previewTarget = target
@@ -2471,6 +2591,7 @@ func (m *Model) setFocus(target Mode) tea.Cmd {
 		m.pendingNewTarget = ""
 	}
 	if target == ModePassthrough && m.mode != ModePassthrough {
+		m.unreadHoldPane = "" // typing into the pane counts as reading it
 		m.preview.SetPassthrough(true)
 	}
 	m.mode = target

@@ -46,9 +46,12 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	case tea.MouseActionRelease:
 		return m.handleMouseRelease(msg)
 	case tea.MouseActionMotion:
-		// Cell-motion mode reports motion only while a button is held.
 		if msg.Button == tea.MouseButtonLeft && m.preview.Selecting() {
 			m.preview.ExtendSelection(m.previewPoint(msg.X, msg.Y))
+			return m, nil
+		}
+		if msg.Button == tea.MouseButtonNone {
+			return m.hover(msg)
 		}
 		return m, nil
 	case tea.MouseActionPress:
@@ -125,6 +128,25 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	return m, nil
+}
+
+// hover highlights the sidebar row under the pointer, or moves an open context
+// menu's cursor to the item under it, as a desktop menu does.
+func (m Model) hover(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	if m.contextMenu.IsVisible() {
+		if i, ok := m.contextMenu.ItemAt(msg.X, msg.Y); ok {
+			m.contextMenu.SetCursor(i)
+		}
+		return m, nil
+	}
+	idx := -1
+	if !m.overlayOpen() && msg.X < m.sidebarWidth() && msg.Y < m.statusBarTop() {
+		if hit := m.sidebarHit(msg.X, msg.Y); hit.Kind != ui.HitNone {
+			idx = hit.Index
+		}
+	}
+	m.sidebar.SetHover(idx)
 	return m, nil
 }
 

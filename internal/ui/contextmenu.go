@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"runtime"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -139,10 +140,11 @@ func (m *ContextMenuModel) skipSeparators(dir int) {
 	}
 }
 
-// MenuCaps is what the session's harness supports.
+// MenuCaps is what the session's harness supports, plus facts the menu can't look up itself.
 type MenuCaps struct {
 	CanResume bool
 	CanFork   bool
+	Branch    string // git branch to offer for copying; "" hides the item
 }
 
 func (m *ContextMenuModel) buildItems(s *session.Session, caps MenuCaps) []MenuItem {
@@ -150,8 +152,8 @@ func (m *ContextMenuModel) buildItems(s *session.Session, caps MenuCaps) []MenuI
 		return nil
 	}
 
+	var items []MenuItem
 	if s.Status == session.StatusClosed {
-		var items []MenuItem
 		if caps.CanResume {
 			items = append(items, MenuItem{Label: "Resume", Shortcut: "Enter", Action: "resume"})
 		}
@@ -161,25 +163,53 @@ func (m *ContextMenuModel) buildItems(s *session.Session, caps MenuCaps) []MenuI
 		if len(items) > 0 {
 			items = append(items, MenuItem{IsSep: true})
 		}
-		return append(items,
-			MenuItem{Label: "Detail", Shortcut: "d", Action: "detail"},
+		items = append(items, MenuItem{Label: "Detail", Shortcut: "d", Action: "detail"})
+	} else {
+		items = append(items,
+			MenuItem{Label: "Focus", Shortcut: "Enter", Action: "focus"},
+			MenuItem{Label: "Jump to pane", Shortcut: "f", Action: "jump"},
 			MenuItem{IsSep: true},
-			MenuItem{Label: "Copy session ID", Action: "copy_id"},
-			MenuItem{Label: "Copy project path", Action: "copy_path"},
+			MenuItem{Label: "Detail", Shortcut: "d", Action: "detail"},
+		)
+		// Only an idle session can show the done mark, so only it can be re-marked.
+		if s.Status == session.StatusIdle && s.Attention == "" && s.TmuxPaneID != "" {
+			items = append(items, MenuItem{Label: "Set as unread", Action: "mark_unread"})
+		}
+	}
+
+	if s.CWD != "" {
+		items = append(items,
+			MenuItem{IsSep: true},
+			MenuItem{Label: "Open in editor", Action: "open_editor"},
+			MenuItem{Label: fileManagerLabel(), Action: "open_folder"},
 		)
 	}
 
-	return []MenuItem{
-		{Label: "Focus", Shortcut: "Enter", Action: "focus"},
-		{Label: "Jump to pane", Shortcut: "f", Action: "jump"},
-		{IsSep: true},
-		{Label: "Detail", Shortcut: "d", Action: "detail"},
-		{IsSep: true},
-		{Label: "Copy session ID", Action: "copy_id"},
-		{Label: "Copy project path", Action: "copy_path"},
-		{IsSep: true},
-		{Label: "Kill session", Shortcut: "K", Action: "kill", Danger: true},
+	items = append(items,
+		MenuItem{IsSep: true},
+		MenuItem{Label: "Copy session ID", Action: "copy_id"},
+		MenuItem{Label: "Copy project path", Action: "copy_path"},
+	)
+	if caps.Branch != "" {
+		items = append(items, MenuItem{Label: "Copy branch name", Action: "copy_branch"})
 	}
+	if s.Status == session.StatusClosed {
+		if caps.CanResume {
+			items = append(items, MenuItem{Label: "Copy resume command", Action: "copy_resume"})
+		}
+		return items
+	}
+	return append(items,
+		MenuItem{IsSep: true},
+		MenuItem{Label: "Kill session", Shortcut: "K", Action: "kill", Danger: true},
+	)
+}
+
+func fileManagerLabel() string {
+	if runtime.GOOS == "darwin" {
+		return "Open in Finder"
+	}
+	return "Open in file manager"
 }
 
 // renderBox renders the bordered menu without positioning margins.

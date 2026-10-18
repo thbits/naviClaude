@@ -213,6 +213,18 @@ func (e *engine) clearIfOwned(pane, token string) {
 // Clear drops any attention on pane and re-derives its window marker.
 func (e *engine) Clear(pane string) { e.clearIfOwned(pane, "") }
 
+// MarkDone marks pane done and drops the token, so any older watcher stands down.
+func (e *engine) MarkDone(pane string) {
+	unlock := e.lock()
+	defer unlock()
+	ps, err := e.tmux.Pane(pane)
+	if err != nil {
+		return
+	}
+	_ = e.tmux.SetPaneOptions(pane, map[string]string{optAttn: Done, optToken: ""})
+	e.syncWindow(ps.Window)
+}
+
 // End drops everything tracked on pane once its session exits.
 func (e *engine) End(pane string) {
 	unlock := e.lock()
@@ -333,6 +345,15 @@ func Clear(cfg config.Notifications, pane string) {
 		return
 	}
 	newEngine(cfg).Clear(pane)
+}
+
+// MarkDone sets the done marker on pane as if its turn had just finished while
+// the user was away. No watcher owns it; the next hook event or a view clears it.
+func MarkDone(cfg config.Notifications, pane string) {
+	if pane == "" {
+		return
+	}
+	newEngine(cfg).MarkDone(pane)
 }
 
 func newToken() string {
