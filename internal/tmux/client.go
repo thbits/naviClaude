@@ -56,12 +56,12 @@ func (c *Client) CheckVersion(major, minor int) error {
 
 // ListPanes returns all panes across all sessions.
 func (c *Client) ListPanes() ([]PaneInfo, error) {
-	// paneFieldSep keeps spaces in names and paths intact; keep in sync with parsePaneLine.
-	format := "#{session_name}:#{window_index}.#{pane_index}" + paneFieldSep +
-		"#{pane_current_command}" + paneFieldSep +
-		"#{pane_pid}" + paneFieldSep +
-		"#{pane_id}" + paneFieldSep +
-		"#{@naviclaude_attn}" + paneFieldSep +
+	// FieldSep keeps spaces in names and paths intact; keep in sync with parsePaneLine.
+	format := "#{session_name}:#{window_index}.#{pane_index}" + FieldSep +
+		"#{pane_current_command}" + FieldSep +
+		"#{pane_pid}" + FieldSep +
+		"#{pane_id}" + FieldSep +
+		"#{@naviclaude_attn}" + FieldSep +
 		"#{pane_current_path}"
 	out, err := exec.Command("tmux", "list-panes", "-a", "-F", format).Output()
 	if err != nil {
@@ -220,12 +220,12 @@ func (c *Client) NewSessionPrint(opts NewSessionOptions) (string, error) {
 }
 
 // printFormat makes new-session/new-window print the window id and pane target.
-const printFormat = "#{window_id}\t#{session_name}:#{window_index}.#{pane_index}"
+const printFormat = "#{window_id}" + FieldSep + "#{session_name}:#{window_index}.#{pane_index}"
 
 // createdTarget parses printFormat output into the pane target. A named window gets
 // allow-rename off (and its name re-applied) so shell title escapes can't retitle it.
 func createdTarget(out []byte, name string) string {
-	id, target, _ := strings.Cut(strings.TrimSpace(string(out)), "\t")
+	id, target, _ := strings.Cut(strings.TrimSpace(string(out)), FieldSep)
 	if name != "" && id != "" {
 		exec.Command("tmux", "set-option", "-w", "-t", id, "allow-rename", "off", ";",
 			"rename-window", "-t", id, name).Run()
@@ -235,7 +235,7 @@ func createdTarget(out []byte, name string) string {
 
 // ServerIdentity returns the running server's start time and socket path.
 func (c *Client) ServerIdentity() (ServerIdentity, error) {
-	out, err := exec.Command("tmux", "display-message", "-p", "#{start_time}\t#{socket_path}").Output()
+	out, err := exec.Command("tmux", "display-message", "-p", "#{start_time}"+FieldSep+"#{socket_path}").Output()
 	if err != nil {
 		return ServerIdentity{}, fmt.Errorf("tmux display-message: %w", err)
 	}
@@ -364,7 +364,7 @@ func resizeArgs(target string, w, h int) []string {
 const optPreSize = "@naviclaude_presize"
 
 // readMarker separates the new window's options from the old one's in a read chain;
-// it is printable because tmux before 3.8 escapes control characters in its output.
+// it is printable for the same reason as FieldSep.
 const readMarker = "naviclaude-prev-window="
 
 // chain joins tmux commands with ";" so they run in one tmux process.

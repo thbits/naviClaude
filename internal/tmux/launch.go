@@ -29,7 +29,7 @@ type ServerInfo struct {
 // QueryServer asks the server (not the tmux binary on PATH) for its version
 // and the target window's geometry.
 func (c *Client) QueryServer(t LaunchTarget) (ServerInfo, error) {
-	format := strings.Join([]string{"#{version}", "#{window_width}", "#{window_height}", "#{window_modal_pane}"}, paneFieldSep)
+	format := strings.Join([]string{"#{version}", "#{window_width}", "#{window_height}", "#{window_modal_pane}"}, FieldSep)
 	args := append([]string{"display-message", "-p"}, t.args()...)
 	out, err := exec.Command("tmux", append(args, format)...).Output()
 	if err != nil {
@@ -39,7 +39,7 @@ func (c *Client) QueryServer(t LaunchTarget) (ServerInfo, error) {
 }
 
 func parseServerInfo(out string) (ServerInfo, error) {
-	f := strings.Split(strings.TrimRight(out, "\n"), paneFieldSep)
+	f := strings.Split(strings.TrimRight(out, "\n"), FieldSep)
 	if len(f) != 4 {
 		return ServerInfo{}, fmt.Errorf("unexpected tmux display-message output: %q", out)
 	}

@@ -5,6 +5,8 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+
+	"github.com/thbits/naviClaude/internal/tmux"
 )
 
 // tmux user options naviClaude keeps on panes, windows and the server.
@@ -17,7 +19,7 @@ const (
 	optOrigName  = "@naviclaude_orig_name" // window: name before marking
 	optOrigAuto  = "@naviclaude_orig_auto" // window: local automatic-rename before marking ("" = inherited)
 	optLastRing  = "@naviclaude_last_ring" // server: unix ms of the last sound, for the cooldown
-	fieldSep     = "\x1f"
+	fieldSep     = tmux.FieldSep
 	paneStateFmt = "#{window_id}" + fieldSep + "#{" + optAttn + "}" + fieldSep + "#{" + optAttnSU + "}" + fieldSep +
 		"#{" + optToken + "}" + fieldSep + "#{pane_active}" + fieldSep + "#{window_active}" + fieldSep +
 		"#{session_attached}" + fieldSep + "#{session_name}" + fieldSep + "#{" + optBusy + "}"

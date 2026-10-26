@@ -13,7 +13,7 @@ func TestParsePanes(t *testing.T) {
 	}{
 		{
 			name:      "single valid line",
-			raw:       "main:0.0\x1fzsh\x1f12345\x1f/home/user/project",
+			raw:       "main:0.0|~nc~|zsh|~nc~|12345|~nc~|/home/user/project",
 			wantCount: 1,
 			wantFirst: PaneInfo{
 				SessionName:    "main",
@@ -27,8 +27,8 @@ func TestParsePanes(t *testing.T) {
 		},
 		{
 			name: "multiple valid lines",
-			raw: "main:0.0\x1fzsh\x1f100\x1f/home/user\n" +
-				"dev:1.2\x1fvim\x1f200\x1f/tmp/work\n",
+			raw: "main:0.0|~nc~|zsh|~nc~|100|~nc~|/home/user\n" +
+				"dev:1.2|~nc~|vim|~nc~|200|~nc~|/tmp/work\n",
 			wantCount: 2,
 			wantFirst: PaneInfo{
 				SessionName:    "main",
@@ -52,7 +52,7 @@ func TestParsePanes(t *testing.T) {
 		},
 		{
 			name:      "malformed lines skipped silently",
-			raw:       "not-a-valid-line\nmain:0.0\x1fzsh\x1f100\x1f/home\nbadline",
+			raw:       "not-a-valid-line\nmain:0.0|~nc~|zsh|~nc~|100|~nc~|/home\nbadline",
 			wantCount: 1,
 			wantFirst: PaneInfo{
 				SessionName:    "main",
@@ -66,7 +66,7 @@ func TestParsePanes(t *testing.T) {
 		},
 		{
 			name:      "path with spaces preserved",
-			raw:       "work:3.1\x1fclaude\x1f999\x1f/Users/tom/my project/src dir",
+			raw:       "work:3.1|~nc~|claude|~nc~|999|~nc~|/Users/tom/my project/src dir",
 			wantCount: 1,
 			wantFirst: PaneInfo{
 				SessionName:    "work",
@@ -83,7 +83,7 @@ func TestParsePanes(t *testing.T) {
 			// space-delimited format dropped these entirely (the name's first
 			// space shifted every field, so the target failed to parse).
 			name:      "session name with spaces preserved",
-			raw:       "navi space test:1.1\x1fzsh\x1f86830\x1f/Users/tom/proj",
+			raw:       "navi space test:1.1|~nc~|zsh|~nc~|86830|~nc~|/Users/tom/proj",
 			wantCount: 1,
 			wantFirst: PaneInfo{
 				SessionName:    "navi space test",
@@ -98,7 +98,7 @@ func TestParsePanes(t *testing.T) {
 		{
 			// Both name and path containing spaces, simultaneously.
 			name:      "spaces in both session name and path",
-			raw:       "my cool session:2.3\x1fclaude\x1f4242\x1f/Users/tom/my project",
+			raw:       "my cool session:2.3|~nc~|claude|~nc~|4242|~nc~|/Users/tom/my project",
 			wantCount: 1,
 			wantFirst: PaneInfo{
 				SessionName:    "my cool session",
@@ -218,17 +218,17 @@ func TestParsePaneLine(t *testing.T) {
 	}{
 		{
 			name:      "too few fields",
-			line:      "main:0.0\x1fzsh\x1f100",
+			line:      "main:0.0|~nc~|zsh|~nc~|100",
 			wantError: true,
 		},
 		{
 			name:      "invalid pid",
-			line:      "main:0.0\x1fzsh\x1fnotapid\x1f/home",
+			line:      "main:0.0|~nc~|zsh|~nc~|notapid|~nc~|/home",
 			wantError: true,
 		},
 		{
 			name:      "invalid target format",
-			line:      "badtarget\x1fzsh\x1f100\x1f/home",
+			line:      "badtarget|~nc~|zsh|~nc~|100|~nc~|/home",
 			wantError: true,
 		},
 	}
@@ -295,21 +295,21 @@ func TestParseCursorInfo(t *testing.T) {
 }
 
 func TestParsePaneLineWithPaneIDAndAttention(t *testing.T) {
-	p, err := parsePaneLine("main:1.0\x1fclaude\x1f42\x1f%7\x1fwaiting\x1f/Users/tom/my proj")
+	p, err := parsePaneLine("main:1.0|~nc~|claude|~nc~|42|~nc~|%7|~nc~|waiting|~nc~|/Users/tom/my proj")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if p.PaneID != "%7" || p.Attention != "waiting" || p.CurrentPath != "/Users/tom/my proj" || p.PID != 42 {
 		t.Errorf("got %+v", p)
 	}
-	p, err = parsePaneLine("main:1.0\x1fclaude\x1f42\x1f%7\x1f\x1f/tmp")
+	p, err = parsePaneLine("main:1.0|~nc~|claude|~nc~|42|~nc~|%7|~nc~||~nc~|/tmp")
 	if err != nil || p.Attention != "" || p.CurrentPath != "/tmp" {
 		t.Errorf("empty attention: got %+v, %v", p, err)
 	}
 }
 
 func TestParseServerIdentity(t *testing.T) {
-	got, err := ParseServerIdentity("1792195359\t/private/tmp/tmux-501/default\n")
+	got, err := ParseServerIdentity("1792195359" + FieldSep + "/private/tmp/tmux-501/default\n")
 	if err != nil {
 		t.Fatalf("ParseServerIdentity: %v", err)
 	}
@@ -317,7 +317,7 @@ func TestParseServerIdentity(t *testing.T) {
 	if got != want {
 		t.Fatalf("ParseServerIdentity = %+v, want %+v", got, want)
 	}
-	for _, bad := range []string{"abc\t/x", "", "123"} {
+	for _, bad := range []string{"abc" + FieldSep + "/x", "", "123"} {
 		if _, err := ParseServerIdentity(bad); err == nil {
 			t.Errorf("ParseServerIdentity(%q): want error", bad)
 		}

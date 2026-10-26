@@ -50,7 +50,7 @@ func TestParseVersionStringNextAndRC(t *testing.T) {
 }
 
 func TestParseServerInfo(t *testing.T) {
-	got, err := parseServerInfo("3.8\x1f200\x1f49\x1f%7\n")
+	got, err := parseServerInfo("3.8|~nc~|200|~nc~|49|~nc~|%7\n")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,10 +59,10 @@ func TestParseServerInfo(t *testing.T) {
 		t.Errorf("got %+v, want %+v", got, want)
 	}
 	// 3.7c expands the unknown #{window_modal_pane} to "".
-	if got, err := parseServerInfo("3.7c\x1f80\x1f24\x1f\n"); err != nil || got.ModalPane != "" || got.WindowWidth != 80 {
+	if got, err := parseServerInfo("3.7c|~nc~|80|~nc~|24|~nc~|\n"); err != nil || got.ModalPane != "" || got.WindowWidth != 80 {
 		t.Errorf("3.7c output: got %+v, %v", got, err)
 	}
-	for _, bad := range []string{"", "3.8", "3.8\x1fx\x1f24\x1f"} {
+	for _, bad := range []string{"", "3.8", "3.8|~nc~|x|~nc~|24|~nc~|"} {
 		if _, err := parseServerInfo(bad); err == nil {
 			t.Errorf("parseServerInfo(%q): want error", bad)
 		}

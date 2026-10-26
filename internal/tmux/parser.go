@@ -6,9 +6,9 @@ import (
 	"strings"
 )
 
-// paneFieldSep is the ASCII Unit Separator, which unlike a space can't occur in
-// session names or paths; it must match the -F format in Client.ListPanes.
-const paneFieldSep = "\x1f"
+// FieldSep joins fields in tmux formats. It is printable because names and paths
+// hold spaces and tmux 3.4-3.7 print control characters as octal text (\037).
+const FieldSep = "|~nc~|"
 
 // PaneInfo holds the data parsed from a single tmux list-panes output line.
 type PaneInfo struct {
@@ -45,10 +45,10 @@ func ParsePanes(raw string) ([]PaneInfo, error) {
 }
 
 // parsePaneLine parses one list-panes line: target, command, pid, pane_id, attn and
-// path joined by paneFieldSep, or the legacy four fields without pane_id and attn.
+// path joined by FieldSep, or the legacy four fields without pane_id and attn.
 func parsePaneLine(line string) (PaneInfo, error) {
 	// Capping the split keeps a stray separator inside the path.
-	fields := strings.SplitN(line, paneFieldSep, 6)
+	fields := strings.SplitN(line, FieldSep, 6)
 	if len(fields) < 4 {
 		return PaneInfo{}, fmt.Errorf("too few fields: %q", line)
 	}
@@ -62,7 +62,7 @@ func parsePaneLine(line string) (PaneInfo, error) {
 	if len(fields) == 6 && strings.HasPrefix(fields[3], "%") {
 		paneID, attn, path = fields[3], fields[4], fields[5]
 	} else {
-		path = strings.Join(fields[3:], paneFieldSep)
+		path = strings.Join(fields[3:], FieldSep)
 	}
 
 	session, winIdx, paneIdx, err := parseTarget(targetStr)
@@ -159,9 +159,10 @@ type ServerIdentity struct {
 	SocketPath string // #{socket_path}
 }
 
-// ParseServerIdentity parses "start_time<TAB>socket_path" from Client.ServerIdentity.
+// ParseServerIdentity parses start_time and socket_path, joined by FieldSep,
+// from Client.ServerIdentity.
 func ParseServerIdentity(raw string) (ServerIdentity, error) {
-	start, socket, ok := strings.Cut(strings.TrimSpace(raw), "\t")
+	start, socket, ok := strings.Cut(strings.TrimSpace(raw), FieldSep)
 	if !ok || socket == "" {
 		return ServerIdentity{}, fmt.Errorf("tmux server info: unexpected output %q", raw)
 	}

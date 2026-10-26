@@ -1,11 +1,8 @@
 package tmux
 
 import (
-	"os"
-	"os/exec"
 	"reflect"
 	"slices"
-	"strings"
 	"testing"
 )
 
@@ -136,21 +133,7 @@ func TestParsePreviewRead(t *testing.T) {
 // TestFitPreviewWindowGroupedSession runs a private tmux server: grouped sessions
 // name one window twice, and moving between them must still restore it on leave.
 func TestFitPreviewWindowGroupedSession(t *testing.T) {
-	if _, err := exec.LookPath("tmux"); err != nil {
-		t.Skip("tmux not installed")
-	}
-	dir, err := os.MkdirTemp("/tmp", "nvg") // t.TempDir is too long for a socket path
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
-	t.Setenv("TMUX", "")
-	t.Setenv("TMUX_TMPDIR", dir)
-	tm := func(args ...string) string {
-		out, _ := exec.Command("tmux", args...).CombinedOutput()
-		return strings.TrimSpace(string(out))
-	}
-	t.Cleanup(func() { tm("kill-server") })
+	tm, _ := privateTmux(t)
 	tm("-f", "/dev/null", "new-session", "-d", "-s", "s", "-x", "80", "-y", "24")
 	tm("new-session", "-d", "-s", "g", "-t", "s")
 	state := func() string {
