@@ -1,7 +1,11 @@
 // Package styles defines naviClaude's Lipgloss styles, built from the active theme.
 package styles
 
-import "github.com/charmbracelet/lipgloss"
+import (
+	"sync/atomic"
+
+	"github.com/charmbracelet/lipgloss"
+)
 
 // ---------------------------------------------------------------------------
 // Color palette (set by buildStyles; defaults to tokyo-night via init)
@@ -554,4 +558,11 @@ func buildStyles(p Palette) {
 // ApplyTheme switches to palette p, rebuilding every color and style variable.
 func ApplyTheme(p Palette) {
 	buildStyles(p)
+	generation.Add(1)
 }
+
+// generation counts theme applications so render caches can drop stale colors.
+var generation atomic.Uint64
+
+// Generation identifies the current theme; it changes on every ApplyTheme.
+func Generation() uint64 { return generation.Load() }

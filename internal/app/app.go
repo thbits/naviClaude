@@ -129,9 +129,24 @@ func breathingTickCmd() tea.Cmd {
 	})
 }
 
+type paneKey struct {
+	view    string
+	w, h    int
+	focused bool
+}
+
+type screenKey struct{ title, side, preview, right, status string }
+
+// viewMemo skips the full-pane lipgloss passes when a frame's inputs are unchanged.
+type viewMemo struct {
+	side, preview, right ui.Memo[paneKey]
+	screen               ui.Memo[screenKey]
+}
+
 // Model is the top-level Bubble Tea model that composes all UI components
 // and backend services.
 type Model struct {
+	memo *viewMemo
 	// UI components
 	sidebar      ui.SidebarModel
 	rightSidebar ui.ChangedFilesModel
@@ -200,6 +215,7 @@ type Model struct {
 	// Animation
 	breathingFrame int
 	spinner        spinner.Model
+	loaded         bool // first history scan landed; the loading spinner stops
 
 	// Configuration
 	cfg                config.Config
@@ -252,6 +268,7 @@ func New(version string) Model {
 	}))
 
 	m := Model{
+		memo: &viewMemo{},
 		// UI
 		sidebar:      ui.NewSidebar(30, 24),
 		rightSidebar: ui.NewChangedFiles(30, 24),
@@ -449,6 +466,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, breathingTickCmd()
 
 	case spinner.TickMsg:
+		if m.loaded {
+			return m, nil // not rescheduling stops the 10 Hz redraws
+		}
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
 		return m, cmd
@@ -570,6 +590,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(m.refreshHistoryCmd(), saveCmd)
 
 	case historySessionsMsg:
+		m.loaded = true
 		if msg.err != nil {
 			m.err = msg.err
 		} else {
@@ -614,6 +635,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// -- Full combined refresh (from periodic ticker) -----------------------
 	case sessionRefreshMsg:
 		m.refreshInFlight = false
+		m.loaded = true
 		var cmd tea.Cmd
 		if msg.err != nil {
 			m.err = msg.err
@@ -828,8 +850,13 @@ func (m Model) View() string {
 		contentHeight = 1
 	}
 
-	// Pass spinner view to sidebar for the loading/empty state.
-	m.sidebar.SetSpinnerView(m.spinner.View())
+	// Pass spinner view to sidebar for the loading state; once loaded an empty
+	// list shows the "No sessions found" hint instead.
+	spin := ""
+	if !m.loaded {
+		spin = m.spinner.View()
+	}
+	m.sidebar.SetSpinnerView(spin)
 
 	// Sync pane focus before rendering; the preview has no border, so its focus
 	// shows via its header chip and the neighbors dimming.
@@ -879,18 +906,26 @@ func (m Model) View() string {
 	if fp == PaneList {
 		sidebarStyle = styles.SidebarPanelFocused
 	}
-	sidebarView = sidebarStyle.
-		Width(sidebarWidth - 1). // -1 for the border character
-		Height(contentHeight).
-		MaxHeight(contentHeight).
-		Render(sidebarView)
+	vm := m.memo
+	if vm == nil {
+		vm = &viewMemo{} // models built without New render uncached
+	}
+	sidebarView = vm.side.Get(paneKey{sidebarView, sidebarWidth, contentHeight, fp == PaneList}, func() string {
+		return sidebarStyle.
+			Width(sidebarWidth - 1). // -1 for the border character
+			Height(contentHeight).
+			MaxHeight(contentHeight).
+			Render(sidebarView)
+	})
 
 	// Preview has NO border -- the separator is the sidebar's right border.
-	previewView = lipgloss.NewStyle().
-		Width(previewWidth).
-		Height(contentHeight).
-		MaxHeight(contentHeight).
-		Render(previewView)
+	previewView = vm.preview.Get(paneKey{previewView, previewWidth, contentHeight, false}, func() string {
+		return lipgloss.NewStyle().
+			Width(previewWidth).
+			Height(contentHeight).
+			MaxHeight(contentHeight).
+			Render(previewView)
+	})
 
 	columns := []string{sidebarView, previewView}
 
@@ -902,17 +937,28 @@ func (m Model) View() string {
 		if fp == PaneFiles {
 			rightStyle = styles.RightSidebarPanelFocused
 		}
-		rightView := rightStyle.
-			Width(rightWidth - 1). // -1 for the border character
-			Height(contentHeight).
-			MaxHeight(contentHeight).
-			Render(m.rightSidebar.View())
+		rightRaw := m.rightSidebar.View()
+		rightView := vm.right.Get(paneKey{rightRaw, rightWidth, contentHeight, fp == PaneFiles}, func() string {
+			return rightStyle.
+				Width(rightWidth - 1). // -1 for the border character
+				Height(contentHeight).
+				MaxHeight(contentHeight).
+				Render(rightRaw)
+		})
 		columns = append(columns, rightView)
 	}
 
-	mainContent := lipgloss.JoinHorizontal(lipgloss.Top, columns...)
-
-	screen := lipgloss.JoinVertical(lipgloss.Left, titleBar, mainContent, statusView)
+	right := ""
+	if len(columns) > 2 {
+		right = columns[2]
+	}
+	screen := vm.screen.Get(screenKey{titleBar, columns[0], columns[1], right, statusView}, func() string {
+		if s, ok := joinFixedColumns(titleBar, statusView, columns); ok {
+			return s
+		}
+		mainContent := lipgloss.JoinHorizontal(lipgloss.Top, columns...)
+		return lipgloss.JoinVertical(lipgloss.Left, titleBar, mainContent, statusView)
+	})
 
 	// Render overlays on top, composited over the main window.
 	if m.statsModel.IsVisible() {

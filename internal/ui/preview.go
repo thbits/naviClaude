@@ -35,6 +35,13 @@ type PreviewModel struct {
 	// Captures landing mid-drag wait here so the text doesn't slide under the cursor.
 	pending    string
 	hasPending bool
+
+	memo *Memo[previewKey] // shared across copies; View runs on a value receiver
+}
+
+type previewKey struct {
+	header, content    string
+	yoff, vw, vh, w, h int
 }
 
 // textCell is a content line index and display column.
@@ -62,6 +69,7 @@ func NewPreview(width, height int) PreviewModel {
 		width:    width,
 		height:   height,
 		viewport: vp,
+		memo:     &Memo[previewKey]{},
 	}
 }
 
@@ -299,7 +307,13 @@ func (m PreviewModel) View() string {
 	if m.sel.active && m.sel.moved {
 		// Value receiver: this only touches the local viewport copy.
 		m.viewport.SetContent(m.highlighted())
+		return m.render(header)
 	}
+	key := previewKey{header, m.content, m.viewport.YOffset, m.viewport.Width, m.viewport.Height, m.width, m.height}
+	return m.memo.Get(key, func() string { return m.render(header) })
+}
+
+func (m PreviewModel) render(header string) string {
 	body := m.viewport.View()
 
 	inner := lipgloss.JoinVertical(lipgloss.Left, header, body)

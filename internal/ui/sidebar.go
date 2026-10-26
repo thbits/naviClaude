@@ -90,6 +90,14 @@ type SidebarModel struct {
 	spinnerView    string // spinner view string passed from app for loading state
 
 	focused bool // whether the sidebar pane currently has keyboard focus
+
+	content string // the joined rows last passed to vp
+	memo    *Memo[sidebarKey]
+}
+
+type sidebarKey struct {
+	header, content string
+	yoff, w, h      int
 }
 
 // NewSidebar creates a SidebarModel with the given dimensions.
@@ -102,6 +110,7 @@ func NewSidebar(width, height int) SidebarModel {
 		userToggled: make(map[string]bool),
 		vp:          vp,
 		focused:     true,
+		memo:        &Memo[sidebarKey]{},
 	}
 }
 
@@ -554,7 +563,8 @@ func (m *SidebarModel) syncViewport() {
 			m.cursorLineCount = len(lines) - m.cursorLineStart
 		}
 	}
-	m.vp.SetContent(strings.Join(lines, "\n"))
+	m.content = strings.Join(lines, "\n")
+	m.vp.SetContent(m.content)
 	m.scrollToCursor()
 }
 
@@ -899,7 +909,8 @@ func (m SidebarModel) View() string {
 
 	// Content and scroll position are kept in sync by syncViewport()
 	// which is called on every cursor/data change. Just render.
-	return lipgloss.JoinVertical(lipgloss.Left, header, m.vp.View())
+	key := sidebarKey{header, m.content, m.vp.YOffset, m.vp.Width, m.vp.Height}
+	return m.memo.Get(key, func() string { return lipgloss.JoinVertical(lipgloss.Left, header, m.vp.View()) })
 }
 
 // needsUser reports a session blocked on the user (approval or question).
