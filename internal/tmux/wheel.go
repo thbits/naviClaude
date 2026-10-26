@@ -7,18 +7,49 @@ import (
 	"strings"
 )
 
-// WheelForwardable reports whether target's app tracks the mouse with SGR, so a
-// forwarded wheel scrolls its internal scrollback, which capture-pane can't see.
-func (c *Client) WheelForwardable(target string) (bool, error) {
-	out, err := exec.Command("tmux", "display-message", "-p", "-t", target,
-		"#{pane_in_mode} #{mouse_any_flag} #{mouse_button_flag} #{mouse_standard_flag} #{mouse_sgr_flag}").Output()
-	if err != nil {
-		return false, fmt.Errorf("tmux display-message -t %s: %w", target, err)
-	}
-	return parseWheelForwardable(string(out))
+// wheelFormat reads the flags parseWheelForwardable decides on.
+const wheelFormat = "#{pane_in_mode} #{mouse_any_flag} #{mouse_button_flag} #{mouse_standard_flag} #{mouse_sgr_flag}"
+
+// PaneSnapshot is a pane capture plus the mouse mode and cursor read with it.
+type PaneSnapshot struct {
+	Content string
+	// WheelForwardable is true when the pane's app tracks the mouse with SGR, so a
+	// forwarded wheel scrolls its internal scrollback, which capture-pane can't see.
+	WheelForwardable bool
+	Cursor           CursorInfo
 }
 
-// parseWheelForwardable parses WheelForwardable's five 0/1 flags. A pane in
+// CaptureSnapshot captures target's scrollback with ANSI colors, its mouse mode
+// and its cursor in one tmux process; the preview runs it every refresh tick.
+func (c *Client) CaptureSnapshot(target string) (PaneSnapshot, error) {
+	out, err := exec.Command("tmux", "display-message", "-p", "-t", target,
+		wheelFormat+" #{cursor_x} #{cursor_y} #{pane_height} #{cursor_flag}",
+		";", "capture-pane", "-e", "-p", "-S", "-", "-t", target).Output()
+	if err != nil {
+		return PaneSnapshot{}, fmt.Errorf("tmux capture-pane -t %s: %w", target, err)
+	}
+	return parseSnapshot(string(out))
+}
+
+// parseSnapshot splits CaptureSnapshot's flags line from the capture below it.
+func parseSnapshot(raw string) (PaneSnapshot, error) {
+	head, body, _ := strings.Cut(raw, "\n")
+	fields := strings.Fields(head)
+	if len(fields) != 9 {
+		return PaneSnapshot{}, fmt.Errorf("expected 9 snapshot fields, got %q", head)
+	}
+	fwd, err := parseWheelForwardable(strings.Join(fields[:5], " "))
+	if err != nil {
+		return PaneSnapshot{}, err
+	}
+	cur, err := parseCursorInfo(strings.Join(fields[5:], " "))
+	if err != nil {
+		return PaneSnapshot{}, err
+	}
+	return PaneSnapshot{Content: body, WheelForwardable: fwd, Cursor: cur}, nil
+}
+
+// parseWheelForwardable parses wheelFormat's five 0/1 flags. A pane in
 // copy-mode is excluded: send-keys would feed the bytes to copy-mode instead.
 func parseWheelForwardable(raw string) (bool, error) {
 	fields := strings.Fields(raw)

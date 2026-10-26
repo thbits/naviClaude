@@ -2399,7 +2399,6 @@ func (m Model) capturePreviewCmd() tea.Cmd {
 	statusSess := *sess
 	h := m.harnessFor(sess)
 	captureEngine := m.captureEngine
-	tc := m.tmuxClient
 	// Compute the width here, where dimensions are stable, since a shared field
 	// would race the capture goroutine; -2 is the preview's padding.
 	previewWidth := m.width - m.sidebarWidth()
@@ -2408,13 +2407,7 @@ func (m Model) capturePreviewCmd() tea.Cmd {
 	showCursor := m.mode == ModePassthrough
 
 	return func() tea.Msg {
-		// Query the mouse mode alongside the capture rather than after it.
-		fwd := make(chan bool, 1)
-		go func() {
-			ok, _ := tc.WheelForwardable(target)
-			fwd <- ok
-		}()
-		content, err := captureEngine.Capture(target, showCursor, maxWidth)
+		content, forwardsWheel, err := captureEngine.Capture(target, showCursor, maxWidth)
 		if err != nil {
 			return previewCaptureMsg{err: err, target: target, sessionID: sessionID}
 		}
@@ -2431,7 +2424,7 @@ func (m Model) capturePreviewCmd() tea.Cmd {
 			target:        target,
 			sessionID:     sessionID,
 			status:        status,
-			forwardsWheel: <-fwd,
+			forwardsWheel: forwardsWheel,
 		}
 	}
 }

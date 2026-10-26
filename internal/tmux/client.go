@@ -80,17 +80,6 @@ func (c *Client) CapturePaneOutput(target string) (string, error) {
 	return string(out), nil
 }
 
-// CursorPosition returns a pane's cursor column, visible row, height and
-// visibility, for callers to overlay since capture-pane omits the cursor.
-func (c *Client) CursorPosition(target string) (CursorInfo, error) {
-	out, err := exec.Command("tmux", "display-message", "-p", "-t", target,
-		"#{cursor_x} #{cursor_y} #{pane_height} #{cursor_flag}").Output()
-	if err != nil {
-		return CursorInfo{}, fmt.Errorf("tmux display-message -t %s: %w", target, err)
-	}
-	return parseCursorInfo(string(out))
-}
-
 // KillPane kills the specified tmux pane (and its process).
 func (c *Client) KillPane(target string) error {
 	if err := exec.Command("tmux", "kill-pane", "-t", target).Run(); err != nil {

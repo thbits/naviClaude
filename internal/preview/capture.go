@@ -25,14 +25,14 @@ const (
 	cursorReverseOff = "\x1b[27m"
 )
 
-// Capture returns target's ANSI pane content cut to maxWidth (0 = none; a param so
-// it can't race a resize); showCursor overlays the cursor capture-pane omits.
-func (e *CaptureEngine) Capture(target string, showCursor bool, maxWidth int) (string, error) {
-	raw, err := e.tmuxClient.CapturePaneOutput(target)
+// Capture returns target's ANSI content cut to maxWidth (a param so it can't race a
+// resize; 0 = none) and whether a wheel can reach the pane, with an optional cursor.
+func (e *CaptureEngine) Capture(target string, showCursor bool, maxWidth int) (string, bool, error) {
+	snap, err := e.tmuxClient.CaptureSnapshot(target)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
-	raw = strings.TrimSuffix(raw, "\n")
+	raw := strings.TrimSuffix(snap.Content, "\n")
 	lines := strings.Split(raw, "\n")
 
 	// The untrimmed count (history + visible rows) maps the cursor to line
@@ -53,17 +53,16 @@ func (e *CaptureEngine) Capture(target string, showCursor bool, maxWidth int) (s
 	}
 
 	if showCursor {
-		lines = e.overlayCursor(target, lines, rawCount, maxWidth)
+		lines = overlayCursor(snap.Cursor, lines, rawCount, maxWidth)
 	}
 
-	return strings.Join(lines, "\n"), nil
+	return strings.Join(lines, "\n"), snap.WheelForwardable, nil
 }
 
-// overlayCursor draws target's live cursor as a reverse-video block; a cursor on a
-// trimmed trailing row is skipped for the frame rather than drawn on the wrong one.
-func (e *CaptureEngine) overlayCursor(target string, lines []string, rawCount, maxWidth int) []string {
-	info, err := e.tmuxClient.CursorPosition(target)
-	if err != nil || !info.Visible || info.PaneHeight <= 0 {
+// overlayCursor draws the pane's live cursor as a reverse-video block; a cursor on
+// a trimmed trailing row is skipped for the frame rather than drawn on the wrong one.
+func overlayCursor(info tmux.CursorInfo, lines []string, rawCount, maxWidth int) []string {
+	if !info.Visible || info.PaneHeight <= 0 {
 		return lines
 	}
 	row := rawCount - info.PaneHeight + info.Y

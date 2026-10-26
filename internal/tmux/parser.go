@@ -97,7 +97,7 @@ type CursorInfo struct {
 	Visible    bool // cursor_flag: whether the cursor is currently shown
 }
 
-// parseCursorInfo parses CursorPosition's space-separated cursor_x, cursor_y,
+// parseCursorInfo parses CaptureSnapshot's space-separated cursor_x, cursor_y,
 // pane_height and cursor_flag (1 when visible).
 func parseCursorInfo(raw string) (CursorInfo, error) {
 	fields := strings.Fields(strings.TrimSpace(raw))
