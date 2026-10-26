@@ -307,3 +307,19 @@ func TestParsePaneLineWithPaneIDAndAttention(t *testing.T) {
 		t.Errorf("empty attention: got %+v, %v", p, err)
 	}
 }
+
+func TestParseServerIdentity(t *testing.T) {
+	got, err := ParseServerIdentity("1792195359\t/private/tmp/tmux-501/default\n")
+	if err != nil {
+		t.Fatalf("ParseServerIdentity: %v", err)
+	}
+	want := ServerIdentity{StartTime: 1792195359, SocketPath: "/private/tmp/tmux-501/default"}
+	if got != want {
+		t.Fatalf("ParseServerIdentity = %+v, want %+v", got, want)
+	}
+	for _, bad := range []string{"abc\t/x", "", "123"} {
+		if _, err := ParseServerIdentity(bad); err == nil {
+			t.Errorf("ParseServerIdentity(%q): want error", bad)
+		}
+	}
+}

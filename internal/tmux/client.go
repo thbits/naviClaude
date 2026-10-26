@@ -244,6 +244,24 @@ func createdTarget(out []byte, name string) string {
 	return target
 }
 
+// ServerIdentity returns the running server's start time and socket path.
+func (c *Client) ServerIdentity() (ServerIdentity, error) {
+	out, err := exec.Command("tmux", "display-message", "-p", "#{start_time}\t#{socket_path}").Output()
+	if err != nil {
+		return ServerIdentity{}, fmt.Errorf("tmux display-message: %w", err)
+	}
+	return ParseServerIdentity(string(out))
+}
+
+// PaneCommand returns the command running in the pane at target.
+func (c *Client) PaneCommand(target string) (string, error) {
+	out, err := exec.Command("tmux", "display-message", "-p", "-t", target, "#{pane_current_command}").Output()
+	if err != nil {
+		return "", fmt.Errorf("tmux display-message: %w", err)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
 // HasSession reports whether a session named exactly name exists; the "=" prefix
 // stops "dev" matching "dev-tools".
 func (c *Client) HasSession(name string) bool {

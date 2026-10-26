@@ -152,3 +152,22 @@ func parseTarget(target string) (session string, windowIndex, paneIndex int, err
 
 	return session, windowIndex, paneIndex, nil
 }
+
+// ServerIdentity identifies a running tmux server.
+type ServerIdentity struct {
+	StartTime  int64  // #{start_time}, epoch seconds
+	SocketPath string // #{socket_path}
+}
+
+// ParseServerIdentity parses "start_time<TAB>socket_path" from Client.ServerIdentity.
+func ParseServerIdentity(raw string) (ServerIdentity, error) {
+	start, socket, ok := strings.Cut(strings.TrimSpace(raw), "\t")
+	if !ok || socket == "" {
+		return ServerIdentity{}, fmt.Errorf("tmux server info: unexpected output %q", raw)
+	}
+	n, err := strconv.ParseInt(start, 10, 64)
+	if err != nil {
+		return ServerIdentity{}, fmt.Errorf("tmux server info: bad start time %q", start)
+	}
+	return ServerIdentity{StartTime: n, SocketPath: socket}, nil
+}

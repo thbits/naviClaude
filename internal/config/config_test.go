@@ -52,6 +52,9 @@ func TestDefaultConfigViewStateFlags(t *testing.T) {
 	if cfg.RememberGroupState != true {
 		t.Errorf("RememberGroupState default = %v, want true", cfg.RememberGroupState)
 	}
+	if cfg.RestoreSessions != true {
+		t.Errorf("RestoreSessions default = %v, want true", cfg.RestoreSessions)
+	}
 }
 
 // A config that omits the flags keeps the (true) defaults.
@@ -71,13 +74,16 @@ func TestLoadViewStateFlagsDefaultWhenAbsent(t *testing.T) {
 	if !cfg.RememberGroupState {
 		t.Error("RememberGroupState = false, want true (default when absent)")
 	}
+	if !cfg.RestoreSessions {
+		t.Error("RestoreSessions = false, want true (default when absent)")
+	}
 }
 
 // An explicit false in the file must override the true default.
 func TestLoadViewStateFlagsExplicitFalse(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
-	yaml := "focus_last_session: false\nremember_group_state: false\n"
+	yaml := "focus_last_session: false\nremember_group_state: false\nrestore_sessions: false\n"
 	if err := os.WriteFile(path, []byte(yaml), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -90,6 +96,9 @@ func TestLoadViewStateFlagsExplicitFalse(t *testing.T) {
 	}
 	if cfg.RememberGroupState {
 		t.Error("RememberGroupState = true, want false (explicit)")
+	}
+	if cfg.RestoreSessions {
+		t.Error("RestoreSessions = true, want false (explicit)")
 	}
 }
 

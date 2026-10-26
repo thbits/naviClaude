@@ -210,6 +210,10 @@ type Model struct {
 	refreshInterval    time.Duration // preview capture tick interval
 
 	viewState           *session.ViewStateStore // persisted last-focused session + group state
+	liveState           *session.LiveStateStore // sessions to resume after a tmux restart; nil when disabled
+	liveStateChecked    bool                    // the startup restore finished, so the snapshot may be overwritten
+	liveRecorder        *liveRecorder           // smooths scans before they overwrite the snapshot
+	serverIdentity      tmux.ServerIdentity     // tmux server the snapshot is written for
 	restoredLastSession bool                    // one-shot guard: restore the focused session only once at startup
 	unreadHoldPane      string                  // pane set as unread while selected; kept from the seen-clear until the preview moves
 
@@ -306,6 +310,11 @@ func New(version string) Model {
 	m.sidebar.SetGroupSortOrder(cfg.GroupSortOrder)
 	m.sidebar.SetSessionSortOrder(cfg.SessionSortOrder)
 
+	if cfg.RestoreSessions {
+		m.liveState = session.NewLiveStateStore("")
+		m.liveRecorder = newLiveRecorder()
+	}
+
 	// Seed persisted group open/closed state before the first SetSessions so
 	// auto-collapse honors the user's remembered toggles.
 	if cfg.RememberGroupState {
@@ -367,6 +376,9 @@ func (m Model) Init() tea.Cmd {
 	}
 	if m.cfg.CheckForUpdates {
 		cmds = append(cmds, m.checkUpdateCmd())
+	}
+	if m.liveState != nil {
+		cmds = append(cmds, m.restoreSessionsCmd())
 	}
 	return tea.Batch(cmds...)
 }
@@ -508,12 +520,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	// -- Async results (progressive: active first, then history) -------------
+	case restoreDoneMsg:
+		return m, m.applyRestoreDone(msg)
+
+	case restoreRetryMsg:
+		return m, m.restoreSessionsCmd()
+
 	case activeSessionsMsg:
+		var saveCmd tea.Cmd
 		if msg.err != nil {
 			m.err = msg.err
 		} else {
 			active := m.mergePendingPlaceholder(msg.active)
 			m.activeSessions = active
+			saveCmd = m.saveLiveStateCmd(active)
 			// Pushing active-only would briefly drop closed sessions and jump the
 			// cursor; the combined list is rebuilt once history arrives.
 			if len(m.sessions) == 0 {
@@ -529,15 +549,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// Fire metrics load for the initially selected session.
 				if sel.ID != "" && sel.ID != m.metricsSessionID {
 					m.metricsSessionID = sel.ID
-					return m, tea.Batch(m.refreshHistoryCmd(), loadMetricsCmd(m.harnessFor(sel), sel), restoreCmd)
+					return m, tea.Batch(m.refreshHistoryCmd(), loadMetricsCmd(m.harnessFor(sel), sel), restoreCmd, saveCmd)
 				}
 			}
 			if restoreCmd != nil {
-				return m, tea.Batch(m.refreshHistoryCmd(), restoreCmd)
+				return m, tea.Batch(m.refreshHistoryCmd(), restoreCmd, saveCmd)
 			}
 		}
 		// Fire the slower history scan.
-		return m, m.refreshHistoryCmd()
+		return m, tea.Batch(m.refreshHistoryCmd(), saveCmd)
 
 	case historySessionsMsg:
 		if msg.err != nil {
@@ -2169,7 +2189,7 @@ func (m *Model) applySessionRefresh(msg sessionRefreshMsg) tea.Cmd {
 		m.sidebar.SetSessions(m.search.Results())
 	}
 
-	return m.syncSelectionAfterRebuild(prevSel)
+	return tea.Batch(m.syncSelectionAfterRebuild(prevSel), m.saveLiveStateCmd(msg.active))
 }
 
 // selectionIdentity names the current sidebar selection across list rebuilds.

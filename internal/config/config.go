@@ -39,6 +39,7 @@ type Config struct {
 	Editor             string        `yaml:"editor"`               // editor for opening changed files; empty falls back to $EDITOR, then vi
 	FocusLastSession   bool          `yaml:"focus_last_session"`   // re-select the last focused session on startup (default true)
 	RememberGroupState bool          `yaml:"remember_group_state"` // restore manually-toggled group open/closed state on startup (default true)
+	RestoreSessions    bool          `yaml:"restore_sessions"`     // resume sessions killed by a tmux restart on the next launch (default true)
 	Notifications      Notifications `yaml:"notifications"`
 }
 
@@ -108,6 +109,7 @@ func DefaultConfig() Config {
 		CheckForUpdates:    true,
 		FocusLastSession:   true,
 		RememberGroupState: true,
+		RestoreSessions:    true,
 		Notifications: Notifications{
 			Enabled:       true,
 			Volume:        1,

@@ -20,6 +20,7 @@ layers on top of your existing tmux setup instead of replacing it.
 - **Passthrough mode** -- type directly into a session without leaving the TUI
 - **Changed-files sidebar** -- a right-hand panel listing the files the selected session edited, with per-file `+/-` counts (live `git diff` while uncommitted, a persistent transcript estimate afterwards); open any file in your editor
 - **Fuzzy search** -- filter sessions by name
+- **Restore after restart** -- after a reboot or tmux restart, the first launch resumes the sessions that were running, back in the same pane when tmux-resurrect restored it (see [Restore after restart](#restore-after-restart))
 - **Session management** -- create new sessions, kill existing ones, and resume closed sessions into any tmux session (or a brand-new one) via a target picker
 - **Detail popup** -- view session metadata (project, CWD, branch, session ID, tmux target, model, Claude Code version, start time / uptime, message count, CPU/memory)
 - **Rich preview header** -- status badge (including what a waiting session waits for), uptime, model (e.g. `Opus 5.5`), CPU/memory
@@ -185,6 +186,7 @@ window_name: "{project}"
 check_for_updates: true
 focus_last_session: true
 remember_group_state: true
+restore_sessions: true
 # editor: "cursor"   # falls back to $EDITOR, then vi
 # new_session_dir: "~/projects"
 ```
@@ -209,8 +211,24 @@ remember_group_state: true
 | `check_for_updates` | `true` | Check GitHub on startup for a newer release and show "update available" in the status bar |
 | `focus_last_session` | `true` | On startup, re-focus the session you last had selected; falls back to the first session if it no longer exists |
 | `remember_group_state` | `true` | On startup, restore the open/closed state of groups you manually toggled |
+| `restore_sessions` | `true` | After a reboot or tmux restart, resume the sessions that were running, back in their panes (see [Restore after restart](#restore-after-restart)) |
 | `editor` | `$EDITOR`, else `vi` | Editor for opening changed files from the changed-files sidebar; may include flags. GUI editors (`cursor`, `code`, `zed`, ...) open in their own window; terminal editors (`vim`, `nvim`, `nano`, ...) take over the TUI and return on exit |
 | `new_session_dir` | `~` | Working directory for new tmux sessions created with `N` |
+
+## Restore after restart
+
+While naviClaude is open it records which conversation runs in which tmux pane, in `naviclaude/live-sessions.json` under your user cache dir (`~/Library/Caches` on macOS), one list per tmux server. The first time you open naviClaude on a new tmux server (after a reboot or `tmux kill-server`), it resumes each recorded session with `claude --resume <id>`:
+
+- in the **same pane**, when it is back as a plain shell in the same directory ([tmux-resurrect](https://github.com/tmux-plugins/tmux-resurrect) / continuum restore panes like this);
+- otherwise in a **new window** of the same tmux session;
+- otherwise in a **recreated tmux session** of the same name.
+
+It waits until the server is at least 15 seconds old and the pane list has stopped changing, so resurrect can finish first, then shows `restored N sessions` in the status bar. It never resumes anything on the server it recorded on, skips sessions that are already running, only types into a pane that is still an idle shell, lets one naviClaude restore at a time, and does not move your cursor or switch windows. Set `restore_sessions: false` to turn it off.
+
+Limitations, by design (no hooks or daemon are involved):
+
+- The list is only as fresh as the last time naviClaude was open. A session started after that is not restored, and a pane whose conversation changed since (`/clear`, `/resume`) comes back with the earlier one.
+- A session you quit while naviClaude was closed is still on the list, so it comes back after a restart. Quitting while naviClaude is open drops it from the list about 10 seconds later (the delay keeps a reboot, which kills agents before naviClaude, from emptying the list).
 
 ## Notifications
 

@@ -117,6 +117,21 @@ func (m *Manager) ResumeInSession(sess *Session, targetName, command string) (st
 	return target, nil
 }
 
+// ResumeInPane types the resume command into an existing shell pane, so the
+// session comes back exactly where it was.
+func (m *Manager) ResumeInPane(sess *Session, paneTarget, command string) error {
+	if sess.ID == "" {
+		return fmt.Errorf("resume: session has no ID")
+	}
+	if err := m.tmuxClient.SendKeys(paneTarget, resumeShellCommand(sess.CWD, command)); err != nil {
+		return fmt.Errorf("send resume command: %w", err)
+	}
+	if err := m.tmuxClient.SendKeys(paneTarget, "Enter"); err != nil {
+		return fmt.Errorf("send enter: %w", err)
+	}
+	return nil
+}
+
 // quitTimeout bounds how long Kill waits for the agent to run its exit hooks
 // before force-closing the pane.
 const quitTimeout = 15 * time.Second
