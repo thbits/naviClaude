@@ -3,6 +3,7 @@
 package claude
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -34,24 +35,8 @@ type Harness struct {
 	modelCacheMu sync.Mutex        // Enrich runs in overlapping tea.Cmd goroutines
 	modelCache   map[string]string // sessionID -> model (never changes mid-session)
 
-	lastActMu    sync.Mutex
-	lastActCache map[string]lastActivityEntry // sessionID -> last-message time, keyed by file mtime
-
-	aiTitleMu    sync.Mutex
-	aiTitleCache map[string]aiTitleEntry // sessionID -> ai-title, keyed by file mtime
-}
-
-// lastActivityEntry caches a session's last-message time alongside the file
-// mtime it was computed from, so the transcript is only re-scanned on change.
-type lastActivityEntry struct {
-	mtime time.Time
-	last  time.Time
-}
-
-// aiTitleEntry caches a session's ai-title alongside the transcript mtime.
-type aiTitleEntry struct {
-	mtime time.Time
-	title string
+	metaMu    sync.Mutex
+	metaCache map[metaKey]*transcriptMeta // transcript state, rescanned incrementally on change
 }
 
 var _ harness.Harness = (*Harness)(nil)
@@ -70,8 +55,7 @@ func New(o Options) *Harness {
 		processNames: o.ProcessNames,
 		history:      hs,
 		modelCache:   make(map[string]string),
-		lastActCache: make(map[string]lastActivityEntry),
-		aiTitleCache: make(map[string]aiTitleEntry),
+		metaCache:    make(map[metaKey]*transcriptMeta),
 	}
 }
 
@@ -123,11 +107,10 @@ func (h *Harness) Enrich(s *session.Session) {
 	if s.ID != "" {
 		s.SessionFile = SessionFilePath(s.ID, s.CWD)
 		s.Model = h.cachedModel(s.ID, s.CWD)
-		if modTime := sessionFileModTime(s.ID, s.CWD); !modTime.IsZero() {
+		if info, err := os.Stat(s.SessionFile); err == nil {
 			// Last message time (not mtime) so a resumed session shows when its
 			// conversation last happened, not "now".
-			s.LastActivity = h.cachedLastActivity(s.ID, s.CWD, modTime)
-			aiTitle = h.cachedAITitle(s.ID, s.CWD, modTime)
+			s.LastActivity, aiTitle = h.cachedTranscriptMeta(s.ID, s.SessionFile, info)
 		}
 	}
 	s.DisplayName = resolveTitle(meta.Name, meta.NameSource, aiTitle)
@@ -178,30 +161,25 @@ func (h *Harness) cachedModel(sessionID, cwd string) string {
 	return model
 }
 
-// cachedLastActivity returns the last-message time (else mtime), rescanning on
-// mtime change; unlike mtime it isn't fooled by `claude --resume` touching the file.
-func (h *Harness) cachedLastActivity(sessionID, cwd string, mtime time.Time) time.Time {
-	h.lastActMu.Lock()
-	defer h.lastActMu.Unlock()
-	if e, ok := h.lastActCache[sessionID]; ok && e.mtime.Equal(mtime) {
-		return e.last
+// cachedTranscriptMeta returns the last-message time (else mtime; unlike mtime it
+// isn't bumped by `claude --resume`) and the ai-title, reading only appended bytes.
+func (h *Harness) cachedTranscriptMeta(sessionID, path string, info os.FileInfo) (time.Time, string) {
+	key := metaKey{id: sessionID, path: path}
+	// Held across check-scan-store so overlapping Enrich calls don't scan twice.
+	h.metaMu.Lock()
+	defer h.metaMu.Unlock()
+	m := h.metaCache[key]
+	if m == nil || m.size != info.Size() || !m.mtime.Equal(info.ModTime()) {
+		if next, err := scanTranscriptMeta(path, m); err == nil {
+			m = next
+			h.metaCache[key] = m
+		}
 	}
-	last := lastMessageTime(SessionFilePath(sessionID, cwd))
-	if last.IsZero() {
-		last = mtime
+	if m == nil {
+		return info.ModTime(), ""
 	}
-	h.lastActCache[sessionID] = lastActivityEntry{mtime: mtime, last: last}
-	return last
-}
-
-// cachedAITitle returns the latest ai-title, rescanning only when mtime changes.
-func (h *Harness) cachedAITitle(sessionID, cwd string, mtime time.Time) string {
-	h.aiTitleMu.Lock()
-	defer h.aiTitleMu.Unlock()
-	if e, ok := h.aiTitleCache[sessionID]; ok && e.mtime.Equal(mtime) {
-		return e.title
+	if m.lastTS.IsZero() {
+		return info.ModTime(), m.aiTitle
 	}
-	title := lastAITitle(SessionFilePath(sessionID, cwd))
-	h.aiTitleCache[sessionID] = aiTitleEntry{mtime: mtime, title: title}
-	return title
+	return m.lastTS, m.aiTitle
 }
