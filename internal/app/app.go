@@ -389,7 +389,6 @@ func (m Model) Init() tea.Cmd {
 	cmds := []tea.Cmd{
 		m.tickPreviewCmd(),
 		tickSession(),
-		tickResource(),
 		m.refreshActiveCmd(),
 		breathingTickCmd(),
 		m.spinner.Tick,
@@ -455,11 +454,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, m.backgroundCmd())
 		return m, tea.Batch(cmds...)
 
-	case tickResourceMsg:
-		cmds = append(cmds, tickResource())
-		cmds = append(cmds, m.refreshResourceCmd())
-		return m, tea.Batch(cmds...)
-
 	case breathingTickMsg:
 		m.breathingFrame++
 		m.sidebar.SetBreathingFrame(m.breathingFrame)
@@ -472,10 +466,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
 		return m, cmd
-
-	case resourceRefreshMsg:
-		m.handleResourceRefresh(msg)
-		return m, nil
 
 	case selectionSettledMsg:
 		if msg.gen != m.selectionGen || !m.selectionPending {
