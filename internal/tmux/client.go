@@ -318,9 +318,14 @@ func (c *Client) WindowSize(target string) (int, int, error) {
 	if err != nil {
 		return 0, 0, err
 	}
-	parts := strings.Fields(strings.TrimSpace(string(out)))
+	return parseWindowSize(string(out))
+}
+
+// parseWindowSize parses "#{window_width} #{window_height}" output.
+func parseWindowSize(out string) (int, int, error) {
+	parts := strings.Fields(strings.TrimSpace(out))
 	if len(parts) != 2 {
-		return 0, 0, fmt.Errorf("unexpected output: %q", string(out))
+		return 0, 0, fmt.Errorf("unexpected output: %q", out)
 	}
 	w, err := strconv.Atoi(parts[0])
 	if err != nil {
@@ -336,6 +341,11 @@ func (c *Client) WindowSize(target string) (int, int, error) {
 // ResizeWindow resizes a single tmux window. Pass 0 for w or h to leave
 // that dimension unchanged.
 func (c *Client) ResizeWindow(target string, w, h int) error {
+	runChain(resizeArgs(target, w, h))
+	return nil
+}
+
+func resizeArgs(target string, w, h int) []string {
 	args := []string{"resize-window", "-t", target}
 	if w > 0 {
 		args = append(args, "-x", strconv.Itoa(w))
@@ -346,47 +356,194 @@ func (c *Client) ResizeWindow(target string, w, h int) error {
 	if len(args) <= 3 {
 		return nil // nothing to resize
 	}
-	exec.Command("tmux", args...).Run()
-	return nil
+	return args
 }
 
 // optPreSize records a window's own window-size option before naviClaude first
 // resized it ("auto" when it was inherited), so the restore survives a crash.
 const optPreSize = "@naviclaude_presize"
 
-func windowOption(target, name string) string {
-	out, _ := exec.Command("tmux", "show-options", "-wqv", "-t", target, name).Output()
-	return strings.TrimSpace(string(out))
+// readMarker separates the new window's options from the old one's in a read chain.
+const readMarker = paneFieldSep
+
+// chain joins tmux commands with ";" so they run in one tmux process.
+func chain(cmds ...[]string) []string {
+	var args []string
+	for _, cmd := range cmds {
+		if len(cmd) == 0 {
+			continue
+		}
+		if len(args) > 0 {
+			args = append(args, ";")
+		}
+		args = append(args, cmd...)
+	}
+	return args
+}
+
+func runChain(args []string) {
+	if len(args) > 0 {
+		exec.Command("tmux", args...).Run()
+	}
+}
+
+// showOptionsArgs reads the window's own (not inherited) window-size and presize;
+// show-options -q prints nothing for unset options and missing windows alike.
+func showOptionsArgs(target string) []string {
+	return chain(
+		[]string{"show-options", "-wq", "-t", target, "window-size"},
+		[]string{"show-options", "-wq", "-t", target, optPreSize},
+	)
+}
+
+// windowOptions is a window's own window-size and presize; "" means unset.
+type windowOptions struct {
+	size, preSize string
+}
+
+func parseWindowOptions(lines []string) windowOptions {
+	var o windowOptions
+	for _, line := range lines {
+		name, value := parseOptionLine(line)
+		switch name {
+		case "window-size":
+			o.size = value
+		case optPreSize:
+			o.preSize = value
+		}
+	}
+	return o
+}
+
+// parseOptionLine splits a show-options line into its name and value, dropping
+// the quotes tmux puts around empty or spaced values.
+func parseOptionLine(line string) (string, string) {
+	name, value, _ := strings.Cut(strings.TrimSpace(line), " ")
+	value = strings.TrimSpace(value)
+	if n := len(value); n >= 2 && (value[0] == '\'' || value[0] == '"') && value[n-1] == value[0] {
+		value = value[1 : n-1]
+	}
+	return name, value
+}
+
+// saveArgs records the window's pre-resize window-size unless an earlier run
+// never restored, in which case the recorded value is the true original.
+func saveArgs(target string, o windowOptions) []string {
+	if o.preSize != "" {
+		return nil
+	}
+	pre := o.size
+	if pre == "" {
+		pre = "auto"
+	}
+	return []string{"set-option", "-wq", "-t", target, optPreSize, pre}
+}
+
+// restoreArgs undoes a preview resize given the recorded presize. resize-window
+// pins window-size to manual, so it must run before window-size is reset.
+func restoreArgs(target string, w, h int, pre string) []string {
+	unsetPre := []string{"set-option", "-wqu", "-t", target, optPreSize}
+	switch pre {
+	case "":
+		return resizeArgs(target, w, h)
+	case "auto":
+		return chain(
+			[]string{"resize-window", "-A", "-t", target},
+			[]string{"set-option", "-wqu", "-t", target, "window-size"},
+			unsetPre,
+		)
+	default:
+		return chain(
+			resizeArgs(target, w, h),
+			[]string{"set-option", "-wq", "-t", target, "window-size", pre},
+			unsetPre,
+		)
+	}
 }
 
 // SaveWindowSize remembers how the window was sized before a preview resize.
 // resize-window pins window-size to manual, which RestoreWindowSize undoes.
 func (c *Client) SaveWindowSize(target string) {
-	if windowOption(target, optPreSize) != "" {
-		return // an earlier run never restored; keep the true original
-	}
-	pre := windowOption(target, "window-size")
-	if pre == "" {
-		pre = "auto"
-	}
-	exec.Command("tmux", "set-option", "-wq", "-t", target, optPreSize, pre).Run()
+	out, _ := exec.Command("tmux", showOptionsArgs(target)...).Output()
+	runChain(saveArgs(target, parseWindowOptions(strings.Split(string(out), "\n"))))
 }
 
 // RestoreWindowSize undoes a preview resize: a window that followed its clients
 // follows them again; one with its own window-size gets w x h and that setting.
 func (c *Client) RestoreWindowSize(target string, w, h int) {
-	switch pre := windowOption(target, optPreSize); pre {
-	case "":
-		c.ResizeWindow(target, w, h)
-		return
-	case "auto":
-		exec.Command("tmux", "resize-window", "-A", "-t", target).Run()
-		exec.Command("tmux", "set-option", "-wqu", "-t", target, "window-size").Run()
-	default:
-		c.ResizeWindow(target, w, h)
-		exec.Command("tmux", "set-option", "-wq", "-t", target, "window-size", pre).Run()
+	out, _ := exec.Command("tmux", "show-options", "-wq", "-t", target, optPreSize).Output()
+	o := parseWindowOptions(strings.Split(string(out), "\n"))
+	runChain(restoreArgs(target, w, h, o.preSize))
+}
+
+// previewReadArgs reads target's size and options and, when prev is set, prev's
+// presize after a marker line, all in one tmux process.
+func previewReadArgs(target, prev string) []string {
+	args := chain(
+		[]string{"display-message", "-p", "-t", target, "#{window_width} #{window_height} #{window_id}"},
+		showOptionsArgs(target),
+	)
+	if prev != "" {
+		args = chain(args,
+			[]string{"display-message", "-p", "-t", prev, readMarker + "#{window_id}"},
+			[]string{"show-options", "-wq", "-t", prev, optPreSize},
+		)
 	}
-	exec.Command("tmux", "set-option", "-wqu", "-t", target, optPreSize).Run()
+	return args
+}
+
+// previewRead is the parsed output of previewReadArgs.
+type previewRead struct {
+	w, h    int
+	sizeErr error
+	opts    windowOptions
+	prevPre string
+	// winID and prevWinID tell grouped or linked windows apart from distinct ones.
+	winID, prevWinID string
+}
+
+func parsePreviewRead(out string) previewRead {
+	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+	var r previewRead
+	size := strings.Fields(lines[0])
+	if len(size) == 3 {
+		r.winID, size = size[2], size[:2]
+	}
+	r.w, r.h, r.sizeErr = parseWindowSize(strings.Join(size, " "))
+	cur, prev := lines[1:], []string(nil)
+	for i, line := range cur {
+		if id, ok := strings.CutPrefix(line, readMarker); ok {
+			cur, prev, r.prevWinID = cur[:i], cur[i+1:], id
+			break
+		}
+	}
+	r.opts = parseWindowOptions(cur)
+	r.prevPre = parseWindowOptions(prev).preSize
+	return r
+}
+
+// FitPreviewWindow restores prev (if set) to prevW x prevH and fits target to
+// w x h, returning target's size before the fit; both windows share one read.
+func (c *Client) FitPreviewWindow(target string, w, h int, prev string, prevW, prevH int) (int, int, error) {
+	if prev == target {
+		// The read must see the restored window, so this rare case stays sequential.
+		c.RestoreWindowSize(prev, prevW, prevH)
+		prev = ""
+	}
+	out, _ := exec.Command("tmux", previewReadArgs(target, prev)...).Output()
+	r := parsePreviewRead(string(out))
+	if prev != "" && r.winID != "" && r.winID == r.prevWinID {
+		// Grouped sessions name one window twice; restore it before reading it.
+		c.RestoreWindowSize(prev, prevW, prevH)
+		out, _ = exec.Command("tmux", previewReadArgs(target, "")...).Output()
+		r, prev = parsePreviewRead(string(out)), ""
+	}
+	// Separate processes: a vanished window's resize error would abort the rest of a chain.
+	if prev != "" {
+		runChain(restoreArgs(prev, prevW, prevH, r.prevPre))
+	}
+	runChain(chain(saveArgs(target, r.opts), resizeArgs(target, w, h)))
+	return r.w, r.h, r.sizeErr
 }
 
 // WindowTarget extracts the "session:window" portion from a pane target

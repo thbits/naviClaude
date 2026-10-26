@@ -2310,7 +2310,16 @@ func (m *Model) selectPreviewSession(s *session.Session) {
 
 	if target != m.previewTarget {
 		m.unreadHoldPane = ""
-		m.restorePreviewedPane()
+
+		// Resize the new pane's window to the preview viewport size.
+		// Skip subprocesses (pane belongs to parent app) and naviClaude's own window.
+		winTarget := ""
+		if s != nil && s.TmuxTarget != "" && !s.Subprocess && tmux.WindowTarget(s.TmuxTarget) != m.currentTmuxWin {
+			winTarget = tmux.WindowTarget(s.TmuxTarget)
+		}
+		if winTarget == "" {
+			m.restorePreviewedPane()
+		}
 
 		m.previewTarget = target
 		m.preview.ClearSelection()
@@ -2339,21 +2348,20 @@ func (m *Model) selectPreviewSession(s *session.Session) {
 			))
 		}
 
-		// Resize the new pane's window to the preview viewport size.
-		// Skip subprocesses (pane belongs to parent app) and naviClaude's own window.
-		naviWinTarget := m.currentTmuxWin
-		if s != nil && s.TmuxTarget != "" && !s.Subprocess && tmux.WindowTarget(s.TmuxTarget) != naviWinTarget {
-			winTarget := tmux.WindowTarget(s.TmuxTarget)
-			// Save the original size so we can restore it when navigating away.
-			if w, h, err := m.tmuxClient.WindowSize(winTarget); err == nil {
+		if winTarget != "" {
+			prev, prevW, prevH := "", 0, 0
+			if m.resizedWinTarget != "" && m.origWinW > 0 {
+				prev, prevW, prevH = m.resizedWinTarget, m.origWinW, m.origWinH
+			}
+			// Restoring the previous window and fitting this one share one tmux read;
+			// the original size is kept so it can be restored when navigating away.
+			paneW, paneH := m.previewPaneDimensions()
+			if w, h, err := m.tmuxClient.FitPreviewWindow(winTarget, paneW, paneH, prev, prevW, prevH); err == nil {
 				m.origWinW, m.origWinH = w, h
 			} else {
 				m.origWinW, m.origWinH = m.width, m.height
 			}
 			m.resizedWinTarget = winTarget
-			m.tmuxClient.SaveWindowSize(winTarget)
-			paneW, paneH := m.previewPaneDimensions()
-			m.tmuxClient.ResizeWindow(winTarget, paneW, paneH)
 		}
 	}
 
