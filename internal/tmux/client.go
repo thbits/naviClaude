@@ -363,8 +363,9 @@ func resizeArgs(target string, w, h int) []string {
 // resized it ("auto" when it was inherited), so the restore survives a crash.
 const optPreSize = "@naviclaude_presize"
 
-// readMarker separates the new window's options from the old one's in a read chain.
-const readMarker = paneFieldSep
+// readMarker separates the new window's options from the old one's in a read chain;
+// it is printable because tmux before 3.8 escapes control characters in its output.
+const readMarker = "naviclaude-prev-window="
 
 // chain joins tmux commands with ";" so they run in one tmux process.
 func chain(cmds ...[]string) []string {

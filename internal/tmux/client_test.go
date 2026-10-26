@@ -153,9 +153,6 @@ func TestFitPreviewWindowGroupedSession(t *testing.T) {
 	t.Cleanup(func() { tm("kill-server") })
 	tm("-f", "/dev/null", "new-session", "-d", "-s", "s", "-x", "80", "-y", "24")
 	tm("new-session", "-d", "-s", "g", "-t", "s")
-	// An explicit size restores without resize-window -A, which needs a client on older tmux.
-	tm("set-option", "-w", "-t", "s:0", "window-size", "manual")
-	tm("resize-window", "-t", "s:0", "-x", "80", "-y", "24")
 	state := func() string {
 		return tm("display-message", "-p", "-t", "s:0", "#{window_width}x#{window_height}") +
 			" [" + tm("show-options", "-wq", "-t", "s:0", "window-size") + "]" +
@@ -169,7 +166,7 @@ func TestFitPreviewWindowGroupedSession(t *testing.T) {
 		t.Errorf("recorded original size %dx%d, want 80x24", w, h)
 	}
 	c.RestoreWindowSize("g:0", w, h)
-	if got := state(); got != "80x24 [window-size manual] []" {
-		t.Errorf("window after leave = %q, want restored 80x24 with its own size", got)
+	if got := state(); got != "80x24 [] []" {
+		t.Errorf("window after leave = %q, want restored 80x24 with no options", got)
 	}
 }
