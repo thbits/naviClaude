@@ -1,6 +1,7 @@
 package app
 
 import (
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -265,6 +266,24 @@ func TestRepoCountsLoadForStartupSelection(t *testing.T) {
 		t.Errorf("tick: cmd nil = %v changedFilesSessionID = %q, want a1 loaded", cmd == nil, m.changedFilesSessionID)
 	}
 }
+
+func TestSessionTickSkipsWhileRefreshInFlight(t *testing.T) {
+	m, _ := clickModel(t)
+	send(t, m, tickSessionMsg{})
+	if !m.refreshInFlight {
+		t.Fatal("tick must mark the refresh in flight")
+	}
+	inFlight := len(send(t, m, tickSessionMsg{})().(tea.BatchMsg))
+	send(t, m, sessionRefreshMsg{err: errTestRefresh})
+	if m.refreshInFlight {
+		t.Error("a landed refresh must clear the in-flight gate")
+	}
+	if landed := len(send(t, m, tickSessionMsg{})().(tea.BatchMsg)); landed != inFlight+1 {
+		t.Errorf("tick cmds: %d in flight, %d after landing; only the latter may refresh", inFlight, landed)
+	}
+}
+
+var errTestRefresh = errors.New("refresh failed")
 
 // A just-started Claude has no per-PID metadata yet, so detection briefly
 // borrows the cwd's newest transcript ID (another live session's) before the

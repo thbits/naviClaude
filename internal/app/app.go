@@ -185,6 +185,8 @@ type Model struct {
 	selectionGen     int  // bumped per deferred move; only the latest settle runs
 	selectionPending bool // a settle is due; the panes still show the previous selection
 
+	refreshInFlight bool // a full session refresh is running; the ticker skips until it lands
+
 	// Changed-files right sidebar
 	rightPanelOpen        bool      // whether the changed-files sidebar is expanded
 	changedFilesSessionID string    // session ID the loaded changed files belong to
@@ -421,8 +423,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tickSessionMsg:
 		cmds = append(cmds, tickSession())
-		// The periodic ticker fires the full combined refresh.
-		cmds = append(cmds, m.refreshSessionsCmd())
+		// A refresh slower than the tick must not stack another one behind it.
+		if !m.refreshInFlight {
+			m.refreshInFlight = true
+			cmds = append(cmds, m.refreshSessionsCmd())
+		}
 		// Live-refresh the changed-files panel if its session's transcript grew.
 		if cmd := m.maybeRefreshChangedFilesCmd(); cmd != nil {
 			cmds = append(cmds, cmd)
@@ -608,6 +613,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// -- Full combined refresh (from periodic ticker) -----------------------
 	case sessionRefreshMsg:
+		m.refreshInFlight = false
 		var cmd tea.Cmd
 		if msg.err != nil {
 			m.err = msg.err

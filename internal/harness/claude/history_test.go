@@ -216,7 +216,7 @@ func TestScanClosedAndAllExcludesActive(t *testing.T) {
 
 // TestLoadHistoryIndexConcurrent exercises the cache lock under -race. It does
 // not assert specific values; the point is that concurrent calls do not trip
-// the race detector on cachedIndex/cachedIndexAge.
+// the race detector on cachedIndex and its size/mtime key.
 func TestLoadHistoryIndexConcurrent(t *testing.T) {
 	claudeDir := t.TempDir()
 	// Write a small history.jsonl so the index is non-empty.
@@ -279,5 +279,119 @@ func TestParseSessionFileSetsAITitle(t *testing.T) {
 	want := "Configure Hindsight memory with local Postgres"
 	if sess.DisplayName != want {
 		t.Errorf("DisplayName = %q, want %q", sess.DisplayName, want)
+	}
+}
+
+// TestScanClosedAndAllCachesParses checks unchanged transcripts are served from
+// the cache, changed ones re-parsed, and callers get independent copies.
+func TestScanClosedAndAllCachesParses(t *testing.T) {
+	claudeDir := t.TempDir()
+	projectsDir := filepath.Join(claudeDir, "projects")
+	mtime := time.Now().Add(-5 * time.Minute)
+	writeClosedSessionFile(t, projectsDir, "-x-a", "sess-a", "/x/a", mtime)
+	path := filepath.Join(projectsDir, "-x-a", "sess-a.jsonl")
+
+	s := &HistoryScanner{claudeDir: claudeDir}
+	_, all, err := s.ScanClosedAndAll(24, nil)
+	if err != nil || len(all) != 1 {
+		t.Fatalf("first scan: all=%v err=%v", all, err)
+	}
+	all[0].DisplayName = "mutated by caller"
+
+	// Same size and mtime: the cached parse must win over the new on-disk cwd.
+	orig, _ := os.ReadFile(path)
+	swapped := strings.Replace(string(orig), "/x/a", "/x/b", 1)
+	if err := os.WriteFile(path, []byte(swapped), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, mtime, mtime); err != nil {
+		t.Fatal(err)
+	}
+	_, all, _ = s.ScanClosedAndAll(24, nil)
+	if len(all) != 1 || all[0].CWD != "/x/a" {
+		t.Fatalf("unchanged file was re-parsed: %+v", all)
+	}
+	if all[0].DisplayName == "mutated by caller" {
+		t.Error("scan returned the cached session instead of a copy")
+	}
+
+	// A new mtime invalidates the entry.
+	later := mtime.Add(time.Minute)
+	if err := os.Chtimes(path, later, later); err != nil {
+		t.Fatal(err)
+	}
+	_, all, _ = s.ScanClosedAndAll(24, nil)
+	if len(all) != 1 || all[0].CWD != "/x/b" {
+		t.Fatalf("changed file not re-parsed: %+v", all)
+	}
+}
+
+// TestScanClosedAndAllActiveThenClosed covers a session leaving the active set:
+// it is skipped while live and parsed once it closes.
+func TestScanClosedAndAllActiveThenClosed(t *testing.T) {
+	claudeDir := t.TempDir()
+	projectsDir := filepath.Join(claudeDir, "projects")
+	writeClosedSessionFile(t, projectsDir, "-x-a", "sess-a", "/x/a", time.Now().Add(-time.Minute))
+
+	s := &HistoryScanner{claudeDir: claudeDir}
+	closed, all, _ := s.ScanClosedAndAll(24, map[string]bool{"sess-a": true})
+	if len(closed) != 0 || len(all) != 0 {
+		t.Fatalf("active session listed: closed=%v all=%v", closed, all)
+	}
+	if len(s.parsed) != 0 {
+		t.Errorf("active transcript was parsed: %v", s.parsed)
+	}
+	closed, all, _ = s.ScanClosedAndAll(24, nil)
+	if len(closed) != 1 || len(all) != 1 || closed[0].ID != "sess-a" {
+		t.Fatalf("closed session missing: closed=%v all=%v", closed, all)
+	}
+}
+
+// TestScanClosedAndAllPrunesDeleted checks cache entries go with their files.
+func TestScanClosedAndAllPrunesDeleted(t *testing.T) {
+	claudeDir := t.TempDir()
+	projectsDir := filepath.Join(claudeDir, "projects")
+	writeClosedSessionFile(t, projectsDir, "-x-a", "sess-a", "/x/a", time.Now())
+
+	s := &HistoryScanner{claudeDir: claudeDir}
+	s.ScanClosedAndAll(24, nil)
+	if len(s.parsed) != 1 {
+		t.Fatalf("parsed cache = %d entries, want 1", len(s.parsed))
+	}
+	if err := os.Remove(filepath.Join(projectsDir, "-x-a", "sess-a.jsonl")); err != nil {
+		t.Fatal(err)
+	}
+	s.ScanClosedAndAll(24, nil)
+	if len(s.parsed) != 0 {
+		t.Errorf("deleted transcript still cached: %v", s.parsed)
+	}
+}
+
+// TestLoadHistoryIndexReloadsOnChange checks an append to history.jsonl is
+// visible on the next call.
+func TestLoadHistoryIndexReloadsOnChange(t *testing.T) {
+	claudeDir := t.TempDir()
+	path := filepath.Join(claudeDir, "history.jsonl")
+	if err := os.WriteFile(path, []byte(`{"sessionId":"s1","display":"one"}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := &HistoryScanner{claudeDir: claudeDir}
+	first, _ := s.LoadHistoryIndex()
+	if again, _ := s.LoadHistoryIndex(); len(again) != 1 {
+		t.Fatalf("unchanged reload = %v", again)
+	}
+
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.WriteString(`{"sessionId":"s2","display":"two"}` + "\n")
+	f.Close()
+	idx, _ := s.LoadHistoryIndex()
+	if idx["s2"] != "two" {
+		t.Errorf("appended entry missing: %v", idx)
+	}
+	if _, ok := first["s2"]; ok {
+		t.Error("a published index map was mutated")
 	}
 }

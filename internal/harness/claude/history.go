@@ -18,9 +18,66 @@ type HistoryScanner struct {
 	claudeDir string // defaults to ~/.claude
 
 	// cacheMu serializes LoadHistoryIndex, which overlapping refresh Cmds call.
-	cacheMu        sync.Mutex
-	cachedIndex    map[string]string // cached history index (sessionID -> display)
-	cachedIndexAge time.Time         // when the cache was populated
+	cacheMu         sync.Mutex
+	cachedIndex     map[string]string // cached history index (sessionID -> display)
+	cachedIndexSize int64             // history.jsonl size and mtime the index was built from
+	cachedIndexMod  time.Time
+
+	// parseMu guards parsed; transcripts are re-parsed only when size or mtime change.
+	parseMu sync.Mutex
+	parsed  map[string]parsedTranscript
+}
+
+// parsedTranscript is a cached parseSessionFile result; sess is nil for files
+// that yield no session.
+type parsedTranscript struct {
+	size    int64
+	modTime time.Time
+	sess    *session.Session
+}
+
+// parseCached returns a fresh copy of the file's parsed session, re-parsing
+// only when the file changed since the cached parse.
+func (s *HistoryScanner) parseCached(filePath string, info os.FileInfo, seen map[string]bool) *session.Session {
+	seen[filePath] = true
+	s.parseMu.Lock()
+	entry, ok := s.parsed[filePath]
+	s.parseMu.Unlock()
+	if !ok || entry.size != info.Size() || !entry.modTime.Equal(info.ModTime()) {
+		sess, err := parseSessionFile(filePath)
+		if err != nil {
+			return nil // transient read error: retry next scan
+		}
+		entry = parsedTranscript{size: info.Size(), modTime: info.ModTime(), sess: sess}
+		s.parseMu.Lock()
+		if s.parsed == nil {
+			s.parsed = make(map[string]parsedTranscript)
+		}
+		s.parsed[filePath] = entry
+		s.parseMu.Unlock()
+	}
+	if entry.sess == nil {
+		return nil
+	}
+	// Callers mutate the session (summary, aliases), so never hand out the cached one.
+	cp := *entry.sess
+	return &cp
+}
+
+// pruneParsed drops cache entries for transcripts no longer on disk.
+func (s *HistoryScanner) pruneParsed(seen map[string]bool) {
+	s.parseMu.Lock()
+	defer s.parseMu.Unlock()
+	for path := range s.parsed {
+		if !seen[path] {
+			delete(s.parsed, path)
+		}
+	}
+}
+
+// transcriptID is the session ID parseSessionFile assigns: the filename stem.
+func transcriptID(filePath string) string {
+	return strings.TrimSuffix(filepath.Base(filePath), ".jsonl")
 }
 
 // NewHistoryScanner creates a HistoryScanner. If claudeDir is empty, it
@@ -44,17 +101,12 @@ type HistoryEntry struct {
 	Timestamp int64  `json:"timestamp"`
 }
 
-// LoadHistoryIndex maps sessionId to its first history.jsonl prompt, cached 5s so
-// a refresh cycle parses it once; a missing file yields an empty map.
+// LoadHistoryIndex maps sessionId to its first history.jsonl prompt, re-parsing
+// only when the file's size or mtime changed; a missing file yields an empty map.
 func (s *HistoryScanner) LoadHistoryIndex() (map[string]string, error) {
 	// A published map is never mutated, so callers may read it unlocked.
 	s.cacheMu.Lock()
 	defer s.cacheMu.Unlock()
-
-	// Return cached result if fresh enough (avoids triple-parse per refresh).
-	if s.cachedIndex != nil && time.Since(s.cachedIndexAge) < 5*time.Second {
-		return s.cachedIndex, nil
-	}
 
 	path := filepath.Join(s.claudeDir, "history.jsonl")
 	f, err := os.Open(path)
@@ -65,6 +117,13 @@ func (s *HistoryScanner) LoadHistoryIndex() (map[string]string, error) {
 		return nil, fmt.Errorf("open history.jsonl: %w", err)
 	}
 	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("stat history.jsonl: %w", err)
+	}
+	if s.cachedIndex != nil && info.Size() == s.cachedIndexSize && info.ModTime().Equal(s.cachedIndexMod) {
+		return s.cachedIndex, nil
+	}
 
 	index := make(map[string]string)
 	scanner := bufio.NewScanner(f)
@@ -92,7 +151,7 @@ func (s *HistoryScanner) LoadHistoryIndex() (map[string]string, error) {
 	}
 
 	s.cachedIndex = index
-	s.cachedIndexAge = time.Now()
+	s.cachedIndexSize, s.cachedIndexMod = info.Size(), info.ModTime()
 	return index, nil
 }
 
@@ -128,19 +187,20 @@ func (s *HistoryScanner) ScanClosedAndAll(closedHours float64, activeIDs map[str
 		cutoff = time.Now().Add(-time.Duration(closedHours * float64(time.Hour)))
 	}
 
+	seen := make(map[string]bool, len(files))
 	for _, filePath := range files {
+		// Live transcripts are the largest and change every turn; skip them unparsed.
+		if activeIDs[transcriptID(filePath)] {
+			seen[filePath] = true
+			continue
+		}
 		info, serr := os.Stat(filePath)
 		if serr != nil {
 			continue
 		}
 
-		sess, perr := parseSessionFile(filePath)
-		if perr != nil || sess == nil {
-			continue
-		}
-
-		// Skip sessions that are currently active.
-		if activeIDs[sess.ID] {
+		sess := s.parseCached(filePath, info, seen)
+		if sess == nil {
 			continue
 		}
 
@@ -156,6 +216,7 @@ func (s *HistoryScanner) ScanClosedAndAll(closedHours float64, activeIDs map[str
 			closed = append(closed, sess)
 		}
 	}
+	s.pruneParsed(seen)
 	return closed, all, nil
 }
 
@@ -179,7 +240,11 @@ func (s *HistoryScanner) scan(closedHours float64, activeIDs map[string]bool) ([
 	}
 
 	var sessions []*session.Session
+	seen := make(map[string]bool, len(files))
 	for _, filePath := range files {
+		if activeIDs[transcriptID(filePath)] {
+			continue
+		}
 		info, err := os.Stat(filePath)
 		if err != nil {
 			continue
@@ -190,13 +255,8 @@ func (s *HistoryScanner) scan(closedHours float64, activeIDs map[string]bool) ([
 			continue
 		}
 
-		sess, err := parseSessionFile(filePath)
-		if err != nil || sess == nil {
-			continue
-		}
-
-		// Skip sessions that are currently active.
-		if activeIDs[sess.ID] {
+		sess := s.parseCached(filePath, info, seen)
+		if sess == nil {
 			continue
 		}
 
@@ -243,9 +303,7 @@ func parseSessionFile(filePath string) (*session.Session, error) {
 	}
 	defer f.Close()
 
-	// The session UUID is the filename stem (without extension).
-	base := filepath.Base(filePath)
-	sessionID := strings.TrimSuffix(base, ".jsonl")
+	sessionID := transcriptID(filePath)
 
 	sess := &session.Session{
 		ID:          sessionID,

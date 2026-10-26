@@ -154,7 +154,7 @@ func TestResolveStatusConcurrent(t *testing.T) {
 // already has TestLoadHistoryIndexConcurrent; this variant additionally builds
 // the scanner the production way via NewHistoryScanner with a fake HOME and
 // asserts the cached map content is correct after the storm). LoadHistoryIndex
-// guards cachedIndex/cachedIndexAge with cacheMu.
+// guards cachedIndex and its size/mtime key with cacheMu.
 func TestLoadHistoryIndexConcurrentFakeHome(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
