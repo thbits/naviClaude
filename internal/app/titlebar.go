@@ -12,13 +12,17 @@ import (
 
 // statusCounts tallies live sessions by what they need from the user.
 type statusCounts struct {
-	working, waiting, done, idle int
+	working, waiting, done, idle, restoring int
 }
 
 // countStatuses tallies by effective status, so background work counts as working.
 func countStatuses(sessions []*session.Session, bg backgroundMsg) statusCounts {
 	var c statusCounts
 	for _, s := range sessions {
+		if s.Restoring {
+			c.restoring++
+			continue
+		}
 		switch session.EffectiveStatus(s, bg[s.ID]) {
 		case session.StatusActive:
 			c.working++
@@ -46,6 +50,7 @@ func renderStatusSummary(c statusCounts, budget int) string {
 		label string
 	}
 	parts := []part{
+		{c.restoring, styles.IconRestore, styles.ColorCyan, "restoring"},
 		{c.working, styles.IconActive, styles.ColorGreen, "working"},
 		{c.waiting, styles.IconWaiting, styles.ColorAmber, "needs you"},
 		{c.done, styles.IconDone, styles.ColorBlue, "done"},

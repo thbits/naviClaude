@@ -144,3 +144,10 @@ func TestChangedFilesHintClick(t *testing.T) {
 		t.Errorf("mode = %v after clicking back, want list", m.mode)
 	}
 }
+
+func TestCountStatusesRestoring(t *testing.T) {
+	got := countStatuses([]*session.Session{{ID: "r", Status: session.StatusIdle, Restoring: true}, {ID: "i", Status: session.StatusIdle}}, nil)
+	if want := (statusCounts{restoring: 1, idle: 1}); got != want {
+		t.Errorf("countStatuses = %+v, want %+v", got, want)
+	}
+}

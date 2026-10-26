@@ -51,6 +51,7 @@ func TestActivitySegments(t *testing.T) {
 		{"approximate turn start", active, &session.SessionActivity{TurnStart: ago(75 * time.Minute), TurnStartApprox: true},
 			"⚙ thinking · 1h15m+"},
 		{"active before load", active, nil, "⚙ working"},
+		{"restoring", &session.Session{Status: session.StatusIdle, Restoring: true}, &session.SessionActivity{Tool: "Bash"}, "↻ restoring"},
 		{"needs approval", waiting, &session.SessionActivity{Tool: "Bash", Target: "rm -rf build"},
 			"⏸ needs approval: Bash rm -rf build"},
 		{"question", waiting, &session.SessionActivity{Tool: "AskUserQuestion", Target: "Which approach?"},

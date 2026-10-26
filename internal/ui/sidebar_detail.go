@@ -68,6 +68,9 @@ func activitySegments(s *session.Session, a *session.SessionActivity, now time.T
 	if s.Status == session.StatusClosed {
 		return []segment{seg("closed "+agoText(s.LastActivity, now), styles.ColorDimText)}
 	}
+	if s.Restoring {
+		return []segment{seg(styles.IconRestore+" ", styles.ColorCyan), seg("restoring", gray)}
+	}
 
 	var segs []segment
 	displayedAgent := false

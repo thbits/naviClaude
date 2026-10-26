@@ -214,6 +214,7 @@ type Model struct {
 	liveStateChecked    bool                    // the startup restore finished, so the snapshot may be overwritten
 	liveRecorder        *liveRecorder           // smooths scans before they overwrite the snapshot
 	serverIdentity      tmux.ServerIdentity     // tmux server the snapshot is written for
+	restoring           []resumedSession        // resumed sessions not yet reporting a status
 	restoredLastSession bool                    // one-shot guard: restore the focused session only once at startup
 	unreadHoldPane      string                  // pane set as unread while selected; kept from the seen-clear until the preview moves
 
@@ -523,6 +524,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case restoreDoneMsg:
 		return m, m.applyRestoreDone(msg)
 
+	case restorePendingMsg:
+		return m, m.applyRestorePending(msg)
+
 	case restoreRetryMsg:
 		return m, m.restoreSessionsCmd()
 
@@ -532,6 +536,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.err = msg.err
 		} else {
 			active := m.mergePendingPlaceholder(msg.active)
+			m.markRestoring(active, time.Now())
 			m.activeSessions = active
 			saveCmd = m.saveLiveStateCmd(active)
 			// Pushing active-only would briefly drop closed sessions and jump the
@@ -2139,6 +2144,7 @@ func (m *Model) applySessionRefresh(msg sessionRefreshMsg) tea.Cmd {
 	msg.active = m.dropKilling(msg.active)
 	// Store active sessions for progressive merge.
 	msg.active = m.mergePendingPlaceholder(msg.active)
+	m.markRestoring(msg.active, time.Now())
 	m.activeSessions = msg.active
 
 	// Combine active and closed for the sidebar.
@@ -2741,7 +2747,9 @@ func (m *Model) removeSession(tmuxTarget string) {
 func (m *Model) updateSessionStatus(target string, status session.SessionStatus) {
 	for _, s := range m.sessions {
 		if s.TmuxTarget == target {
-			s.Status = status
+			if !s.Restoring {
+				s.Status = status
+			}
 			break
 		}
 	}

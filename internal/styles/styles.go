@@ -97,6 +97,7 @@ const (
 	IconIdle    = "○" // open circle
 	IconClosed  = "◌" // dotted circle
 	IconDone    = "◉" // fisheye: finished while you were away
+	IconRestore = "↻" // resumed after a tmux restart, still loading
 )
 
 // Nerd Font glyphs for the activity details.

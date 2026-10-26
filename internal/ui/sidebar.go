@@ -1164,6 +1164,9 @@ func statusIconProps(s session.SessionStatus, frame int) (lipgloss.Color, string
 // sessionIconProps is statusIconProps of the effective status plus the hook-raised
 // "finished while you were away" state, which only applies to an idle session.
 func sessionIconProps(s *session.Session, bg session.Background, frame int) (lipgloss.Color, string) {
+	if s.Restoring {
+		return styles.ColorCyan, styles.IconRestore
+	}
 	status := session.EffectiveStatus(s, bg)
 	if status == session.StatusIdle && s.Attention == attention.Done {
 		return styles.ColorBlue, styles.IconDone

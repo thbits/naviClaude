@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -478,5 +479,123 @@ func TestRunRechecksPaneBeforeTyping(t *testing.T) {
 	msg := f.r.run()
 	if len(f.inPane) != 0 || len(f.inSession) != 1 || msg.restored != 1 {
 		t.Fatalf("inPane=%v inSession=%v msg=%+v; typed into a pane that started running claude", f.inPane, f.inSession, msg)
+	}
+}
+
+func TestRunReportsResumedSessions(t *testing.T) {
+	missing := workEntry("b")
+	missing.TmuxSession = "gone"
+	stored := &session.LiveSnapshot{ServerStart: 100, Sessions: []session.LiveEntry{workEntry("a"), missing}}
+	f := newFakeRestorer(t, stored, testServer, 20*time.Second)
+	f.listings = [][]tmux.PaneInfo{{shellPane("work:2.1", "zsh", "/p")}}
+
+	msg := f.r.run()
+	want := []resumedSession{{key: "a", target: "work:2.1"}, {key: "b", target: "gone:9.0"}}
+	if !slices.Equal(msg.resumed, want) {
+		t.Fatalf("resumed = %+v, want %+v", msg.resumed, want)
+	}
+}
+
+func TestCheckCountsPendingRestore(t *testing.T) {
+	stored := &session.LiveSnapshot{ServerStart: 100, Sessions: []session.LiveEntry{workEntry("a"), workEntry("b")}}
+	f := newFakeRestorer(t, stored, testServer, time.Second)
+	if _, n, err := f.r.check(); err != nil || n != 2 {
+		t.Fatalf("check = %d, %v; want 2 pending", n, err)
+	}
+	if len(f.slept) != 0 || f.listCalls != 0 {
+		t.Fatal("check must not wait for resurrect")
+	}
+
+	same := newFakeRestorer(t, &session.LiveSnapshot{ServerStart: 200, Sessions: stored.Sessions}, testServer, time.Hour)
+	if _, n, _ := same.r.check(); n != 0 {
+		t.Fatalf("same server: check = %d, want 0", n)
+	}
+}
+
+func TestRestorePendingShowsNoticeAndRuns(t *testing.T) {
+	m, _ := newRestoreModel(t)
+	m.statusbar.SetSize(200)
+	next, cmd := m.Update(restorePendingMsg{count: 3})
+	m = next.(Model)
+	if view := m.statusbar.View(); !strings.Contains(view, "restoring 3 sessions") {
+		t.Fatalf("status bar = %q, want it to mention restoring 3 sessions", view)
+	}
+	if cmd == nil {
+		t.Fatal("want the restore to run after the pending notice")
+	}
+}
+
+func restoringModel(t *testing.T, since time.Time) Model {
+	t.Helper()
+	m, _ := newRestoreModel(t)
+	m.Update(restoreDoneMsg{info: testServer, restored: 1})
+	m.restoring = []resumedSession{{key: "a", target: "work:1.0", since: since}}
+	return m
+}
+
+func TestMarkRestoringHidesHeuristicWaiting(t *testing.T) {
+	now := time.Unix(1000, 0)
+	m := restoringModel(t, now)
+	s := &session.Session{ID: "a", TmuxTarget: "work:1.0", Status: session.StatusWaiting}
+	m.markRestoring([]*session.Session{s}, now.Add(5*time.Second))
+	if !s.Restoring || s.Status != session.StatusIdle {
+		t.Fatalf("session = restoring %v status %v, want restoring and idle", s.Restoring, s.Status)
+	}
+}
+
+func TestMarkRestoringMatchesPaneWhenIDDiffers(t *testing.T) {
+	now := time.Unix(1000, 0)
+	m := restoringModel(t, now)
+	s := &session.Session{ID: "other", TmuxTarget: "work:1.0", Status: session.StatusWaiting}
+	m.markRestoring([]*session.Session{s}, now)
+	if !s.Restoring {
+		t.Fatal("want the session in the restored pane marked restoring")
+	}
+}
+
+func TestMarkRestoringEndsOnNativeStatus(t *testing.T) {
+	now := time.Unix(1000, 0)
+	m := restoringModel(t, now)
+	s := &session.Session{ID: "a", TmuxTarget: "work:1.0", Status: session.StatusIdle, NativeStatus: true}
+	m.markRestoring([]*session.Session{s}, now)
+	if s.Restoring || len(m.restoring) != 0 {
+		t.Fatalf("native idle status: restoring %v, %d left; want restoring over", s.Restoring, len(m.restoring))
+	}
+
+	// Claude's own waiting status is a real prompt and must show.
+	m = restoringModel(t, now)
+	s = &session.Session{ID: "a", TmuxTarget: "work:1.0", Status: session.StatusWaiting, NativeStatus: true, WaitingFor: "permission prompt"}
+	m.markRestoring([]*session.Session{s}, now)
+	if s.Restoring || s.Status != session.StatusWaiting || s.WaitingFor == "" {
+		t.Fatalf("native waiting: restoring %v status %v, want the prompt shown", s.Restoring, s.Status)
+	}
+}
+
+func TestMarkRestoringExpires(t *testing.T) {
+	now := time.Unix(1000, 0)
+	m := restoringModel(t, now)
+	s := &session.Session{ID: "a", TmuxTarget: "work:1.0", Status: session.StatusWaiting}
+	m.markRestoring([]*session.Session{s}, now.Add(restoringMaxAge+time.Second))
+	if s.Restoring || s.Status != session.StatusWaiting || len(m.restoring) != 0 {
+		t.Fatalf("expired: restoring %v status %v, want the real status back", s.Restoring, s.Status)
+	}
+}
+
+func TestRestoreDoneStartsRestoring(t *testing.T) {
+	m, _ := newRestoreModel(t)
+	next, _ := m.Update(restoreDoneMsg{info: testServer, restored: 1, resumed: []resumedSession{{key: "a", target: "work:1.0"}}})
+	m = next.(Model)
+	if len(m.restoring) != 1 || m.restoring[0].since.IsZero() {
+		t.Fatalf("restoring = %+v, want one timed entry", m.restoring)
+	}
+}
+
+func TestCaptureWaitingIgnoredWhileRestoring(t *testing.T) {
+	m, _ := newRestoreModel(t)
+	s := &session.Session{ID: "a", TmuxTarget: "work:1.0", Status: session.StatusIdle, Restoring: true}
+	m.sessions = []*session.Session{s}
+	m.updateSessionStatus("work:1.0", session.StatusWaiting)
+	if s.Status != session.StatusIdle {
+		t.Fatalf("status = %v, want idle while restoring", s.Status)
 	}
 }

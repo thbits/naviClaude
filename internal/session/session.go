@@ -55,6 +55,10 @@ type Session struct {
 	// rather than pane/CPU heuristics.
 	NativeStatus bool
 
+	// Restoring is true while a session resumed after a tmux restart has not yet
+	// reported its own status; Status is held at Idle meanwhile.
+	Restoring bool
+
 	// WaitingFor is the harness's reason while Waiting, e.g. "permission prompt".
 	WaitingFor string
 

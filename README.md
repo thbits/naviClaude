@@ -223,7 +223,7 @@ While naviClaude is open it records which conversation runs in which tmux pane, 
 - otherwise in a **new window** of the same tmux session;
 - otherwise in a **recreated tmux session** of the same name.
 
-It waits until the server is at least 15 seconds old and the pane list has stopped changing, so resurrect can finish first, then shows `restored N sessions` in the status bar. It never resumes anything on the server it recorded on, skips sessions that are already running, only types into a pane that is still an idle shell, lets one naviClaude restore at a time, and does not move your cursor or switch windows. Set `restore_sessions: false` to turn it off.
+It waits until the server is at least 15 seconds old and the pane list has stopped changing, so resurrect can finish first; the status bar shows `↻ restoring N sessions…` meanwhile and `restored N sessions` once done. Each resumed session shows `↻ restoring` until Claude reports its own status (at most a minute), instead of a guess made from its loading screen; a prompt Claude itself reports always shows. It never resumes anything on the server it recorded on, skips sessions that are already running, only types into a pane that is still an idle shell, lets one naviClaude restore at a time, and does not move your cursor or switch windows. Set `restore_sessions: false` to turn it off.
 
 Limitations, by design (no hooks or daemon are involved):
 

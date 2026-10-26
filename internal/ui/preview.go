@@ -346,6 +346,9 @@ func (m PreviewModel) renderHeader() string {
 			statusLabel = "DONE"
 		}
 	}
+	if s.Restoring {
+		statusLabel = "RESTORING"
+	}
 
 	// Right-side metrics as plain strings (styled per render path below). Last
 	// activity is left to the sidebar row, which already shows it.
@@ -411,6 +414,9 @@ func (m PreviewModel) renderHeader() string {
 			statusFg = styles.ColorGreen
 		case session.StatusWaiting:
 			statusFg = styles.ColorAmber
+		}
+		if s.Restoring {
+			statusFg = styles.ColorCyan
 		}
 		var bandLeft []string
 		bandLeft = append(bandLeft, lipgloss.NewStyle().Foreground(statusFg).Background(bg).Bold(true).Render(statusLabel))

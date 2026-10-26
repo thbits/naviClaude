@@ -14,6 +14,7 @@ import (
 
 	"github.com/thbits/naviClaude/internal/harness"
 	"github.com/thbits/naviClaude/internal/session"
+	"github.com/thbits/naviClaude/internal/styles"
 	"github.com/thbits/naviClaude/internal/tmux"
 )
 
@@ -150,9 +151,21 @@ type restoreRetryMsg struct{}
 type restoreDoneMsg struct {
 	info     tmux.ServerIdentity
 	restored int
+	resumed  []resumedSession
 	skipped  int
 	errs     []error
 	err      error
+}
+
+// restorePendingMsg reports a restore about to wait for resurrect, so the user
+// knows to keep naviClaude open.
+type restorePendingMsg struct{ count int }
+
+// resumedSession is a session a restore resumed, shown as restoring until it
+// reports its own status.
+type resumedSession struct {
+	key, target string
+	since       time.Time
 }
 
 // restorer resumes the sessions a previous tmux server was running; every
@@ -172,14 +185,26 @@ type restorer struct {
 	sleep           func(time.Duration)
 }
 
+// check returns how many stored sessions an earlier tmux server left to restore.
+func (r restorer) check() (tmux.ServerIdentity, int, error) {
+	info, err := r.serverIdentity()
+	if err != nil {
+		return info, 0, err
+	}
+	snap, ok := r.store.Get(info.SocketPath)
+	if !ok || snap.ServerStart == info.StartTime {
+		return info, 0, nil
+	}
+	return info, len(snap.Sessions), nil
+}
+
 // run restores the stored snapshot when it came from an earlier tmux server.
 func (r restorer) run() restoreDoneMsg {
-	info, err := r.serverIdentity()
+	info, n, err := r.check()
 	if err != nil {
 		return restoreDoneMsg{err: err}
 	}
-	snap, ok := r.store.Get(info.SocketPath)
-	if !ok || len(snap.Sessions) == 0 || snap.ServerStart == info.StartTime {
+	if n == 0 {
 		return restoreDoneMsg{info: info}
 	}
 
@@ -189,7 +214,8 @@ func (r restorer) run() restoreDoneMsg {
 	}
 	defer release()
 	// Another instance may have restored while this one waited for the lock.
-	if snap, ok = r.store.Get(info.SocketPath); !ok || snap.ServerStart == info.StartTime {
+	snap, ok := r.store.Get(info.SocketPath)
+	if !ok || len(snap.Sessions) == 0 || snap.ServerStart == info.StartTime {
 		return restoreDoneMsg{info: info}
 	}
 
@@ -203,16 +229,18 @@ func (r restorer) run() restoreDoneMsg {
 	msg := restoreDoneMsg{info: info, skipped: skipped}
 	for _, a := range actions {
 		sess := entrySession(a.Entry)
+		target := a.Pane
 		if a.Kind == restoreSamePane && r.stillShell(a.Pane) {
 			err = r.resumeInPane(sess, a.Pane, a.Command)
 		} else {
-			_, err = r.resumeInSession(sess, a.Entry.TmuxSession, a.Command)
+			target, err = r.resumeInSession(sess, a.Entry.TmuxSession, a.Command)
 		}
 		if err != nil {
 			msg.errs = append(msg.errs, fmt.Errorf("%s: %w", a.Entry.Project, err))
 			continue
 		}
 		msg.restored++
+		msg.resumed = append(msg.resumed, resumedSession{key: sess.Key(), target: target})
 	}
 	// Mark the snapshot as this server's so no later launch restores it again.
 	_, _ = r.store.SaveIfChanged(info.SocketPath, session.LiveSnapshot{
@@ -276,9 +304,30 @@ func lockRestore() (func(), error) {
 	return session.TryLockFile(filepath.Join(filepath.Dir(path), "restore.lock"))
 }
 
-// restoreSessionsCmd runs the startup restore off the UI goroutine.
+// restoreSessionsCmd checks for sessions to restore and reports them as pending,
+// before the slow wait for resurrect starts.
 func (m Model) restoreSessionsCmd() tea.Cmd {
-	r := restorer{
+	r := m.newRestorer()
+	return func() tea.Msg {
+		info, n, err := r.check()
+		switch {
+		case err != nil:
+			return restoreDoneMsg{err: err}
+		case n == 0:
+			return restoreDoneMsg{info: info}
+		}
+		return restorePendingMsg{count: n}
+	}
+}
+
+// runRestoreCmd runs the startup restore off the UI goroutine.
+func (m Model) runRestoreCmd() tea.Cmd {
+	r := m.newRestorer()
+	return func() tea.Msg { return r.run() }
+}
+
+func (m Model) newRestorer() restorer {
+	return restorer{
 		store:           m.liveState,
 		reg:             m.registry,
 		serverIdentity:  m.tmuxClient.ServerIdentity,
@@ -292,7 +341,19 @@ func (m Model) restoreSessionsCmd() tea.Cmd {
 		now:             time.Now,
 		sleep:           time.Sleep,
 	}
-	return func() tea.Msg { return r.run() }
+}
+
+func restoringNotice(n int) string {
+	if n == 1 {
+		return styles.IconRestore + " restoring 1 session…"
+	}
+	return fmt.Sprintf("%s restoring %d sessions…", styles.IconRestore, n)
+}
+
+// applyRestorePending tells the user a restore is waiting for tmux-resurrect.
+func (m *Model) applyRestorePending(msg restorePendingMsg) tea.Cmd {
+	m.statusbar.SetNotice(restoringNotice(msg.count))
+	return m.runRestoreCmd()
 }
 
 // applyRestoreDone opens the snapshot gate and reports the outcome; a failed check
@@ -304,6 +365,11 @@ func (m *Model) applyRestoreDone(msg restoreDoneMsg) tea.Cmd {
 	}
 	m.serverIdentity = msg.info
 	m.liveStateChecked = true
+	now := time.Now()
+	for _, r := range msg.resumed {
+		r.since = now
+		m.restoring = append(m.restoring, r)
+	}
 	switch {
 	case len(msg.errs) > 0:
 		m.fail(fmt.Errorf("restored %d sessions, %d failed: %w", msg.restored, len(msg.errs), msg.errs[0]))
@@ -383,4 +449,36 @@ func (m Model) saveLiveStateCmd(active []*session.Session) tea.Cmd {
 		})
 		return nil
 	}
+}
+
+// restoringMaxAge ends the restoring state for a session that never reports a
+// status of its own.
+const restoringMaxAge = 60 * time.Second
+
+// markRestoring holds resumed sessions at "restoring" until their harness reports
+// a status: until then the pane heuristics can read a loading conversation as a prompt.
+func (m *Model) markRestoring(active []*session.Session, now time.Time) {
+	var kept []resumedSession
+	for _, r := range m.restoring {
+		if now.Sub(r.since) > restoringMaxAge {
+			continue
+		}
+		var s *session.Session
+		for _, a := range active {
+			if a.Key() == r.key || a.TmuxTarget == r.target {
+				s = a
+				break
+			}
+		}
+		if s != nil && s.NativeStatus {
+			continue
+		}
+		kept = append(kept, r)
+		if s != nil {
+			s.Restoring = true
+			s.Status = session.StatusIdle
+			s.WaitingFor = ""
+		}
+	}
+	m.restoring = kept
 }
