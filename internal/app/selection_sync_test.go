@@ -142,6 +142,35 @@ func TestRepoCountsLoadWithChangedFilesPanelClosed(t *testing.T) {
 	if cmd := m.maybeRefreshChangedFilesCmd(); cmd == nil {
 		t.Error("an advanced stamp must refresh the repo-line counts with the panel closed")
 	}
+	if cmd := m.maybeRefreshChangedFilesCmd(); cmd != nil {
+		t.Error("a reload still in flight for this stamp must not be launched again")
+	}
+}
+
+// A reload that lands while the cursor is briefly elsewhere is dropped; landing
+// back on the session must load again rather than keep the stale list.
+func TestDroppedChangedFilesReloadsOnReturn(t *testing.T) {
+	m, _ := clickModel(t)
+	stamp := time.Unix(1000, 0)
+	m.registry = harness.NewRegistry(filesHarness{stamp: &stamp})
+	m.afterSelectionChange()
+	sel := m.sidebar.SelectedSession()
+	send(t, m, loadChangedFilesCmd(m.harnessFor(sel), sel)())
+
+	stamp = stamp.Add(time.Second)
+	cmd := m.maybeRefreshChangedFilesCmd()
+	if cmd == nil {
+		t.Fatal("an advanced stamp must start a reload")
+	}
+	m.sidebar.MoveCursor(1)
+	send(t, m, cmd())
+	m.sidebar.MoveCursor(-1)
+	if m.sidebar.SelectedSession().ID != sel.ID {
+		t.Fatalf("precondition: cursor back on %s", sel.ID)
+	}
+	if cmd := m.maybeRefreshChangedFilesCmd(); cmd == nil {
+		t.Error("the dropped reload must be retried once the cursor returns")
+	}
 }
 
 // A trackpad flick sends dozens of wheel ticks; only the final selection may
@@ -267,24 +296,6 @@ func TestRepoCountsLoadForStartupSelection(t *testing.T) {
 	}
 }
 
-func TestSessionTickSkipsWhileRefreshInFlight(t *testing.T) {
-	m, _ := clickModel(t)
-	send(t, m, tickSessionMsg{})
-	if !m.refreshInFlight {
-		t.Fatal("tick must mark the refresh in flight")
-	}
-	inFlight := len(send(t, m, tickSessionMsg{})().(tea.BatchMsg))
-	send(t, m, sessionRefreshMsg{err: errTestRefresh})
-	if m.refreshInFlight {
-		t.Error("a landed refresh must clear the in-flight gate")
-	}
-	if landed := len(send(t, m, tickSessionMsg{})().(tea.BatchMsg)); landed != inFlight+1 {
-		t.Errorf("tick cmds: %d in flight, %d after landing; only the latter may refresh", inFlight, landed)
-	}
-}
-
-var errTestRefresh = errors.New("refresh failed")
-
 // A just-started Claude has no per-PID metadata yet, so detection briefly
 // borrows the cwd's newest transcript ID (another live session's) before the
 // real one appears. The cursor must stay on the new pane through that.
@@ -313,3 +324,21 @@ func TestNewSessionKeepsFocusWhenDetectedIDChanges(t *testing.T) {
 		t.Errorf("after ID resolved cursor jumped to %+v, want zzmouse:0.9", s)
 	}
 }
+
+func TestSessionTickSkipsWhileRefreshInFlight(t *testing.T) {
+	m, _ := clickModel(t)
+	send(t, m, tickSessionMsg{})
+	if !m.refreshInFlight {
+		t.Fatal("tick must mark the refresh in flight")
+	}
+	inFlight := len(send(t, m, tickSessionMsg{})().(tea.BatchMsg))
+	send(t, m, sessionRefreshMsg{err: errTestRefresh})
+	if m.refreshInFlight {
+		t.Error("a landed refresh must clear the in-flight gate")
+	}
+	if landed := len(send(t, m, tickSessionMsg{})().(tea.BatchMsg)); landed != inFlight+1 {
+		t.Errorf("tick cmds: %d in flight, %d after landing; only the latter may refresh", inFlight, landed)
+	}
+}
+
+var errTestRefresh = errors.New("refresh failed")

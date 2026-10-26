@@ -514,6 +514,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.changedFilesMtime = msg.mtime
 			m.rightSidebar.SetFiles(msg.files, sel.CWD)
 			m.sidebar.SetChangedFiles(msg.sessionID, msg.files)
+		} else if msg.sessionID == m.changedFilesSessionID {
+			// The tick already claimed this load's stamp; forget the session so
+			// settling back on it reloads instead of keeping the stale list.
+			m.changedFilesSessionID = ""
 		}
 		return m, nil
 
@@ -2646,9 +2650,15 @@ func (m *Model) maybeRefreshChangedFilesCmd() tea.Cmd {
 		return nil // initial (or post-switch) load still in flight
 	}
 	cf, ok := harness.AsChangedFiles(m.harnessFor(sel))
-	if !ok || !cf.ChangeStamp(sel).After(m.changedFilesMtime) {
+	if !ok {
 		return nil
 	}
+	stamp := cf.ChangeStamp(sel)
+	if !stamp.After(m.changedFilesMtime) {
+		return nil
+	}
+	// Claim the stamp at launch so a load slower than the tick isn't launched again.
+	m.changedFilesMtime = stamp
 	return loadChangedFilesCmd(m.harnessFor(sel), sel)
 }
 

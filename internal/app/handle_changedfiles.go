@@ -32,9 +32,11 @@ func loadChangedFilesCmd(h harness.Harness, sess *session.Session) tea.Cmd {
 		if h == nil || !ok {
 			return changedFilesMsg{sessionID: sess.ID}
 		}
+		// Stamp before reading so an append landing mid-load triggers another refresh.
+		mtime := cf.ChangeStamp(sess)
 		files, _ := cf.LoadChangedFiles(sess)
 		applyGitCounts(files, session.GitDiffStats(sess.CWD))
-		return changedFilesMsg{sessionID: sess.ID, files: files, mtime: cf.ChangeStamp(sess)}
+		return changedFilesMsg{sessionID: sess.ID, files: files, mtime: mtime}
 	}
 }
 
