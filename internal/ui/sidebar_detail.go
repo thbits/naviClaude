@@ -85,7 +85,7 @@ func activitySegments(s *session.Session, a *session.SessionActivity, now time.T
 		bg := session.Background{Agents: a.Agents, Shells: a.Shells, Monitors: a.Monitors}
 		if a.Tool == "" && a.TurnEnded && bg.Busy() {
 			// The main thread is done; the pane stays busy only for background work.
-			return append(backgroundSegments(bg), seg(" running", styles.ColorGray))
+			return backgroundSegments(bg)
 		}
 		if (a.Tool == "Agent" || a.Tool == "Task") && bg.Agents == 1 {
 			bg.Agents = 0 // the one agent is already the tool shown
