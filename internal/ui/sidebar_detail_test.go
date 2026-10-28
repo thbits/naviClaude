@@ -34,23 +34,23 @@ func TestActivitySegments(t *testing.T) {
 		want string
 	}{
 		{"working tool", active, &session.SessionActivity{Tool: "Bash", Target: "go test ./...", TurnStart: ago(42 * time.Second)},
-			"⚙ Bash · go test ./... · 42s"},
+			"Bash · go test ./... · 42s"},
 		{"working edit", active, &session.SessionActivity{Tool: "Edit", Target: "sidebar.go", TurnStart: ago(3 * time.Second)},
-			"⚙ Edit · sidebar.go · 3s"},
+			"Edit · sidebar.go · 3s"},
 		{"single agent shows no suffix", active, &session.SessionActivity{Tool: "Agent", Target: "Fix wrong context", TurnStart: ago(2 * time.Minute), Agents: 1},
-			"⚙ Agent · Fix wrong context · 2m"},
+			"Agent · Fix wrong context · 2m"},
 		{"thinking with agents", active, &session.SessionActivity{TurnStart: ago(42 * time.Second), Agents: 3},
-			"⚙ thinking · 42s · " + styles.IconAgent + " 3 agents"},
+			styles.IconAgent + " 3 agents · " + styles.IconThinking + " thinking · 42s"},
 		{"only background agents left", active, &session.SessionActivity{TurnStart: ago(18 * time.Minute), TurnEnded: true, Agents: 4},
-			"⚙ " + styles.IconAgent + " 4 agents running"},
+			styles.IconAgent + " 4 agents running"},
 		{"agents and shells left", active, &session.SessionActivity{TurnEnded: true, Agents: 1, Shells: 2},
-			"⚙ " + styles.IconAgent + " 1 agent · " + styles.IconShell + " 2 shells running"},
-		{"only shells left", active, &session.SessionActivity{TurnEnded: true, Shells: 1}, "⚙ " + styles.IconShell + " 1 shell running"},
+			styles.IconAgent + " 1 agent · " + styles.IconShell + " 2 shells running"},
+		{"only shells left", active, &session.SessionActivity{TurnEnded: true, Shells: 1}, styles.IconShell + " 1 shell running"},
 		{"working with a shell", active, &session.SessionActivity{Tool: "Read", Target: "a.go", TurnStart: ago(5 * time.Second), Shells: 1},
-			"⚙ Read · a.go · 5s · " + styles.IconShell + " 1 shell"},
+			styles.IconShell + " 1 shell · Read · a.go · 5s"},
 		{"approximate turn start", active, &session.SessionActivity{TurnStart: ago(75 * time.Minute), TurnStartApprox: true},
-			"⚙ thinking · 1h15m+"},
-		{"active before load", active, nil, "⚙ working"},
+			styles.IconThinking + " thinking · 1h15m+"},
+		{"active before load", active, nil, "working"},
 		{"restoring", &session.Session{Status: session.StatusIdle, Restoring: true}, &session.SessionActivity{Tool: "Bash"}, "↻ restoring"},
 		{"needs approval", waiting, &session.SessionActivity{Tool: "Bash", Target: "rm -rf build"},
 			"⏸ needs approval: Bash rm -rf build"},
@@ -81,13 +81,13 @@ func TestActivitySegments(t *testing.T) {
 	}
 }
 
-// The flexible target shrinks first so elapsed time and agents stay visible.
+// The flexible target shrinks first so agents and elapsed time stay visible.
 func TestRenderSegmentsShrinksTarget(t *testing.T) {
 	now := time.Now()
 	segs := activitySegments(&session.Session{Status: session.StatusActive},
 		&session.SessionActivity{Tool: "Bash", Target: "go test -race -count=1 ./internal/...", TurnStart: now.Add(-42 * time.Second), Agents: 3}, now)
 	got := ansi.Strip(renderSegments(segs, styles.ColorSelectionDim, 32))
-	if want := "⚙ Bash · go … · 42s · " + styles.IconAgent + " 3 agents"; got != want {
+	if want := styles.IconAgent + " 3 agents · Bash · go te… · 42s"; got != want {
 		t.Errorf("got %q (%d cells), want %q", got, ansi.StringWidth(got), want)
 	}
 	if got := ansi.StringWidth(renderSegments(segs, styles.ColorSelectionDim, 12)); got > 12 {
@@ -188,7 +188,7 @@ func TestSelectedDetailLinesNeverWrap(t *testing.T) {
 			}
 		}
 		body := ansi.Strip(sb.View())
-		for _, want := range []string{"⚙ Bash", "ctx ", "⎇ feature"} {
+		for _, want := range []string{styles.IconAgent + " 4 agents · Bash", "ctx ", "⎇ feature"} {
 			if !strings.Contains(body, want) {
 				t.Errorf("width %d: missing %q in\n%s", width, want, body)
 			}
@@ -330,7 +330,7 @@ func TestCtxLimitResolvedAtRender(t *testing.T) {
 
 // Running agents and shells show on every row, not only the selected one.
 func TestBackgroundLineOnUnselectedRows(t *testing.T) {
-	const width = 35
+	const width = 45
 	sb := NewSidebar(width, 30)
 	sb.SetSize(width, 30)
 	now := time.Now()
@@ -340,10 +340,10 @@ func TestBackgroundLineOnUnselectedRows(t *testing.T) {
 	}
 	sb.SetSessions([]*session.Session{mk("1"), mk("2")})
 	sb.SetCursor(1)
-	sb.SetBackground(map[string]session.Background{"2": {Agents: 2, Shells: 1}})
+	sb.SetBackground(map[string]session.Background{"2": {Agents: 2, Shells: 1, Thinking: true}})
 
 	body := ansi.Strip(sb.View())
-	if want := styles.IconAgent + " 2 agents · " + styles.IconShell + " 1 shell"; !strings.Contains(body, want) {
+	if want := styles.IconAgent + " 2 agents · " + styles.IconShell + " 1 shell · " + styles.IconThinking + " thinking"; !strings.Contains(body, want) {
 		t.Errorf("unselected row lacks %q:\n%s", want, body)
 	}
 	for i, l := range strings.Split(sb.View(), "\n") {

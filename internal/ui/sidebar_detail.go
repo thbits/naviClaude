@@ -73,29 +73,34 @@ func activitySegments(s *session.Session, a *session.SessionActivity, now time.T
 	}
 
 	var segs []segment
-	displayedAgent := false
 	switch {
 	case s.Status == session.StatusWaiting || (s.Status == session.StatusActive && a != nil && waitsOnUser(a.Tool)):
 		segs = waitingSegments(s, a)
 	case s.Status == session.StatusActive:
-		segs = []segment{seg("⚙ ", styles.ColorGreen)}
+		// No status icon: the row's breathing dot already shows it is working.
 		if a == nil {
-			segs = append(segs, seg("working", styles.ColorFg))
+			segs = []segment{seg("working", styles.ColorFg)}
 			break
 		}
-		if a.Tool == "" && a.TurnEnded && (a.Agents > 0 || a.Shells > 0) {
+		bg := session.Background{Agents: a.Agents, Shells: a.Shells}
+		if a.Tool == "" && a.TurnEnded && bg.Busy() {
 			// The main thread is done; the pane stays busy only for background work.
-			segs = append(segs, backgroundSegments(session.Background{Agents: a.Agents, Shells: a.Shells})...)
-			return append(segs, seg(" running", styles.ColorGray))
+			return append(backgroundSegments(bg), seg(" running", styles.ColorGray))
+		}
+		if (a.Tool == "Agent" || a.Tool == "Task") && bg.Agents == 1 {
+			bg.Agents = 0 // the one agent is already the tool shown
+		}
+		// Counts lead since the tool and elapsed time change from tick to tick.
+		if bgSegs := backgroundSegments(bg); len(bgSegs) > 0 {
+			segs = append(bgSegs, seg(" · ", gray))
 		}
 		if a.Tool != "" {
-			displayedAgent = a.Tool == "Agent" || a.Tool == "Task"
 			segs = append(segs, seg(a.Tool, styles.ColorFg))
 			if a.Target != "" {
 				segs = append(segs, flexSeg(" · "+a.Target, gray))
 			}
 		} else {
-			segs = append(segs, seg("thinking", styles.ColorFg))
+			segs = append(segs, seg(styles.IconThinking+" ", styles.ColorGreen), seg("thinking", styles.ColorFg))
 		}
 		if !a.TurnStart.IsZero() {
 			elapsed := elapsedText(now.Sub(a.TurnStart))
@@ -104,6 +109,7 @@ func activitySegments(s *session.Session, a *session.SessionActivity, now time.T
 			}
 			segs = append(segs, seg(" · "+elapsed, gray))
 		}
+		return segs
 	case s.Summary == "" && (a == nil || a.LastAssistant.IsZero()):
 		segs = []segment{seg(styles.IconIdle+" ", gray), seg("new session", gray)}
 	default:
@@ -116,9 +122,6 @@ func activitySegments(s *session.Session, a *session.SessionActivity, now time.T
 
 	if a != nil {
 		bg := session.Background{Agents: a.Agents, Shells: a.Shells}
-		if displayedAgent && bg.Agents == 1 {
-			bg.Agents = 0 // the one agent is already the tool shown
-		}
 		if bgSegs := backgroundSegments(bg); len(bgSegs) > 0 {
 			segs = append(append(segs, seg(" · ", gray)), bgSegs...)
 		}
@@ -126,7 +129,8 @@ func activitySegments(s *session.Session, a *session.SessionActivity, now time.T
 	return segs
 }
 
-// backgroundSegments renders "󰚩 2 agents ·  1 shell", leaving out a zero count.
+// backgroundSegments renders "󰚩 2 agents ·  1 shell · 󰧑 thinking", leaving out
+// a zero count.
 func backgroundSegments(bg session.Background) []segment {
 	var segs []segment
 	if bg.Agents > 0 {
@@ -137,6 +141,9 @@ func backgroundSegments(bg session.Background) []segment {
 			segs = append(segs, seg(" · ", styles.ColorGray))
 		}
 		segs = append(segs, seg(fmt.Sprintf("%s %d %s", styles.IconShell, bg.Shells, plural(bg.Shells, "shell")), styles.ColorCyan))
+	}
+	if bg.Thinking && len(segs) > 0 {
+		segs = append(segs, seg(" · ", styles.ColorGray), seg(styles.IconThinking+" ", styles.ColorGreen), seg("thinking", styles.ColorGray))
 	}
 	return segs
 }

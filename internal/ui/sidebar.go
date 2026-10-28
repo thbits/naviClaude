@@ -1136,7 +1136,7 @@ func (m SidebarModel) renderSessionItem(s *session.Session, isCursor, hovered bo
 	}
 	line2 := summaryStyle.Render(summary)
 
-	if bg := m.background[s.ID]; s.ID != "" && s.Status != session.StatusClosed && bg != (session.Background{}) {
+	if bg := m.background[s.ID]; s.ID != "" && s.Status != session.StatusClosed && bg.Busy() {
 		// Same indent as the summary; the selected row shows this in its activity line.
 		line3 := pad(4) + renderSegments(backgroundSegments(bg), hoverBg, m.width-5)
 		if w := lipgloss.Width(line3); hovered && w < m.width {

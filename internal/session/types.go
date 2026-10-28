@@ -52,8 +52,9 @@ type SessionActivity struct {
 
 // Background counts the subagents and background shells a session has running.
 type Background struct {
-	Agents int
-	Shells int
+	Agents   int
+	Shells   int
+	Thinking bool // the main thread is mid-turn with no tool in flight
 }
 
 // Busy reports whether any subagent or shell is still running.

@@ -106,9 +106,10 @@ const (
 
 // Nerd Font glyphs for the activity details.
 const (
-	IconAgent = "\U000f06a9" // nf-md-robot: running subagents
-	IconShell = "\uf120"     // nf-fa-terminal: background shell commands
-	IconRepo  = "\uea62"     // nf-cod-repo: git repository name
+	IconAgent    = "\U000f06a9" // nf-md-robot: running subagents
+	IconShell    = "\uf120"     // nf-fa-terminal: background shell commands
+	IconRepo     = "\uea62"     // nf-cod-repo: git repository name
+	IconThinking = "\U000f09d1" // nf-md-brain: main thread thinking between tools
 )
 
 // SidebarWaitingFlash is applied during the active->waiting transition flash.

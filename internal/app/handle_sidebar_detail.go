@@ -110,7 +110,7 @@ func (m *Model) backgroundCmd() tea.Cmd {
 		counts := backgroundMsg{}
 		for _, j := range jobs {
 			if a, _ := j.h.LoadActivity(&j.snap); a != nil && (a.Agents > 0 || a.Shells > 0) {
-				counts[j.snap.ID] = session.Background{Agents: a.Agents, Shells: a.Shells}
+				counts[j.snap.ID] = session.Background{Agents: a.Agents, Shells: a.Shells, Thinking: a.Tool == "" && !a.TurnEnded}
 			}
 		}
 		return counts
