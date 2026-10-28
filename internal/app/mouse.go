@@ -219,29 +219,26 @@ func (m Model) finishSidebarDrag(x int) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// finishPreviewSelection copies a drag's text to the clipboard; a release where
-// the press landed is a click, which focuses the preview.
+// finishPreviewSelection focuses the preview after a click or a drag, and copies
+// a drag's text to the clipboard.
 func (m Model) finishPreviewSelection(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	m.preview.ExtendSelection(m.previewPoint(msg.X, msg.Y))
 	text, dragged := m.preview.EndSelection()
-	if !dragged {
-		// Focus passthrough only if the selection can receive forwarded keys
-		// (mirrors nextFocusMode's canPassthrough).
-		sel := m.sidebar.SelectedSession()
-		if sel != nil && sel.Status != session.StatusClosed && sel.TmuxTarget != "" {
-			return m, m.setFocus(ModePassthrough)
-		}
-		return m, nil
+	var focus tea.Cmd
+	// Focus passthrough only if the selection can receive forwarded keys
+	// (mirrors nextFocusMode's canPassthrough).
+	if sel := m.sidebar.SelectedSession(); sel != nil && sel.Status != session.StatusClosed && sel.TmuxTarget != "" {
+		focus = m.setFocus(ModePassthrough)
 	}
-	if strings.TrimSpace(text) == "" {
-		return m, nil
+	if !dragged || strings.TrimSpace(text) == "" {
+		return m, focus
 	}
 	write := m.copyText
 	if write == nil {
 		write = copyToClipboard
 	}
 	lines := strings.Count(text, "\n") + 1
-	return m, func() tea.Msg { return clipboardCopiedMsg{lines: lines, err: write(text)} }
+	return m, tea.Batch(focus, func() tea.Msg { return clipboardCopiedMsg{lines: lines, err: write(text)} })
 }
 
 // clipboardCopiedMsg reports a preview selection copy.

@@ -35,13 +35,13 @@ func selectModel(t *testing.T) (*Model, *string) {
 	return m, &copied
 }
 
-func TestPreviewDragCopiesWithoutFocus(t *testing.T) {
+func TestPreviewDragCopiesAndFocuses(t *testing.T) {
 	m, copied := selectModel(t)
 	press(m, tea.MouseButtonLeft, xPreview+2, yPreview)
 	motion(m, xPreview+6, yPreview+1)
 	cmd := releaseCmd(m, xPreview+3, yPreview+1)
-	if m.mode != ModeList {
-		t.Errorf("mode = %v, want list: a drag must not enter passthrough", m.mode)
+	if m.mode != ModePassthrough {
+		t.Errorf("mode = %v, want passthrough after a drag", m.mode)
 	}
 	if cmd == nil {
 		t.Fatal("drag should return a copy command")
