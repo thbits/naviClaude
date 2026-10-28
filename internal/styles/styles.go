@@ -108,6 +108,7 @@ const (
 const (
 	IconAgent    = "\U000f06a9" // nf-md-robot: running subagents
 	IconShell    = "\uf120"     // nf-fa-terminal: background shell commands
+	IconMonitor  = "\U000f0208" // nf-md-eye: Monitor tool watches
 	IconRepo     = "\uea62"     // nf-cod-repo: git repository name
 	IconThinking = "\U000f09d1" // nf-md-brain: main thread thinking between tools
 )

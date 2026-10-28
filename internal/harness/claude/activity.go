@@ -69,7 +69,7 @@ func loadActivity(path string, since time.Time) (*session.SessionActivity, error
 	activityMu.Unlock()
 	if hit && prev.size == fi.Size() && prev.mod.Equal(fi.ModTime()) && prev.since.Equal(since) {
 		act := prev.act
-		act.Shells = countShells(path, since)
+		act.Shells, act.Monitors = countBackground(path, since)
 		return &act, nil
 	}
 
@@ -102,7 +102,7 @@ func loadActivity(path string, since time.Time) (*session.SessionActivity, error
 	activityMu.Lock()
 	activityCache[path] = activityCacheEntry{size: fi.Size(), mod: fi.ModTime(), since: since, act: act}
 	activityMu.Unlock()
-	act.Shells = countShells(path, since)
+	act.Shells, act.Monitors = countBackground(path, since)
 	return &act, nil
 }
 
@@ -181,7 +181,7 @@ var notificationToolUseID = regexp.MustCompile(`<tool-use-id>([^<]+)</tool-use-i
 
 // parseActivity derives the main thread's current activity from transcript lines
 // in file order. Tools and agents recorded before since are dropped; shells
-// are counted separately by countShells.
+// and monitors are counted separately by countBackground.
 // sawTurn reports whether a turn start was in the data.
 func parseActivity(data []byte, truncated bool, since time.Time) (act session.SessionActivity, sawTurn bool) {
 	var (
@@ -218,8 +218,8 @@ func parseActivity(data []byte, truncated bool, since time.Time) (act session.Se
 		if m := notificationToolUseID.FindStringSubmatch(text); m != nil {
 			delete(async, m[1])
 		}
-		// Shell notifications leave the agent floor alone.
-		if !strings.Contains(text, "<summary>Background command") {
+		// Shell and monitor notifications leave the agent floor alone.
+		if !strings.Contains(text, "<summary>Background command") && !strings.Contains(text, "<summary>Monitor") {
 			bgDoneAft++
 		}
 	}

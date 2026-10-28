@@ -109,8 +109,12 @@ func (m *Model) backgroundCmd() tea.Cmd {
 		defer backgroundInflight.Store(false)
 		counts := backgroundMsg{}
 		for _, j := range jobs {
-			if a, _ := j.h.LoadActivity(&j.snap); a != nil && (a.Agents > 0 || a.Shells > 0) {
-				counts[j.snap.ID] = session.Background{Agents: a.Agents, Shells: a.Shells, Thinking: a.Tool == "" && !a.TurnEnded}
+			if a, _ := j.h.LoadActivity(&j.snap); a != nil {
+				bg := session.Background{Agents: a.Agents, Shells: a.Shells, Monitors: a.Monitors}
+				if bg.Busy() {
+					bg.Thinking = a.Tool == "" && !a.TurnEnded
+					counts[j.snap.ID] = bg
+				}
 			}
 		}
 		return counts

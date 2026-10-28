@@ -82,7 +82,7 @@ func activitySegments(s *session.Session, a *session.SessionActivity, now time.T
 			segs = []segment{seg("working", styles.ColorFg)}
 			break
 		}
-		bg := session.Background{Agents: a.Agents, Shells: a.Shells}
+		bg := session.Background{Agents: a.Agents, Shells: a.Shells, Monitors: a.Monitors}
 		if a.Tool == "" && a.TurnEnded && bg.Busy() {
 			// The main thread is done; the pane stays busy only for background work.
 			return append(backgroundSegments(bg), seg(" running", styles.ColorGray))
@@ -121,7 +121,7 @@ func activitySegments(s *session.Session, a *session.SessionActivity, now time.T
 	}
 
 	if a != nil {
-		bg := session.Background{Agents: a.Agents, Shells: a.Shells}
+		bg := session.Background{Agents: a.Agents, Shells: a.Shells, Monitors: a.Monitors}
 		if bgSegs := backgroundSegments(bg); len(bgSegs) > 0 {
 			segs = append(append(segs, seg(" · ", gray)), bgSegs...)
 		}
@@ -129,8 +129,8 @@ func activitySegments(s *session.Session, a *session.SessionActivity, now time.T
 	return segs
 }
 
-// backgroundSegments renders "󰚩 2 agents ·  1 shell · 󰧑 thinking", leaving out
-// a zero count.
+// backgroundSegments renders "󰚩 2 agents ·  1 shell · 󰈈 1 monitor · 󰧑 thinking",
+// leaving out a zero count.
 func backgroundSegments(bg session.Background) []segment {
 	var segs []segment
 	if bg.Agents > 0 {
@@ -141,6 +141,12 @@ func backgroundSegments(bg session.Background) []segment {
 			segs = append(segs, seg(" · ", styles.ColorGray))
 		}
 		segs = append(segs, seg(fmt.Sprintf("%s %d %s", styles.IconShell, bg.Shells, plural(bg.Shells, "shell")), styles.ColorCyan))
+	}
+	if bg.Monitors > 0 {
+		if len(segs) > 0 {
+			segs = append(segs, seg(" · ", styles.ColorGray))
+		}
+		segs = append(segs, seg(fmt.Sprintf("%s %d %s", styles.IconMonitor, bg.Monitors, plural(bg.Monitors, "monitor")), styles.ColorBlue))
 	}
 	if bg.Thinking && len(segs) > 0 {
 		segs = append(segs, seg(" · ", styles.ColorGray), seg(styles.IconThinking+" ", styles.ColorGreen), seg("thinking", styles.ColorGray))

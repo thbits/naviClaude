@@ -46,6 +46,7 @@ type SessionActivity struct {
 	TurnEnded     bool      // the latest turn finished; only background work may remain
 	Agents        int       // subagents still running, foreground or background
 	Shells        int       // background shell commands still running
+	Monitors      int       // Monitor tool watches still running
 	TokensUsed    int       // context fill from the latest assistant usage in the tail
 	Model         string    // model id of the latest main-thread assistant record ("" when none in the tail)
 }
@@ -54,11 +55,12 @@ type SessionActivity struct {
 type Background struct {
 	Agents   int
 	Shells   int
+	Monitors int
 	Thinking bool // the main thread is mid-turn with no tool in flight
 }
 
-// Busy reports whether any subagent or shell is still running.
-func (b Background) Busy() bool { return b.Agents > 0 || b.Shells > 0 }
+// Busy reports whether any subagent, shell or monitor is still running.
+func (b Background) Busy() bool { return b.Agents > 0 || b.Shells > 0 || b.Monitors > 0 }
 
 // EffectiveStatus is s.Status, except an idle session with background work still
 // running is active.

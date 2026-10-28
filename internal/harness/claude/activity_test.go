@@ -239,6 +239,56 @@ func TestLoadActivitySubagentShells(t *testing.T) {
 	}
 }
 
+func monitorResult(sec int, id, task string, timeoutMs int64, persistent bool) string {
+	return jl(map[string]any{"type": "user", "timestamp": ats(sec),
+		"toolUseResult": map[string]any{"taskId": task, "timeoutMs": timeoutMs, "persistent": persistent},
+		"message":       map[string]any{"role": "user", "content": []any{map[string]any{"type": "tool_result", "tool_use_id": id, "content": "Monitor started"}}}})
+}
+
+func monitorEvent(sec int, task string) string {
+	return metaUser(sec, "<task-notification>\n<task-id>"+task+"</task-id>\n<summary>Monitor event: \"x\"</summary>\n<event>tick</event>\n</task-notification>")
+}
+
+func monitorEnded(sec int, id, task string) string {
+	return prompt(sec, "<task-notification>\n<task-id>"+task+"</task-id>\n<tool-use-id>"+id+"</tool-use-id>\n<status>completed</status>\n<summary>Monitor \"x\" stream ended</summary>\n</task-notification>")
+}
+
+func TestLoadActivityMonitors(t *testing.T) {
+	mon := func(sec int, id string) string {
+		return toolUse(sec, id, "Monitor", map[string]any{"description": "watch", "command": "tail -f log"})
+	}
+	const long = int64(100 * 365 * 24 * time.Hour / time.Millisecond)
+	tests := []struct {
+		name                     string
+		lines                    []string
+		shells, monitors, agents int
+	}{
+		{"monitor counts apart from shells", []string{prompt(0, "go"), mon(1, "m1"), monitorResult(1, "m1", "t1", 0, true),
+			toolUse(2, "s1", "Bash", map[string]any{"command": "make watch", "run_in_background": true}), bgShellResult(2, "s1", "b1")}, 1, 1, 0},
+		{"events keep it running", []string{prompt(0, "go"), mon(1, "m1"), monitorResult(1, "m1", "t1", long, false),
+			monitorEvent(5, "t1"), monitorEvent(6, "t1")}, 0, 1, 0},
+		{"stream end clears it", []string{prompt(0, "go"), mon(1, "m1"), monitorResult(1, "m1", "t1", long, false),
+			monitorEvent(5, "t1"), monitorEnded(9, "m1", "t1")}, 0, 0, 0},
+		{"TaskStop clears it", []string{prompt(0, "go"), mon(1, "m1"), monitorResult(1, "m1", "t1", 0, true),
+			toolUse(2, "k1", "TaskStop", map[string]any{"task_id": "t1"})}, 0, 0, 0},
+		{"expired timeout clears it", []string{prompt(0, "go"), mon(1, "m1"), monitorResult(1, "m1", "t1", 60_000, false)}, 0, 0, 0},
+		{"monitor events leave the agent floor alone", []string{prompt(0, "go"), assistantText(1, "ok"), turnEnd(2, 1),
+			monitorEvent(5, "t9"), monitorEvent(6, "t9")}, 0, 0, 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := LoadActivity(writeTranscript(t, tt.lines...))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Shells != tt.shells || got.Monitors != tt.monitors || got.Agents != tt.agents {
+				t.Errorf("shells/monitors/agents = %d/%d/%d, want %d/%d/%d",
+					got.Shells, got.Monitors, got.Agents, tt.shells, tt.monitors, tt.agents)
+			}
+		})
+	}
+}
+
 func sidechain(sec int, id, name string) string {
 	return jl(map[string]any{"type": "assistant", "isSidechain": true, "timestamp": ats(sec), "message": map[string]any{
 		"content": []any{map[string]any{"type": "tool_use", "id": id, "name": name, "input": map[string]any{"command": "ls"}}},

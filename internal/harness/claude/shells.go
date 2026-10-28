@@ -12,15 +12,22 @@ import (
 	"time"
 )
 
-// A background shell often outlives the transcript tail parseActivity reads, and
-// a subagent's shells are logged in its own transcript, so shells are tallied
+// Background shells and monitors often outlive the transcript tail parseActivity
+// reads, and a subagent's are logged in its own transcript, so they are tallied
 // from every transcript of the session, each read once and then incrementally.
 
 type shellLedger struct {
 	size     int64 // bytes consumed, ending at a line boundary
 	since    time.Time
-	launched map[string]string // shell task id -> its tool_use id
+	launched map[string]bgTask // task id -> what it is
 	ended    map[string]bool   // task and tool_use ids that completed or were stopped
+}
+
+// bgTask is a background shell or Monitor launched by a tool call.
+type bgTask struct {
+	toolUseID string
+	monitor   bool
+	expires   time.Time // when a non-persistent monitor times out; zero otherwise
 }
 
 var (
@@ -30,9 +37,9 @@ var (
 
 var notificationTaskID = regexp.MustCompile(`<task-id>([^<]+)</task-id>`)
 
-// countShells returns the background shells still running in the session whose
-// main transcript is path, counting only those launched at or after since.
-func countShells(path string, since time.Time) int {
+// countBackground returns the background shells and monitors still running in
+// the session whose main transcript is path, launched at or after since.
+func countBackground(path string, since time.Time) (shells, monitors int) {
 	files := []string{path}
 	dir := filepath.Join(strings.TrimSuffix(path, ".jsonl"), "subagents")
 	if entries, err := os.ReadDir(dir); err == nil {
@@ -45,27 +52,31 @@ func countShells(path string, since time.Time) int {
 
 	shellMu.Lock()
 	defer shellMu.Unlock()
-	launched := map[string]string{}
+	launched := map[string]bgTask{}
 	ended := map[string]bool{}
 	for _, f := range files {
 		l := updateShellLedger(f, since)
 		if l == nil {
 			continue
 		}
-		for task, id := range l.launched {
-			launched[task] = id
+		for task, bt := range l.launched {
+			launched[task] = bt
 		}
 		for id := range l.ended {
 			ended[id] = true
 		}
 	}
-	n := 0
-	for task, id := range launched {
-		if !ended[task] && !ended[id] {
-			n++
+	now := time.Now()
+	for task, bt := range launched {
+		switch {
+		case ended[task] || ended[bt.toolUseID]:
+		case !bt.monitor:
+			shells++
+		case bt.expires.IsZero() || now.Before(bt.expires):
+			monitors++
 		}
 	}
-	return n
+	return shells, monitors
 }
 
 // updateShellLedger reads what was appended to path since the last call; nil
@@ -78,7 +89,7 @@ func updateShellLedger(path string, since time.Time) *shellLedger {
 	}
 	l := shellLedgers[path]
 	if l == nil || !l.since.Equal(since) || fi.Size() < l.size {
-		l = &shellLedger{since: since, launched: map[string]string{}, ended: map[string]bool{}}
+		l = &shellLedger{since: since, launched: map[string]bgTask{}, ended: map[string]bool{}}
 		shellLedgers[path] = l
 	}
 	if fi.Size() == l.size {
@@ -109,7 +120,8 @@ func updateShellLedger(path string, since time.Time) *shellLedger {
 }
 
 func (l *shellLedger) addLine(line []byte) {
-	if !bytes.Contains(line, []byte("backgroundTaskId")) && !bytes.Contains(line, []byte("task-notification")) &&
+	if !bytes.Contains(line, []byte("backgroundTaskId")) && !bytes.Contains(line, []byte(`"timeoutMs"`)) &&
+		!bytes.Contains(line, []byte("task-notification")) &&
 		!bytes.Contains(line, []byte(`"TaskStop"`)) && !bytes.Contains(line, []byte(`"KillShell"`)) {
 		return
 	}
@@ -149,19 +161,23 @@ func (l *shellLedger) addLine(line []byte) {
 		}
 		text, results := userContent(msg.Content)
 		ts := parseTimestamp(rec.Timestamp)
-		// Shells launched by an earlier run died with its process (e.g. a resumed session).
-		if _, task := asyncLaunch(rec.ToolUseResult); task != "" && len(results) > 0 &&
-			(l.since.IsZero() || ts.IsZero() || !ts.Before(l.since)) {
-			l.launched[task] = results[0]
+		// Tasks launched by an earlier run died with its process (e.g. a resumed session).
+		if len(results) > 0 && (l.since.IsZero() || ts.IsZero() || !ts.Before(l.since)) {
+			if _, task := asyncLaunch(rec.ToolUseResult); task != "" {
+				l.launched[task] = bgTask{toolUseID: results[0]}
+			} else if task, expires, ok := monitorLaunch(rec.ToolUseResult, ts); ok {
+				l.launched[task] = bgTask{toolUseID: results[0], monitor: true, expires: expires}
+			}
 		}
 		l.notified(text)
 	}
 }
 
-// notified records the shell a <task-notification> reports finished; some
-// notifications open with a system preamble, so the tag may not lead.
+// notified records the task a <task-notification> reports finished; some
+// notifications open with a system preamble, so the tag may not lead. A monitor's
+// events carry no status, only its final notice does.
 func (l *shellLedger) notified(text string) {
-	if !strings.Contains(text, "<task-notification>") {
+	if !strings.Contains(text, "<task-notification>") || !strings.Contains(text, "<status>") {
 		return
 	}
 	if m := notificationToolUseID.FindStringSubmatch(text); m != nil {
@@ -170,4 +186,24 @@ func (l *shellLedger) notified(text string) {
 	if m := notificationTaskID.FindStringSubmatch(text); m != nil {
 		l.ended[m[1]] = true
 	}
+}
+
+// monitorLaunch reports a Monitor tool result's task id and, unless it is
+// persistent, when it times out.
+func monitorLaunch(raw json.RawMessage, launched time.Time) (task string, expires time.Time, ok bool) {
+	if len(raw) == 0 || raw[0] != '{' {
+		return "", time.Time{}, false
+	}
+	var r struct {
+		TaskID     string `json:"taskId"`
+		TimeoutMs  int64  `json:"timeoutMs"`
+		Persistent *bool  `json:"persistent"`
+	}
+	if json.Unmarshal(raw, &r) != nil || r.TaskID == "" || r.Persistent == nil {
+		return "", time.Time{}, false
+	}
+	if !*r.Persistent && r.TimeoutMs > 0 && !launched.IsZero() {
+		expires = launched.Add(time.Duration(r.TimeoutMs) * time.Millisecond)
+	}
+	return r.TaskID, expires, true
 }
