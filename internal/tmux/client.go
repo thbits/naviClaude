@@ -93,6 +93,15 @@ func (c *Client) PaneExists(target string) bool {
 	return exec.Command("tmux", "display-message", "-p", "-t", target, "#{pane_id}").Run() == nil
 }
 
+// PaneID returns target's stable pane id (e.g. "%12"), or "" if it can't be read.
+func (c *Client) PaneID(target string) string {
+	out, err := exec.Command("tmux", "display-message", "-p", "-t", target, "#{pane_id}").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
 // SendKeys sends key strokes to a pane.  keys may be a literal string or a
 // named key such as "Enter".
 func (c *Client) SendKeys(target, keys string) error {

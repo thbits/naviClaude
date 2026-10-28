@@ -49,9 +49,6 @@ func TestCoreOnlyHarnessDegradesQuietly(t *testing.T) {
 	if _, ok := m.statsProvider(); ok {
 		t.Error("core-only registry must have no stats provider")
 	}
-	if _, cmd := m.resumeSession(sess); cmd != nil {
-		t.Error("resumeSession must be a quiet no-op without Resumer")
-	}
 	if _, cmd := m.openResumePicker(sess, false); cmd != nil {
 		t.Error("openResumePicker must be a quiet no-op without Resumer")
 	}

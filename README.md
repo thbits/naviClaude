@@ -110,8 +110,10 @@ The title bar shows live counts (`● 2 working · ◎ 1 needs you · ◉ 1 done
 | `Ctrl+U` / `Ctrl+D` | Scroll preview |
 | `/` | Search |
 | `Enter` | Focus an active session (passthrough mode); on a closed session, open the resume picker |
-| `f` | Jump to pane. On a closed session, fast-resume into the current tmux session |
-| `Ctrl+F` | Jump to pane (from passthrough) |
+| `f` | Jump to pane. On a closed session, open the resume picker, then jump to the resumed pane |
+| `Ctrl+F` | Jump to pane (from passthrough or search). In search, a closed result opens the resume picker, then jumps to the resumed pane |
+| `Enter` (in search) | Same as `Enter` in the list: focus an active result, open the resume picker for a closed one. `Esc` in the picker goes back to the search |
+| `PgUp` / `PgDn` (in search) | Scroll the preview, e.g. a closed session's conversation |
 | `n` | New session (same tmux session) |
 | `N` | New tmux session (prompts for name) |
 | `r` | Rename session |
@@ -134,7 +136,7 @@ All key bindings except navigation and passthrough exit keys are configurable. A
 | Click a session | Select it (and focus the session list) |
 | Double-click a session | Same as `Enter`: focus an active session, open the resume picker for a closed one |
 | Click a group header | Collapse / expand the group |
-| Right-click a session | Open the context menu for that session |
+| Right-click a session | Open the context menu for that session (also on search results; `Esc` returns to the search) |
 | Long-press a session (hold ~450ms) | Open the context menu -- for tmux setups whose `MouseDown3Pane` binding swallows right-click |
 | Wheel over the session list | Move the selection up / down |
 | Wheel over the preview / changed files | Scroll them |

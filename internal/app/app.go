@@ -67,6 +67,7 @@ type previewCaptureMsg struct {
 
 // closedPreviewMsg carries formatted conversation history for a closed session.
 type closedPreviewMsg struct {
+	key     string // session Key(), so a slow read can't land on a newer selection
 	content string
 	err     error
 }
@@ -74,6 +75,7 @@ type closedPreviewMsg struct {
 // newSessionMsg carries the result of creating a new agent session.
 type newSessionMsg struct {
 	tmuxTarget  string
+	paneID      string
 	tmuxSession string
 	cwd         string
 	harness     string
@@ -83,6 +85,7 @@ type newSessionMsg struct {
 // newTmuxSessionMsg carries the result of creating a new tmux session with an agent.
 type newTmuxSessionMsg struct {
 	tmuxTarget  string
+	paneID      string
 	tmuxSession string
 	cwd         string
 	harness     string
@@ -93,6 +96,7 @@ type newTmuxSessionMsg struct {
 // the closed session, whose metadata fills the placeholder until detection.
 type resumeMsg struct {
 	tmuxTarget  string
+	paneID      string
 	tmuxSession string
 	session     *session.Session
 	err         error
@@ -568,7 +572,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// cursor; the combined list is rebuilt once history arrives.
 			if len(m.sessions) == 0 {
 				m.sessions = active
-				if m.mode != ModeSearch {
+				if !m.search.IsActive() {
 					m.sidebar.SetSessions(active)
 				}
 			}
@@ -600,7 +604,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			combined = append(combined, msg.closed...)
 			m.sessions = combined
 			prevSel := m.selectionIdentity()
-			if m.mode != ModeSearch {
+			if !m.search.IsActive() {
 				m.sidebar.SetSessions(combined)
 			}
 
@@ -612,7 +616,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.search.SetSessions(allCombined)
 
 			// During search, push re-filtered results to sidebar.
-			if m.mode == ModeSearch {
+			if m.search.IsActive() {
 				m.sidebar.SetSessions(m.search.Results())
 			}
 
@@ -691,6 +695,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		placeholder := &session.Session{
 			TmuxSession:  msg.tmuxSession,
 			TmuxTarget:   msg.tmuxTarget,
+			TmuxPaneID:   msg.paneID,
 			CWD:          msg.cwd,
 			ProjectName:  msg.harness,
 			Harness:      msg.harness,
@@ -724,6 +729,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			ID:           src.ID,
 			TmuxSession:  msg.tmuxSession,
 			TmuxTarget:   msg.tmuxTarget,
+			TmuxPaneID:   msg.paneID,
 			CWD:          src.CWD,
 			ProjectName:  src.ProjectName,
 			DisplayName:  src.DisplayName,
@@ -744,34 +750,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.fail(fmt.Errorf("new tmux session: %w", msg.err))
 			return m, nil
 		}
-		// Create a placeholder session and select it in the sidebar.
+		// LastActivity=now keeps the new group from auto-collapsing.
 		placeholder := &session.Session{
 			TmuxSession:  msg.tmuxSession,
 			TmuxTarget:   msg.tmuxTarget,
+			TmuxPaneID:   msg.paneID,
 			CWD:          msg.cwd,
 			ProjectName:  filepath.Base(msg.cwd),
 			Harness:      msg.harness,
 			Status:       session.StatusActive,
-			LastActivity: time.Now(), // prevent auto-collapse of the new group
+			LastActivity: time.Now(),
 		}
 		if placeholder.ProjectName == "" || placeholder.ProjectName == "." {
 			placeholder.ProjectName = msg.harness
 		}
-		m.sessions = append([]*session.Session{placeholder}, m.sessions...)
-		m.sidebar.SetSessions(m.sessions)
-		// Select by target since ID is unknown yet.
-		for i, item := range m.sidebar.FlatItems() {
-			if item.Session != nil && item.Session.TmuxTarget == msg.tmuxTarget {
-				m.sidebar.SetCursor(i)
-				break
-			}
-		}
-		m.selectPreviewSession(placeholder)
-		m.pendingNewTarget = msg.tmuxTarget
-		// Stay in list mode -- the user can press Enter to focus if they want.
+		m.enterNewSessionPassthrough(placeholder)
 		return m, tea.Batch(m.refreshSessionsCmd(), m.reloadMetricsForSelection(placeholder))
 
 	case closedPreviewMsg:
+		if sel := m.sidebar.SelectedSession(); sel == nil || sel.Key() != msg.key {
+			return m, nil
+		}
 		if msg.err != nil {
 			m.preview.SetContent(fmt.Sprintf("  Could not load session: %s", msg.err))
 		} else {
@@ -1319,39 +1318,48 @@ func (m Model) handleSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch key {
 	case "esc":
 		// Clear search, restore full list, return to list mode.
-		m.search.Deactivate()
+		m.endSearch()
 		m.mode = ModeList
 		m.statusbar.SetMode(ModeList.String())
-		m.sidebar.SetSessions(m.sessions)
-		m.sidebar.RestoreCollapsed()
 		return m, nil
 
 	case "enter":
-		// Act on the selected session (same as list-mode Enter).
 		sess := m.sidebar.SelectedSession()
-		m.search.Deactivate()
-		m.sidebar.SetSessions(m.sessions)
-		m.sidebar.RestoreCollapsed()
-		if sess == nil {
-			// On a group header -- toggle collapse, stay in list mode.
-			m.mode = ModeList
-			m.statusbar.SetMode(ModeList.String())
-			return m, nil
+		if sess != nil && sess.Status == session.StatusClosed {
+			// Resume via the target picker; search stays open behind it so Esc returns here.
+			return m.openResumePicker(sess, false)
 		}
-		if sess.Status == session.StatusClosed {
-			// Show conversation history in preview.
-			m.mode = ModeList
-			m.statusbar.SetMode(ModeList.String())
-			m.selectSessionInSidebar(sess)
-			m.selectPreviewSession(sess)
-			return m, m.loadClosedPreviewCmd(sess)
+		m.endSearch()
+		m.mode = ModeList
+		m.statusbar.SetMode(ModeList.String())
+		if sess == nil {
+			return m, nil
 		}
 		// Select and enter passthrough for active sessions.
 		m.selectSessionInSidebar(sess)
-		m.unreadHoldPane = ""
-		m.mode = ModePassthrough
-		m.preview.SetPassthrough(true)
-		m.statusbar.SetMode(ModePassthrough.String())
+		return m, m.setFocus(ModePassthrough)
+
+	case KeyJumpFromPT:
+		// f types into the query, so Ctrl+F is search's jump (as in passthrough).
+		sess := m.sidebar.SelectedSession()
+		if sess == nil {
+			return m, nil
+		}
+		if sess.Status == session.StatusClosed {
+			return m.openResumePicker(sess, true)
+		}
+		m.endSearch()
+		m.mode = ModeList
+		m.statusbar.SetMode(ModeList.String())
+		m.selectSessionInSidebar(sess)
+		return m.jumpToPane()
+
+	case "pgup":
+		m.preview.ScrollUp(m.preview.HalfViewHeight())
+		return m, nil
+
+	case "pgdown":
+		m.preview.ScrollDown(m.preview.HalfViewHeight())
 		return m, nil
 
 	case "up", "ctrl+p", "down", "ctrl+n":
@@ -1363,11 +1371,41 @@ func (m Model) handleSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	default:
 		// All other keys go to the text input for filtering.
+		prev := m.selectionIdentity()
 		var cmd tea.Cmd
 		m.search, cmd = m.search.Update(msg)
-		// Update sidebar with filtered results.
+		// Update sidebar with filtered results; the preview follows the top hit.
 		m.sidebar.SetSessions(m.search.Results())
+		if m.selectionIdentity() != prev {
+			return m, tea.Batch(cmd, m.deferSelectionChange())
+		}
 		return m, cmd
+	}
+}
+
+// endSearch closes the search input and restores the full session list.
+func (m *Model) endSearch() {
+	m.search.Deactivate()
+	m.sidebar.SetSessions(m.sessions)
+	m.sidebar.RestoreCollapsed()
+}
+
+// overlayExitMode is where a cancelled menu or picker returns: the search it
+// was opened over, else the list.
+func (m Model) overlayExitMode() Mode {
+	if m.search.IsActive() {
+		return ModeSearch
+	}
+	return ModeList
+}
+
+// leaveSearchForAction ends a search an overlay was opened over, since the
+// action it runs owns the next mode.
+func (m *Model) leaveSearchForAction() {
+	if m.search.IsActive() {
+		m.endSearch()
+		m.mode = ModeList
+		m.statusbar.SetMode(ModeList.String())
 	}
 }
 
@@ -1465,8 +1503,7 @@ func (m Model) handleContextMenuKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.contextMenu, cmd = m.contextMenu.Update(msg)
 		// If the context menu closed itself (e.g., Esc handled internally):
 		if !m.contextMenu.IsVisible() {
-			m.mode = ModeList
-			m.statusbar.SetMode(ModeList.String())
+			m.closeContextMenu()
 		}
 		return m, cmd
 	}
@@ -1477,13 +1514,14 @@ func (m Model) runContextMenuSelection() (tea.Model, tea.Cmd) {
 	action := m.contextMenu.SelectedAction()
 	target := m.contextMenu.Session()
 	m.closeContextMenu()
+	m.leaveSearchForAction()
 	return m.executeContextAction(action, target)
 }
 
 func (m *Model) closeContextMenu() {
 	m.contextMenu.Hide()
-	m.mode = ModeList
-	m.statusbar.SetMode(ModeList.String())
+	m.mode = m.overlayExitMode()
+	m.statusbar.SetMode(m.mode.String())
 }
 
 func (m Model) handleHelpKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -1642,12 +1680,6 @@ func (m Model) forkResumeCmd(sess *session.Session, target string) tea.Cmd {
 	return m.runResumeCmd(sess, target, true, "fork-resume")
 }
 
-// resumeCmd runs a harness resume off the event loop, emitting an errMsg on
-// failure.
-func (m Model) resumeCmd(sess *session.Session, target string) tea.Cmd {
-	return m.runResumeCmd(sess, target, false, "resume")
-}
-
 func (m Model) runResumeCmd(sess *session.Session, target string, fork bool, label string) tea.Cmd {
 	manager := m.manager
 	h := m.harnessFor(sess)
@@ -1661,21 +1693,6 @@ func (m Model) runResumeCmd(sess *session.Session, target string, fork bool, lab
 		}
 		return nil
 	}
-}
-
-func (m Model) resumeSession(sess *session.Session) (tea.Model, tea.Cmd) {
-	if !m.menuCaps(sess).CanResume {
-		return m, nil
-	}
-	target := m.currentTmuxSession
-	if target == "" {
-		m.err = fmt.Errorf("resume: cannot determine current tmux session")
-		m.statusbar.SetError("cannot determine current tmux session")
-		return m, nil
-	}
-	// Resume off the event loop and refresh at once; passthrough waits until
-	// the new pane is detected.
-	return m, tea.Batch(m.resumeCmd(sess, target), m.refreshSessionsCmd())
 }
 
 // openResumePicker opens the resume-target picker for a closed session. With
@@ -1702,8 +1719,8 @@ func (m Model) handleResumePickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.resumePicker.Hide()
 		m.pendingResumeSession = nil
 		m.pendingResumeJump = false
-		m.mode = ModeList
-		m.statusbar.SetMode(ModeList.String())
+		m.mode = m.overlayExitMode()
+		m.statusbar.SetMode(m.mode.String())
 		return m, nil
 
 	case "up", "ctrl+p":
@@ -1721,6 +1738,7 @@ func (m Model) handleResumePickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.pendingResumeSession = nil
 		m.mode = ModeList
 		m.statusbar.SetMode(ModeList.String())
+		m.leaveSearchForAction()
 		if sess == nil || name == "" {
 			return m, nil
 		}
@@ -1738,7 +1756,7 @@ func (m Model) handleResumePickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // resumeInSessionCmd runs manager.ResumeInSession off the event loop, reporting
 // the resumed pane's target in a resumeMsg.
 func (m Model) resumeInSessionCmd(sess *session.Session, targetName string) tea.Cmd {
-	manager := m.manager
+	manager, client := m.manager, m.tmuxClient
 	h := m.harnessFor(sess)
 	return func() tea.Msg {
 		cmd, err := resumeCommandFor(h, sess, false)
@@ -1749,7 +1767,7 @@ func (m Model) resumeInSessionCmd(sess *session.Session, targetName string) tea.
 		if err != nil {
 			return resumeMsg{err: fmt.Errorf("resume: %w", err)}
 		}
-		return resumeMsg{tmuxTarget: target, tmuxSession: targetName, session: sess}
+		return resumeMsg{tmuxTarget: target, paneID: client.PaneID(target), tmuxSession: targetName, session: sess}
 	}
 }
 
@@ -1816,7 +1834,7 @@ func (m Model) createAgentSessionIn(cwd, tmuxSess string) (tea.Model, tea.Cmd) {
 		m.statusbar.SetError("cannot determine target tmux session")
 		return m, nil
 	}
-	manager := m.manager
+	manager, client := m.manager, m.tmuxClient
 	h := m.registry.Default()
 	return m, func() tea.Msg {
 		target, err := manager.CreateNewWithTarget(cwd, tmuxSess, h.StartCommand(), h.Info().Name)
@@ -1825,6 +1843,7 @@ func (m Model) createAgentSessionIn(cwd, tmuxSess string) (tea.Model, tea.Cmd) {
 		}
 		return newSessionMsg{
 			tmuxTarget:  target,
+			paneID:      client.PaneID(target),
 			tmuxSession: tmuxSess,
 			cwd:         cwd,
 			harness:     h.Info().Name,
@@ -1944,7 +1963,7 @@ func (m Model) confirmDirSelection(dir string) (tea.Model, tea.Cmd) {
 
 func (m Model) confirmNewTmuxSession(name string) (tea.Model, tea.Cmd) {
 	cwd := m.pendingNewTmuxCWD
-	manager := m.manager
+	manager, client := m.manager, m.tmuxClient
 	h := m.registry.Default()
 	sessionName := strings.TrimSpace(name)
 	return m, func() tea.Msg {
@@ -1954,6 +1973,7 @@ func (m Model) confirmNewTmuxSession(name string) (tea.Model, tea.Cmd) {
 		}
 		return newTmuxSessionMsg{
 			tmuxTarget:  target,
+			paneID:      client.PaneID(target),
 			tmuxSession: tmuxSess,
 			cwd:         cwd,
 			harness:     h.Info().Name,
@@ -1970,7 +1990,7 @@ func (m Model) executeContextAction(action string, sess *session.Session) (tea.M
 	switch action {
 	case "focus":
 		if sess.Status == session.StatusClosed {
-			return m.resumeSession(sess)
+			return m.openResumePicker(sess, false)
 		}
 		m.unreadHoldPane = ""
 		m.mode = ModePassthrough
@@ -2007,7 +2027,12 @@ func (m Model) executeContextAction(action string, sess *session.Session) (tea.M
 	case "resume":
 		m.mode = ModeList
 		m.statusbar.SetMode(ModeList.String())
-		return m.resumeSession(sess)
+		return m.openResumePicker(sess, false)
+
+	case "resume_jump":
+		m.mode = ModeList
+		m.statusbar.SetMode(ModeList.String())
+		return m.openResumePicker(sess, true)
 
 	case "fork_resume":
 		m.mode = ModeList
@@ -2228,7 +2253,7 @@ func (m *Model) applySessionRefresh(msg sessionRefreshMsg) tea.Cmd {
 
 	// Don't overwrite the sidebar during search -- the search model controls
 	// what the sidebar displays via filtered results.
-	if m.mode != ModeSearch {
+	if !m.search.IsActive() {
 		m.sidebar.SetSessions(combined)
 	}
 
@@ -2243,7 +2268,7 @@ func (m *Model) applySessionRefresh(msg sessionRefreshMsg) tea.Cmd {
 
 	// During search, push the re-filtered results to the sidebar so it
 	// reflects any sessions that appeared/disappeared during the refresh.
-	if m.mode == ModeSearch {
+	if m.search.IsActive() {
 		m.sidebar.SetSessions(m.search.Results())
 	}
 
@@ -2441,43 +2466,51 @@ func (m Model) capturePreviewCmd() tea.Cmd {
 // and formats it for display in the preview pane with colored styling.
 func (m Model) loadClosedPreviewCmd(sess *session.Session) tea.Cmd {
 	h := m.harnessFor(sess)
+	key := sess.Key()
 	return func() tea.Msg {
-		cp, ok := harness.AsConversation(h)
-		if h == nil || !ok {
-			return closedPreviewMsg{content: "  No conversation history found."}
-		}
-		assistantLabel := h.Info().AssistantLabel
-		entries, err := cp.LoadConversation(sess, 100)
-		if err != nil {
-			return closedPreviewMsg{err: err}
-		}
-		if len(entries) == 0 {
-			return closedPreviewMsg{content: "  No conversation history found."}
-		}
-
-		sep := styles.ConversationSeparator.Render(strings.Repeat("\u2500", 40))
-
-		var b strings.Builder
-		for i, e := range entries {
-			if i > 0 {
-				b.WriteString("\n  " + sep + "\n")
-			}
-			if e.Role == "user" {
-				b.WriteString("\n  " + styles.ConversationUserLabel.Render("You") + "\n")
-				lines := strings.Split(e.Text, "\n")
-				for _, line := range lines {
-					b.WriteString("  " + styles.ConversationUserText.Render("  "+line) + "\n")
-				}
-			} else {
-				b.WriteString("\n  " + styles.ConversationAssistantLabel.Render(assistantLabel) + "\n")
-				lines := strings.Split(e.Text, "\n")
-				for _, line := range lines {
-					b.WriteString("  " + styles.ConversationAssistantText.Render("  "+line) + "\n")
-				}
-			}
-		}
-		return closedPreviewMsg{content: b.String()}
+		msg := closedPreview(h, sess)
+		msg.key = key
+		return msg
 	}
+}
+
+// closedPreview renders sess's recent conversation for the preview pane.
+func closedPreview(h harness.Harness, sess *session.Session) closedPreviewMsg {
+	cp, ok := harness.AsConversation(h)
+	if h == nil || !ok {
+		return closedPreviewMsg{content: "  No conversation history found."}
+	}
+	assistantLabel := h.Info().AssistantLabel
+	entries, err := cp.LoadConversation(sess, 100)
+	if err != nil {
+		return closedPreviewMsg{err: err}
+	}
+	if len(entries) == 0 {
+		return closedPreviewMsg{content: "  No conversation history found."}
+	}
+
+	sep := styles.ConversationSeparator.Render(strings.Repeat("\u2500", 40))
+
+	var b strings.Builder
+	for i, e := range entries {
+		if i > 0 {
+			b.WriteString("\n  " + sep + "\n")
+		}
+		if e.Role == "user" {
+			b.WriteString("\n  " + styles.ConversationUserLabel.Render("You") + "\n")
+			lines := strings.Split(e.Text, "\n")
+			for _, line := range lines {
+				b.WriteString("  " + styles.ConversationUserText.Render("  "+line) + "\n")
+			}
+		} else {
+			b.WriteString("\n  " + styles.ConversationAssistantLabel.Render(assistantLabel) + "\n")
+			lines := strings.Split(e.Text, "\n")
+			for _, line := range lines {
+				b.WriteString("  " + styles.ConversationAssistantText.Render("  "+line) + "\n")
+			}
+		}
+	}
+	return closedPreviewMsg{content: b.String()}
 }
 
 // ---------------------------------------------------------------------------
@@ -2761,18 +2794,28 @@ func (m *Model) mergePendingPlaceholder(active []*session.Session) []*session.Se
 	if m.pendingNewTarget == "" {
 		return active
 	}
-	for _, s := range active {
+	var placeholder *session.Session
+	for _, s := range m.sessions {
 		if s.TmuxTarget == m.pendingNewTarget {
+			placeholder = s
+			break
+		}
+	}
+	// The pane id survives renumber-windows shifting the target while the agent starts.
+	pane := ""
+	if placeholder != nil {
+		pane = placeholder.TmuxPaneID
+	}
+	for _, s := range active {
+		if (pane != "" && s.TmuxPaneID == pane) || (pane == "" && s.TmuxTarget == m.pendingNewTarget) {
 			m.pendingNewTarget = ""
 			return active
 		}
 	}
-	for _, s := range m.sessions {
-		if s.TmuxTarget == m.pendingNewTarget {
-			// Prepend so the placeholder stays where creation put it instead of
-			// jumping on the next refresh.
-			return append([]*session.Session{s}, active...)
-		}
+	if placeholder != nil {
+		// Prepend so the placeholder stays where creation put it instead of
+		// jumping on the next refresh.
+		return append([]*session.Session{placeholder}, active...)
 	}
 	return active
 }

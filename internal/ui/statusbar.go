@@ -277,6 +277,8 @@ func (m StatusBarModel) hintsForMode() []statusHint {
 		return []statusHint{
 			{key: "Esc", desc: "cancel"},
 			{key: "Enter", desc: "select"},
+			{key: "Ctrl+f", label: "Ctrl+F", desc: "jump"},
+			{key: "PgUp", label: "PgUp/Dn", desc: "scroll", inert: true},
 		}
 	case "name input", "rename":
 		return []statusHint{{key: "Enter", desc: "confirm"}, {key: "Esc", desc: "cancel"}}

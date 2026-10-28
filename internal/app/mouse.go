@@ -335,11 +335,6 @@ func (m Model) clickSession(hit ui.SidebarHit, msg tea.MouseMsg) (tea.Model, tea
 
 // rightPressSidebar opens the context menu for the clicked session row.
 func (m Model) rightPressSidebar(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
-	// The menu's close path returns to list mode, which would orphan an
-	// active search input.
-	if m.mode == ModeSearch {
-		return m, nil
-	}
 	hit := m.sidebarHit(msg.X, msg.Y)
 	if hit.Kind != ui.HitSession {
 		return m, nil
@@ -350,7 +345,10 @@ func (m Model) rightPressSidebar(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 // openContextMenu selects the hit row and shows its menu at (x, y).
 func (m Model) openContextMenu(hit ui.SidebarHit, x, y int) (tea.Model, tea.Cmd) {
 	m.lastClickID = ""
-	cmd := m.setFocus(ModeList)
+	var cmd tea.Cmd
+	if m.mode != ModeSearch {
+		cmd = m.setFocus(ModeList)
+	}
 	m.sidebar.SetCursor(hit.Index)
 	cmd = tea.Batch(cmd, m.afterSelectionChange())
 	m.contextMenu.Show(x, y, hit.Session, m.menuCaps(hit.Session))

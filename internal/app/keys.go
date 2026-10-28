@@ -94,7 +94,7 @@ func (km KeyMap) HelpBindings() []HelpBinding {
 		{km.Search, "Search"},
 		// Act on the selected session
 		{"Enter", "Focus / resume closed"},
-		{km.Jump, "Jump / fast-resume closed"},
+		{km.Jump, "Jump / resume closed, then jump"},
 		{km.NewSession, "New session"},
 		{km.NewTmuxSession, "New tmux session"},
 		{km.RenameSession, "Rename session"},

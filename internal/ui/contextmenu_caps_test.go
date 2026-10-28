@@ -29,9 +29,9 @@ func TestContextMenuClosedCaps(t *testing.T) {
 		want []string
 	}{
 		{"resume and fork", MenuCaps{CanResume: true, CanFork: true},
-			[]string{"resume", "fork_resume", "-", "detail", "-", "copy_id", "copy_path", "copy_resume"}},
+			[]string{"resume", "resume_jump", "fork_resume", "-", "detail", "-", "copy_id", "copy_path", "copy_resume"}},
 		{"resume only", MenuCaps{CanResume: true},
-			[]string{"resume", "-", "detail", "-", "copy_id", "copy_path", "copy_resume"}},
+			[]string{"resume", "resume_jump", "-", "detail", "-", "copy_id", "copy_path", "copy_resume"}},
 		{"no lifecycle caps", MenuCaps{},
 			[]string{"detail", "-", "copy_id", "copy_path"}},
 	}
@@ -93,7 +93,7 @@ func TestContextMenuFolderAndBranchItems(t *testing.T) {
 	caps := MenuCaps{CanResume: true, Branch: "main"}
 
 	closed := &session.Session{Status: session.StatusClosed, CWD: "/repo"}
-	want := []string{"resume", "-", "detail", "-", "open_editor", "open_folder", "-",
+	want := []string{"resume", "resume_jump", "-", "detail", "-", "open_editor", "open_folder", "-",
 		"copy_id", "copy_path", "copy_branch", "copy_resume"}
 	if got := actions(m.buildItems(closed, caps)); strings.Join(got, " ") != strings.Join(want, " ") {
 		t.Errorf("closed items = %v, want %v", got, want)

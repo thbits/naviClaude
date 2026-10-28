@@ -155,7 +155,10 @@ func (m *ContextMenuModel) buildItems(s *session.Session, caps MenuCaps) []MenuI
 	var items []MenuItem
 	if s.Status == session.StatusClosed {
 		if caps.CanResume {
-			items = append(items, MenuItem{Label: "Resume", Shortcut: "Enter", Action: "resume"})
+			items = append(items,
+				MenuItem{Label: "Resume", Shortcut: "Enter", Action: "resume"},
+				MenuItem{Label: "Resume & jump", Shortcut: "f", Action: "resume_jump"},
+			)
 		}
 		if caps.CanFork {
 			items = append(items, MenuItem{Label: "Fork & Resume", Shortcut: "", Action: "fork_resume"})

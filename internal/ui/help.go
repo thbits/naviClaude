@@ -100,7 +100,7 @@ func (m HelpModel) View() string {
 			{"Ctrl+U/Ctrl+D", "Scroll preview"},
 			{"/", "Search"},
 			{"Enter", "Focus / resume closed"},
-			{"f", "Jump / fast-resume closed"},
+			{"f", "Jump / resume closed, then jump"},
 			{"n", "New session"},
 			{"N", "New tmux session"},
 			{"r", "Rename session"},
@@ -112,6 +112,13 @@ func (m HelpModel) View() string {
 			{"?", "Help"},
 			{"q", "Quit"},
 		}
+	}
+
+	searchBindings := []helpBinding{
+		{"Enter", "Focus / resume closed"},
+		{"Ctrl+f", "Jump / resume + jump"},
+		{"PgUp/PgDn", "Scroll preview"},
+		{"Esc", "Cancel search"},
 	}
 
 	passthroughBindings := []helpBinding{
@@ -128,6 +135,8 @@ func (m HelpModel) View() string {
 
 	listCol := append([]string{styles.HelpTitle.Render("List Mode")}, renderBindings(listBindings)...)
 	otherCol := append([]string{styles.HelpTitle.Render("Passthrough Mode")}, renderBindings(passthroughBindings)...)
+	otherCol = append(otherCol, "", styles.HelpTitle.Render("Search"))
+	otherCol = append(otherCol, renderBindings(searchBindings)...)
 	otherCol = append(otherCol, "", styles.HelpTitle.Render("Changed Files"))
 	otherCol = append(otherCol, renderBindings(changedFilesBindings)...)
 
