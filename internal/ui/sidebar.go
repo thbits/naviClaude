@@ -66,6 +66,11 @@ type SidebarModel struct {
 	groupSortOrder    string  // "name" or "activity"
 	sessionSortOrder  string  // "name" or "activity"
 
+	// Working sessions hold their slot under activity sort instead of racing on
+	// LastActivity: key -> rebuild tick it started working (newer sorts first).
+	workingSince map[string]int
+	workingTick  int
+
 	// Tracked selection: changed only by user navigation, so data refreshes
 	// restore the cursor to it instead of overriding the user's choice.
 	trackedPaneID string // tmux pane id ("%N"); stable even while a new session's ID settles
@@ -216,7 +221,7 @@ func (m *SidebarModel) SetBackground(counts map[string]session.Background) {
 		return
 	}
 	m.background = counts
-	m.syncViewport()
+	m.rebuildGroups() // background work makes a session working, which moves it
 }
 
 // SetChangedFiles records the files the session with the given ID edited, as
@@ -292,7 +297,18 @@ func (m *SidebarModel) rebuildGroups() {
 
 	sortFn := nameSort
 	if m.sessionSortOrder == "activity" {
-		sortFn = activitySort
+		m.trackWorking()
+		sortFn = func(sessions []*session.Session) {
+			activitySort(sessions)
+			sort.SliceStable(sessions, func(i, j int) bool {
+				ti, wi := m.workingSince[workingKey(sessions[i])]
+				tj, wj := m.workingSince[workingKey(sessions[j])]
+				if wi != wj {
+					return wi
+				}
+				return wi && ti > tj
+			})
+		}
 	}
 	for _, sessions := range groupMap {
 		sortFn(sessions)
@@ -915,6 +931,51 @@ func (m SidebarModel) View() string {
 
 // needsUser reports a session blocked on the user (approval or question).
 func needsUser(s *session.Session) bool { return s.Status == session.StatusWaiting }
+
+// workingKey identifies a session across refreshes; the pane id outlives a new
+// session's ID settling.
+func workingKey(s *session.Session) string {
+	if s.TmuxPaneID != "" {
+		return s.TmuxPaneID
+	}
+	return s.Key()
+}
+
+// trackWorking stamps sessions that just started working with a fresh tick and
+// forgets the ones that stopped. Newcomers are stamped oldest-activity first.
+func (m *SidebarModel) trackWorking() {
+	working := make(map[string]bool)
+	var started []*session.Session
+	for _, s := range m.Sessions {
+		k := workingKey(s)
+		if k == "" || session.EffectiveStatus(s, m.background[s.ID]) != session.StatusActive {
+			continue
+		}
+		working[k] = true
+		if _, ok := m.workingSince[k]; !ok {
+			started = append(started, s)
+		}
+	}
+	if m.workingSince == nil {
+		m.workingSince = make(map[string]int)
+	}
+	for k := range m.workingSince {
+		if !working[k] {
+			delete(m.workingSince, k)
+		}
+	}
+	sort.Slice(started, func(i, j int) bool {
+		ti, tj := started[i].LastActivity, started[j].LastActivity
+		if !ti.Equal(tj) {
+			return ti.Before(tj)
+		}
+		return started[i].ID > started[j].ID
+	})
+	for _, s := range started {
+		m.workingTick++
+		m.workingSince[workingKey(s)] = m.workingTick
+	}
+}
 
 // groupRecentActivity returns the newest LastActivity in a group; an empty group
 // yields the zero Time, which sorts last.

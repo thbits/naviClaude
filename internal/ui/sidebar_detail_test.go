@@ -272,6 +272,53 @@ func TestAttentionFirstOrdering(t *testing.T) {
 	}
 }
 
+func TestWorkingSessionsHoldTheirSlot(t *testing.T) {
+	now := time.Now()
+	sb := NewSidebar(40, 40)
+	sb.SetSize(40, 40)
+	sb.SetSessionSortOrder("activity")
+	type row struct {
+		id  string
+		st  session.SessionStatus
+		age time.Duration
+	}
+	set := func(rows ...row) {
+		var ss []*session.Session
+		for _, r := range rows {
+			ss = append(ss, &session.Session{ID: r.id, DisplayName: r.id, TmuxSession: "g", TmuxTarget: "g:" + r.id,
+				Status: r.st, LastActivity: now.Add(-r.age)})
+		}
+		sb.SetSessions(ss)
+	}
+	check := func(step, want string) {
+		t.Helper()
+		if got := strings.Join(groupOrder(sb), " "); got != want {
+			t.Errorf("%s: order = %q, want %q", step, got, want)
+		}
+	}
+	A, I := session.StatusActive, session.StatusIdle
+
+	// Already working on the first load: plain activity order.
+	set(row{"a", A, 1 * time.Second}, row{"b", A, 2 * time.Second}, row{"c", A, 3 * time.Second}, row{"d", I, time.Minute}, row{"e", I, time.Hour})
+	check("initial", "# a b c d e")
+
+	// c writes last, but working sessions don't overtake each other.
+	set(row{"a", A, 3 * time.Second}, row{"b", A, 2 * time.Second}, row{"c", A, 0}, row{"d", I, time.Minute}, row{"e", I, time.Hour})
+	check("reshuffle", "# a b c d e")
+
+	// b finishes: it tops the idle rows, below the sessions still working.
+	set(row{"a", A, 3 * time.Second}, row{"b", I, 0}, row{"c", A, time.Second}, row{"d", I, time.Minute}, row{"e", I, time.Hour})
+	check("finish", "# a c b d e")
+
+	// e starts working: it leads the working block, the rest keep their order.
+	set(row{"a", A, 0}, row{"b", I, time.Second}, row{"c", A, 0}, row{"d", I, time.Minute}, row{"e", A, 2 * time.Second})
+	check("start", "# e a c b d")
+
+	// Background agents keep an idle session working, as its dot shows.
+	sb.SetBackground(map[string]session.Background{"d": {Agents: 1}})
+	check("background", "# d e a c b")
+}
+
 func cursorOf(t *testing.T, m *SidebarModel, id string) int {
 	t.Helper()
 	for i, it := range m.flatItems {
