@@ -158,6 +158,87 @@ func TestLoadActivityCacheKeysOnStart(t *testing.T) {
 	}
 }
 
+func TestLoadActivityShellsBeyondTail(t *testing.T) {
+	bash := toolUse(1, "s1", "Bash", map[string]any{"command": "make watch", "run_in_background": true})
+	var lines []string
+	lines = append(lines, prompt(0, "go"), bash, bgShellResult(1, "s1", "b1"))
+	for i := range 40 {
+		lines = append(lines, assistantText(2+i, strings.Repeat("y", 10<<10)))
+	}
+	path := writeTranscript(t, append(lines, prompt(100, "next"))...)
+	if got, _ := LoadActivity(path); got.Shells != 1 {
+		t.Fatalf("shell launched before the tail window: shells = %d, want 1", got.Shells)
+	}
+
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = f.WriteString(shellNotification(101, "s1") + "\n")
+	f.Close()
+	if got, _ := LoadActivity(path); got.Shells != 0 {
+		t.Errorf("after its notification was appended: shells = %d, want 0", got.Shells)
+	}
+}
+
+func TestLoadActivitySubagentShells(t *testing.T) {
+	sideBash := func(sec int, id string) string {
+		return jl(map[string]any{"type": "assistant", "isSidechain": true, "timestamp": ats(sec), "message": map[string]any{
+			"content": []any{map[string]any{"type": "tool_use", "id": id, "name": "Bash", "input": map[string]any{"command": "make watch", "run_in_background": true}}},
+		}})
+	}
+	sideResult := func(sec int, id, task string) string {
+		return jl(map[string]any{"type": "user", "isSidechain": true, "timestamp": ats(sec), "toolUseResult": map[string]any{"backgroundTaskId": task},
+			"message": map[string]any{"role": "user", "content": []any{map[string]any{"type": "tool_result", "tool_use_id": id, "content": "ok"}}}})
+	}
+	tests := []struct {
+		name   string
+		agents map[string][]string
+		since  int // seconds after actBase the process started; -1 = unknown
+		shells int
+	}{
+		{"running subagent shells count", map[string][]string{
+			"agent-a1": {sideBash(2, "s2"), sideResult(2, "s2", "b2")},
+			"agent-a2": {sideBash(3, "s3"), sideResult(3, "s3", "b3")},
+		}, -1, 2},
+		{"notification in the subagent clears it", map[string][]string{
+			"agent-a1": {sideBash(2, "s2"), sideResult(2, "s2", "b2"), shellNotification(5, "s2")},
+		}, -1, 0},
+		{"notification behind a system preamble clears it", map[string][]string{
+			"agent-a1": {sideBash(2, "s2"), sideResult(2, "s2", "b2"), metaUser(5, "[SYSTEM NOTIFICATION - NOT USER INPUT]\n\n"+
+				"<task-notification>\n<task-id>b2</task-id>\n<status>completed</status>\n</task-notification>")},
+		}, -1, 0},
+		{"earlier run's subagent shells are gone", map[string][]string{
+			"agent-a1": {sideBash(2, "s2"), sideResult(2, "s2", "b2")},
+		}, 60, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := writeTranscript(t, prompt(0, "go"), assistantText(1, "ok"))
+			dir := filepath.Join(strings.TrimSuffix(path, ".jsonl"), "subagents")
+			if err := os.MkdirAll(dir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			for name, lines := range tt.agents {
+				if err := os.WriteFile(filepath.Join(dir, name+".jsonl"), []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var since time.Time
+			if tt.since >= 0 {
+				since = actBase.Add(time.Duration(tt.since) * time.Second)
+			}
+			got, err := loadActivity(path, since)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Shells != tt.shells {
+				t.Errorf("shells = %d, want %d", got.Shells, tt.shells)
+			}
+		})
+	}
+}
+
 func sidechain(sec int, id, name string) string {
 	return jl(map[string]any{"type": "assistant", "isSidechain": true, "timestamp": ats(sec), "message": map[string]any{
 		"content": []any{map[string]any{"type": "tool_use", "id": id, "name": name, "input": map[string]any{"command": "ls"}}},

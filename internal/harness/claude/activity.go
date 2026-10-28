@@ -69,6 +69,7 @@ func loadActivity(path string, since time.Time) (*session.SessionActivity, error
 	activityMu.Unlock()
 	if hit && prev.size == fi.Size() && prev.mod.Equal(fi.ModTime()) && prev.since.Equal(since) {
 		act := prev.act
+		act.Shells = countShells(path, since)
 		return &act, nil
 	}
 
@@ -101,6 +102,7 @@ func loadActivity(path string, since time.Time) (*session.SessionActivity, error
 	activityMu.Lock()
 	activityCache[path] = activityCacheEntry{size: fi.Size(), mod: fi.ModTime(), since: since, act: act}
 	activityMu.Unlock()
+	act.Shells = countShells(path, since)
 	return &act, nil
 }
 
@@ -178,13 +180,13 @@ type pendingTool struct {
 var notificationToolUseID = regexp.MustCompile(`<tool-use-id>([^<]+)</tool-use-id>`)
 
 // parseActivity derives the main thread's current activity from transcript lines
-// in file order. Tools, agents and shells recorded before since are dropped.
+// in file order. Tools and agents recorded before since are dropped; shells
+// are counted separately by countShells.
 // sawTurn reports whether a turn start was in the data.
 func parseActivity(data []byte, truncated bool, since time.Time) (act session.SessionActivity, sawTurn bool) {
 	var (
 		pending   []pendingTool
-		async     = map[string]bool{}   // background agents awaiting a completion notification
-		shells    = map[string]string{} // background shell task id -> its tool_use id
+		async     = map[string]bool{} // background agents awaiting a completion notification
 		turnOpen  bool
 		answered  bool // an assistant record followed the turn's start
 		earliest  time.Time
@@ -194,14 +196,13 @@ func parseActivity(data []byte, truncated bool, since time.Time) (act session.Se
 		bgDoneAft int  // completion notifications since that turn end
 		priorRun  bool // records from before since are being tracked
 	)
-	// An earlier run's tools, agents and shells died with its process (e.g. a
+	// An earlier run's tools and agents died with its process (e.g. a
 	// resumed session), so they are dropped once its records end.
 	dropPriorRun := func() {
 		if priorRun {
 			turnOpen = false
 			pending = nil
 			clear(async)
-			clear(shells)
 			bgFloor, bgDoneAft = 0, 0
 			priorRun = false
 		}
@@ -216,14 +217,8 @@ func parseActivity(data []byte, truncated bool, since time.Time) (act session.Se
 	taskNotified := func(text string) {
 		if m := notificationToolUseID.FindStringSubmatch(text); m != nil {
 			delete(async, m[1])
-			for task, id := range shells {
-				if id == m[1] {
-					delete(shells, task)
-					return
-				}
-			}
 		}
-		// A shell launched before the tail window is only recognisable by its summary.
+		// Shell notifications leave the agent floor alone.
 		if !strings.Contains(text, "<summary>Background command") {
 			bgDoneAft++
 		}
@@ -296,15 +291,6 @@ func parseActivity(data []byte, truncated bool, since time.Time) (act session.Se
 				continue
 			}
 			for _, b := range blocks {
-				if b.Type == "tool_use" && (b.Name == "TaskStop" || b.Name == "KillShell") {
-					var in struct {
-						TaskID  string `json:"task_id"`
-						ShellID string `json:"shell_id"`
-					}
-					_ = json.Unmarshal(b.Input, &in)
-					delete(shells, in.TaskID)
-					delete(shells, in.ShellID)
-				}
 				if b.Type == "tool_use" && b.ID != "" {
 					name, target := toolSummary(b.Name, b.Input)
 					pending = append(pending, pendingTool{id: b.ID, name: name, target: target})
@@ -317,7 +303,7 @@ func parseActivity(data []byte, truncated bool, since time.Time) (act session.Se
 				continue
 			}
 			text, results := userContent(msg.Content)
-			launched, shellTask := asyncLaunch(rec.ToolUseResult)
+			launched, _ := asyncLaunch(rec.ToolUseResult)
 			for _, id := range results {
 				for i, p := range pending {
 					if p.id != id {
@@ -325,9 +311,6 @@ func parseActivity(data []byte, truncated bool, since time.Time) (act session.Se
 					}
 					if launched && isAgentTool(p.name) {
 						async[id] = true
-					}
-					if shellTask != "" && p.name == "Bash" {
-						shells[shellTask] = id
 					}
 					pending = append(pending[:i], pending[i+1:]...)
 					break
@@ -376,7 +359,6 @@ func parseActivity(data []byte, truncated bool, since time.Time) (act session.Se
 		bg = floor
 	}
 	act.Agents += bg
-	act.Shells = len(shells)
 	return act, sawTurn
 }
 
