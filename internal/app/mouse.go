@@ -6,6 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/thbits/naviClaude/internal/config"
 	"github.com/thbits/naviClaude/internal/session"
 	"github.com/thbits/naviClaude/internal/styles"
 	"github.com/thbits/naviClaude/internal/ui"
@@ -46,6 +47,9 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	case tea.MouseActionRelease:
 		return m.handleMouseRelease(msg)
 	case tea.MouseActionMotion:
+		if msg.Button == tea.MouseButtonLeft && m.draggingSidebar {
+			return m.dragSidebar(msg.X)
+		}
 		if msg.Button == tea.MouseButtonLeft && m.preview.Selecting() {
 			m.preview.ExtendSelection(m.previewPoint(msg.X, msg.Y))
 			return m, nil
@@ -62,6 +66,7 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	// Any other button event between a press and its release cancels a
 	// pending long press or preview drag.
 	m.pendingPress = nil
+	m.draggingSidebar = false
 	m.preview.ClearSelection()
 
 	// Inline inputs and the kill prompt keep ignoring the mouse; a click must
@@ -93,6 +98,10 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	switch msg.Button {
 	case tea.MouseButtonLeft:
 		switch {
+		case msg.X == sidebarWidth-1:
+			// The sidebar's right border is a drag handle.
+			m.draggingSidebar = true
+			return m, nil
 		case msg.X < sidebarWidth:
 			return m.leftPressSidebar(msg)
 		case rightWidth > 0 && msg.X >= rightPaneLeft:
@@ -153,6 +162,9 @@ func (m Model) hover(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 // handleMouseRelease turns a left press held on the same session row for at
 // least longPressThreshold into the context menu, as right-click would.
 func (m Model) handleMouseRelease(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	if m.draggingSidebar {
+		return m.finishSidebarDrag(msg.X)
+	}
 	if m.preview.Selecting() {
 		return m.finishPreviewSelection(msg)
 	}
@@ -170,6 +182,41 @@ func (m Model) handleMouseRelease(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	return m.openContextMenu(hit, p.x, p.y)
+}
+
+// dragSidebar moves the sidebar border to column x. The previewed tmux window
+// is refit only on release, so a drag doesn't run a tmux resize per cell.
+func (m Model) dragSidebar(x int) (tea.Model, tea.Cmd) {
+	m.sidebarCols = x + 1
+	m.sidebarCols = m.sidebarWidth() // store the clamped width
+	m.resizeComponents()
+	return m, nil
+}
+
+// finishSidebarDrag applies the last drag position, refits the previewed pane
+// and saves the width to the config as a percentage.
+func (m Model) finishSidebarDrag(x int) (tea.Model, tea.Cmd) {
+	model, _ := m.dragSidebar(x)
+	m = model.(Model)
+	m.draggingSidebar = false
+	m.resizePreviewedPane()
+	if m.width <= 0 {
+		return m, nil
+	}
+	pct := (m.sidebarWidth()*100 + m.width/2) / m.width
+	if pct == m.cfg.SidebarWidth {
+		return m, nil
+	}
+	m.cfg.SidebarWidth = pct
+	m.sidebarWidthPct = pct
+	save := m.saveConfig
+	if save == nil {
+		save = func(c config.Config) error { return config.Save(c, "") }
+	}
+	if err := save(m.cfg); err != nil {
+		m.statusbar.SetError("sidebar width kept for this session only (config write failed: " + err.Error() + ")")
+	}
+	return m, nil
 }
 
 // finishPreviewSelection copies a drag's text to the clipboard; a release where

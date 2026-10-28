@@ -140,6 +140,7 @@ All key bindings except navigation and passthrough exit keys are configurable. A
 | Wheel over the preview / changed files | Scroll them |
 | Click the preview / changed files | Focus that pane (the preview only for a live session) |
 | Drag over the preview | Select text and copy it to the clipboard on release, without focusing the pane |
+| Drag the session list's right border | Resize the session list; the width is saved to `sidebar_width` on release |
 | Click a hint in the bottom bar | Run that key |
 | Click a menu item / picker row | Run it / select it (click the selected row again to confirm) |
 | Click a filter tab in the statistics popup | Switch to that filter |
@@ -193,7 +194,7 @@ restore_sessions: true
 
 | Option | Default | Description |
 |---|---|---|
-| `sidebar_width` | `30` | Width of the session list panel |
+| `sidebar_width` | `30` | Width of the session list panel, in percent of the terminal width (also set by dragging its border) |
 | `refresh_interval` | `200ms` | How often to refresh session data |
 | `closed_session_hours` | `8` | Show closed sessions from the last N hours |
 | `group_sort_order` | `name` | Sort tmux session groups: `name` (alphabetical) or `activity`. Groups with a session waiting on you always come first |

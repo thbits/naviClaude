@@ -222,6 +222,7 @@ type Model struct {
 	version            string // build version, for the update check
 	keys               KeyMap
 	sidebarWidthPct    int
+	sidebarCols        int // width dragged with the mouse; 0 uses sidebarWidthPct
 	closedSessionHours float64
 	currentTmuxSession string        // the tmux session naviClaude is running in
 	currentTmuxWin     string        // "session:window" target of naviClaude's window
@@ -237,11 +238,13 @@ type Model struct {
 	unreadHoldPane      string                  // pane set as unread while selected; kept from the seen-clear until the preview moves
 
 	// Mouse click tracking (see mouse.go).
-	lastClickID  string             // session row hit by the previous left press, for double-click
-	lastClickAt  time.Time          // when that press happened
-	pendingPress *mousePress        // left press on a session row awaiting release, for long-press
-	copyText     func(string) error // clipboard writer; nil uses copyToClipboard
-	now          func() time.Time   // clock override for tests; nil means time.Now
+	lastClickID     string                    // session row hit by the previous left press, for double-click
+	lastClickAt     time.Time                 // when that press happened
+	pendingPress    *mousePress               // left press on a session row awaiting release, for long-press
+	draggingSidebar bool                      // left press on the sidebar border, resizing until release
+	saveConfig      func(config.Config) error // config writer; nil writes the default config path
+	copyText        func(string) error        // clipboard writer; nil uses copyToClipboard
+	now             func() time.Time          // clock override for tests; nil means time.Now
 
 	// Preview scroll forwarding (see forwardWheel).
 	wheelTarget           string       // pane the last capture found taking wheel events; "" scrolls locally
@@ -423,6 +426,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// -- Window resize -------------------------------------------------------
 	case tea.WindowSizeMsg:
+		if msg.Width != m.width {
+			m.sidebarCols = 0 // back to the saved percentage
+		}
 		m.width = msg.Width
 		m.height = msg.Height
 		m.resizeComponents()
@@ -2565,6 +2571,13 @@ func (m Model) renderTitleBar() string {
 
 func (m Model) sidebarWidth() int {
 	w := m.width * m.sidebarWidthPct / 100
+	if m.sidebarCols > 0 {
+		w = m.sidebarCols
+	}
+	// Yield to an open changed-files panel (24) and the preview (20).
+	if m.rightPanelOpen && w > m.width-44 {
+		w = m.width - 44
+	}
 	if w < 20 {
 		w = 20
 	}
