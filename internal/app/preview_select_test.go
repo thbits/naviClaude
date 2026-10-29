@@ -1,11 +1,13 @@
 package app
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/thbits/naviClaude/internal/session"
 )
 
 // Preview content origin in clickModel: right of the 30-column sidebar plus the
@@ -110,5 +112,65 @@ func TestPreviewKeyEndsStuckDrag(t *testing.T) {
 	*m = next.(Model)
 	if m.preview.Selecting() {
 		t.Error("a key press should end a drag whose release was lost")
+	}
+}
+
+// runPaste runs a right-click's command batch and returns the paste result.
+func runPaste(t *testing.T, cmd tea.Cmd) clipboardPastedMsg {
+	t.Helper()
+	if cmd == nil {
+		t.Fatal("right-click should return a paste command")
+	}
+	msgs := []tea.Msg{cmd()}
+	if batch, ok := msgs[0].(tea.BatchMsg); ok {
+		msgs = msgs[:0]
+		for _, c := range batch {
+			if c != nil {
+				msgs = append(msgs, c())
+			}
+		}
+	}
+	for _, msg := range msgs {
+		if p, ok := msg.(clipboardPastedMsg); ok {
+			return p
+		}
+	}
+	t.Fatal("no clipboardPastedMsg in the right-click's commands")
+	return clipboardPastedMsg{}
+}
+
+func TestPreviewRightClickPastesAndFocuses(t *testing.T) {
+	m, _ := selectModel(t)
+	var target string
+	m.pasteInto = func(tgt string) error { target = tgt; return nil }
+	runPaste(t, press(m, tea.MouseButtonRight, xPreview+2, yPreview))
+	if target != "zzmouse:0.1" {
+		t.Errorf("pasted into %q, want the previewed pane zzmouse:0.1", target)
+	}
+	if m.mode != ModePassthrough {
+		t.Errorf("mode = %v, want passthrough after a right-click paste", m.mode)
+	}
+}
+
+func TestPreviewRightClickPasteError(t *testing.T) {
+	m, _ := selectModel(t)
+	m.pasteInto = func(string) error { return errors.New("clipboard has no text") }
+	next, _ := m.Update(runPaste(t, press(m, tea.MouseButtonRight, xPreview+2, yPreview)))
+	*m = next.(Model)
+	if v := ansi.Strip(m.statusbar.View()); !strings.Contains(v, "paste failed") {
+		t.Errorf("status bar = %q, want paste failed error", v)
+	}
+}
+
+func TestPreviewRightClickIgnoresClosedSession(t *testing.T) {
+	m, _ := selectModel(t)
+	m.sidebar.SelectedSession().Status = session.StatusClosed
+	called := false
+	m.pasteInto = func(string) error { called = true; return nil }
+	if cmd := press(m, tea.MouseButtonRight, xPreview+2, yPreview); cmd != nil {
+		cmd()
+	}
+	if called || m.mode == ModePassthrough {
+		t.Errorf("right-click on a closed session's preview pasted=%v mode=%v", called, m.mode)
 	}
 }

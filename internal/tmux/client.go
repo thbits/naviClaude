@@ -111,6 +111,19 @@ func (c *Client) SendKeys(target, keys string) error {
 	return nil
 }
 
+// PasteText pastes text into a pane as tmux's own paste does, bracketed when the
+// app asked for it, so a multi-line paste isn't submitted line by line.
+func (c *Client) PasteText(target, text string) error {
+	const buf = "naviclaude-paste"
+	cmd := exec.Command("tmux", "load-buffer", "-b", buf, "-", ";",
+		"paste-buffer", "-p", "-d", "-b", buf, "-t", target)
+	cmd.Stdin = strings.NewReader(text)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("tmux paste-buffer -t %s: %w: %s", target, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
 // SwitchClient switches the tmux client to the given target window/pane.
 func (c *Client) SwitchClient(target string) error {
 	if err := exec.Command("tmux", "switch-client", "-t", target).Run(); err != nil {

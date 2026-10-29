@@ -161,6 +161,7 @@ A row moves to its section as its status changes; the sort order applies within 
 | Wheel over the preview / changed files | Scroll them |
 | Click the preview / changed files | Focus that pane (the preview only for a live session) |
 | Drag over the preview | Select text and copy it to the clipboard on release, without focusing the pane |
+| Right-click the preview | Paste the clipboard's text into the live session (bracketed, as tmux pastes) and focus it |
 | Drag the session list's right border | Resize the session list; the width is saved to `sidebar_width` on release |
 | Click a hint in the bottom bar | Run that key |
 | Click a menu item / picker row | Run it / select it (click the selected row again to confirm) |

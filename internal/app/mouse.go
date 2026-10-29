@@ -118,10 +118,14 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.MouseButtonRight:
-		if msg.X < sidebarWidth {
+		switch {
+		case msg.X < sidebarWidth:
 			return m.rightPressSidebar(msg)
+		case rightWidth > 0 && msg.X >= rightPaneLeft:
+			return m, nil
+		default:
+			return m.pasteIntoPreview()
 		}
-		return m, nil
 
 	case tea.MouseButtonWheelUp, tea.MouseButtonWheelDown:
 		switch {
@@ -247,6 +251,26 @@ func (m Model) finishPreviewSelection(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	lines := strings.Count(text, "\n") + 1
 	return m, tea.Batch(focus, func() tea.Msg { return clipboardCopiedMsg{lines: lines, err: write(text)} })
 }
+
+// pasteIntoPreview pastes the clipboard into the previewed session and focuses
+// it, since right-click reaches naviClaude rather than the terminal's paste.
+func (m Model) pasteIntoPreview() (tea.Model, tea.Cmd) {
+	sel := m.sidebar.SelectedSession()
+	if sel == nil || sel.Status == session.StatusClosed || sel.TmuxTarget == "" {
+		return m, nil
+	}
+	focus := m.setFocus(ModePassthrough)
+	m.preview.ResetScroll()
+	paste := m.pasteInto
+	if paste == nil {
+		paste = m.pasteClipboard
+	}
+	target := sel.TmuxTarget
+	return m, tea.Batch(focus, func() tea.Msg { return clipboardPastedMsg{err: paste(target)} })
+}
+
+// clipboardPastedMsg reports a right-click paste into the previewed session.
+type clipboardPastedMsg struct{ err error }
 
 // clipboardCopiedMsg reports a preview selection copy.
 type clipboardCopiedMsg struct {

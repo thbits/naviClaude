@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -252,6 +253,7 @@ type Model struct {
 	mover           tmuxMover                 // test override; nil means tmuxClient
 	saveConfig      func(config.Config) error // config writer; nil writes the default config path
 	copyText        func(string) error        // clipboard writer; nil uses copyToClipboard
+	pasteInto       func(string) error        // pastes the clipboard into a pane; nil uses pasteClipboard
 	now             func() time.Time          // clock override for tests; nil means time.Now
 
 	// Preview scroll forwarding (see forwardWheel).
@@ -820,6 +822,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusbar.SetNotice(fmt.Sprintf("copied %d lines", msg.lines))
 		}
 		return m, nil
+
+	case clipboardPastedMsg:
+		if msg.err != nil {
+			m.statusbar.SetError("paste failed: " + msg.err.Error())
+			return m, nil
+		}
+		return m, m.capturePreviewCmd()
 	}
 
 	// Route unmatched messages to the open picker: its candidate-load result is
@@ -2970,6 +2979,32 @@ func copyToClipboard(text string) error {
 	cmd = exec.Command("xsel", "--clipboard", "--input")
 	cmd.Stdin = strings.NewReader(text)
 	return cmd.Run()
+}
+
+// readClipboard reads the system clipboard via pbpaste, xclip, then xsel,
+// returning the last tool's error if none works.
+func readClipboard() (string, error) {
+	out, err := exec.Command("pbpaste").Output()
+	if err == nil {
+		return string(out), nil
+	}
+	if out, err = exec.Command("xclip", "-o", "-selection", "clipboard").Output(); err == nil {
+		return string(out), nil
+	}
+	out, err = exec.Command("xsel", "--clipboard", "--output").Output()
+	return string(out), err
+}
+
+// pasteClipboard pastes the clipboard's text into target.
+func (m Model) pasteClipboard(target string) error {
+	text, err := readClipboard()
+	if err != nil {
+		return err
+	}
+	if text == "" {
+		return errors.New("clipboard has no text")
+	}
+	return m.tmuxClient.PasteText(target, text)
 }
 
 // maybeRestoreLastSession re-selects the session focused at last quit, once, if
