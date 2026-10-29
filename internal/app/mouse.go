@@ -344,13 +344,13 @@ func (m Model) clickSession(hit ui.SidebarHit, msg tea.MouseMsg) (tea.Model, tea
 
 	if double {
 		m.lastClickID = ""
-		enter := tea.KeyMsg{Type: tea.KeyEnter}
 		var next tea.Model
 		var cmd tea.Cmd
 		if searching {
-			next, cmd = m.handleSearchKey(enter)
+			next, cmd = m.handleSearchKey(tea.KeyMsg{Type: tea.KeyEnter})
 		} else {
-			next, cmd = m.handleListKey(enter)
+			// The focus action itself, so a rebound focus key keeps double-click working.
+			next, cmd = m.focusSelected()
 		}
 		return next, tea.Batch(append(cmds, cmd)...)
 	}

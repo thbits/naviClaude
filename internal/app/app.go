@@ -1067,6 +1067,20 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// focusSelected is the focus action: collapse / expand a group header, resume a
+// closed session through the target picker, or focus a live one in passthrough.
+func (m Model) focusSelected() (tea.Model, tea.Cmd) {
+	sess := m.sidebar.SelectedSession()
+	if sess == nil {
+		m.sidebar.ToggleGroupAtCursor()
+		return m, nil
+	}
+	if sess.Status == session.StatusClosed {
+		return m.openResumePicker(sess, false)
+	}
+	return m, m.setFocus(ModePassthrough)
+}
+
 func (m Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
 
@@ -1095,21 +1109,8 @@ func (m Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.sidebar.ExpandAll() // show all groups including Closed during search
 		return m, nil
 
-	case KeyEnter:
-		sess := m.sidebar.SelectedSession()
-		if sess == nil {
-			// Cursor is on a group header; delegate to sidebar for collapse/expand.
-			var cmd tea.Cmd
-			m.sidebar, cmd = m.sidebar.Update(msg)
-			return m, cmd
-		}
-		if sess.Status == session.StatusClosed {
-			// Enter resumes a closed session: open the target picker, then
-			// focus the resumed session in passthrough.
-			return m.openResumePicker(sess, false)
-		}
-		// Enter passthrough mode for active sessions.
-		return m, m.setFocus(ModePassthrough)
+	case m.keys.Focus:
+		return m.focusSelected()
 
 	case KeyTab, KeyCyclePanes:
 		// Tab / Shift+Tab cycle focus across the visible panes (list, preview

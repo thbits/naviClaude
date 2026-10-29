@@ -99,7 +99,7 @@ func (km KeyMap) HelpBindings() []HelpBinding {
 		{"Ctrl+U/Ctrl+D", "Scroll preview"},
 		{km.Search, "Search"},
 		// Act on the selected session
-		{"Enter", "Focus / resume closed"},
+		{keyLabel(km.Focus), "Focus / resume closed"},
 		{km.Jump, "Jump / resume closed, then jump"},
 		{km.NewSession, "New session"},
 		{km.NewTmuxSession, "New tmux session"},
@@ -122,7 +122,7 @@ func (km KeyMap) HelpBindings() []HelpBinding {
 // last and is never dropped, and everything else lives in the help overlay.
 func (km KeyMap) StatusHints() []HelpBinding {
 	return []HelpBinding{
-		{"Enter", "open"},
+		{keyLabel(km.Focus), "open"},
 		{km.Jump, "jump"},
 		{km.NewSession, "new"},
 		{km.Search, "search"},
@@ -130,6 +130,15 @@ func (km KeyMap) StatusHints() []HelpBinding {
 		{km.KillSession, "kill"},
 		{km.Help, "more"},
 	}
+}
+
+// keyLabel shows "enter" as "Enter", as the help and hints spell it; hint clicks
+// match key names case-insensitively, so the label still replays the key.
+func keyLabel(k string) string {
+	if k == KeyEnter {
+		return "Enter"
+	}
+	return k
 }
 
 // Non-configurable keys: passthrough exit, modal keys, navigation.
