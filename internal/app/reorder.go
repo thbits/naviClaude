@@ -180,13 +180,31 @@ func (m Model) writeConfig() error {
 	return save(m.cfg)
 }
 
+// saveGroupOrder saves the group order and pins now, since quitting is not the
+// only way naviClaude ends.
 func (m Model) saveGroupOrder() {
 	if m.viewState == nil {
 		return
 	}
 	vs := m.viewState.Get()
 	vs.GroupOrder = m.sidebar.GroupOrder()
+	vs.Pinned = m.sidebar.Pinned()
 	_ = m.viewState.Save(vs)
+}
+
+// togglePin pins a live session to the top of its group, or unpins it.
+func (m Model) togglePin(sess *session.Session) (tea.Model, tea.Cmd) {
+	if sess == nil || sess.Status == session.StatusClosed {
+		return m, nil
+	}
+	prev := m.selectionIdentity()
+	if m.sidebar.TogglePin(sess) {
+		m.statusbar.SetNotice("pinned to the top of " + sess.TmuxSession)
+	} else {
+		m.statusbar.SetNotice("unpinned")
+	}
+	m.saveGroupOrder()
+	return m, m.syncSelectionAfterRebuild(prev)
 }
 
 // ---------------------------------------------------------------------------

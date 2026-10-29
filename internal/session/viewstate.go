@@ -18,6 +18,8 @@ type ViewState struct {
 	// GroupOrder is the dragged order of tmux session groups, used when
 	// group_sort_order is "manual"; tmux itself has no session order.
 	GroupOrder []string `json:"group_order,omitempty"`
+	// Pinned holds the keys of sessions pinned to the top of their group.
+	Pinned []string `json:"pinned,omitempty"`
 }
 
 // ViewStateStore persists ViewState as JSON at
@@ -53,7 +55,7 @@ func DefaultViewStatePath() string {
 func (s *ViewStateStore) Get() ViewState {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	out := ViewState{LastSessionID: s.state.LastSessionID, GroupOrder: slices.Clone(s.state.GroupOrder)}
+	out := ViewState{LastSessionID: s.state.LastSessionID, GroupOrder: slices.Clone(s.state.GroupOrder), Pinned: slices.Clone(s.state.Pinned)}
 	if s.state.CollapsedGroups != nil {
 		out.CollapsedGroups = make(map[string]bool, len(s.state.CollapsedGroups))
 		for k, v := range s.state.CollapsedGroups {

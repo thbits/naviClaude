@@ -74,6 +74,7 @@ type KeyBindings struct {
 	Quit           string `yaml:"quit"`
 	ToggleChanged  string `yaml:"toggle_changed"`
 	MoveWindow     string `yaml:"move_window"`
+	PinSession     string `yaml:"pin_session"`
 }
 
 // DefaultConfig returns the default configuration.
@@ -93,6 +94,7 @@ func DefaultConfig() Config {
 			Quit:           "q",
 			ToggleChanged:  "F",
 			MoveWindow:     "m",
+			PinSession:     "p",
 		},
 		SidebarWidth:       30,
 		RefreshInterval:    "200ms",

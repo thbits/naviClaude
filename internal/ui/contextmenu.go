@@ -171,6 +171,7 @@ type MenuCaps struct {
 	CanResume bool
 	CanFork   bool
 	Branch    string // git branch to offer for copying; "" hides the item
+	Pinned    bool   // the session is pinned to the top of its group
 }
 
 func (m *ContextMenuModel) buildItems(s *session.Session, caps MenuCaps) []MenuItem {
@@ -203,6 +204,13 @@ func (m *ContextMenuModel) buildItems(s *session.Session, caps MenuCaps) []MenuI
 		// Only an idle session can show the done mark, so only it can be re-marked.
 		if s.Status == session.StatusIdle && s.Attention == "" && s.TmuxPaneID != "" {
 			items = append(items, MenuItem{Label: "Set as unread", Action: "mark_unread"})
+		}
+		if s.Key() != "" || s.TmuxPaneID != "" {
+			label := "Pin to top"
+			if caps.Pinned {
+				label = "Unpin"
+			}
+			items = append(items, MenuItem{Label: label, Shortcut: "p", Action: "toggle_pin"})
 		}
 		if s.TmuxPaneID != "" {
 			items = append(items, MenuItem{Label: "Move to tmux session…", Shortcut: "m", Action: "move_window"})

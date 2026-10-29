@@ -118,6 +118,7 @@ The title bar shows live counts (`● 2 working · ◎ 1 needs you · ◉ 1 done
 | `N` | New tmux session (prompts for name) |
 | `r` | Rename session; on a group header, rename that tmux session |
 | `m` | Move the session's window to another tmux session (pick one, or type a new name to create it) |
+| `p` | Pin the session to the top of its group, whatever its status (again to unpin) |
 | `K` | Kill session |
 | `F` | Open the changed-files sidebar and focus it; inside it, `F` closes it again (`Esc` drops focus but keeps it open) |
 | `j` / `k` | In the changed-files sidebar, navigate files |
@@ -129,6 +130,20 @@ The title bar shows live counts (`● 2 working · ◎ 1 needs you · ◉ 1 done
 | `q` | Quit |
 
 All key bindings except navigation and passthrough exit keys are configurable. A config error, or a key bound twice or to a reserved key, is reported in the status bar at startup.
+
+### Sections
+
+Each tmux session group splits its rows into sections, top to bottom, each headed by a one-row line (`─ working ─────`) when the group has more than one:
+
+| Section | Holds |
+|---|---|
+| pinned | Sessions you pinned with `p`, whatever their status (marked with a pin) |
+| waiting | Sessions waiting on you: a permission prompt or a question |
+| done | Sessions that finished while you weren't looking, until you select them |
+| working | Sessions working, including background subagents and shells |
+| idle | Everything else |
+
+A row moves to its section as its status changes; the sort order applies within each section, and dragging reorders a row within its own section.
 
 ### Mouse
 
@@ -174,6 +189,7 @@ keys:
   stats: "s"
   toggle_changed: "F"
   move_window: "m"
+  pin_session: "p"
   help: "?"
 
 sidebar_width: 30
@@ -204,8 +220,8 @@ restore_sessions: true
 | `sidebar_width` | `30` | Width of the session list panel, in percent of the terminal width (also set by dragging its border) |
 | `refresh_interval` | `200ms` | How often to refresh session data |
 | `closed_session_hours` | `8` | Show closed sessions from the last N hours |
-| `group_sort_order` | `name` | Sort tmux session groups: `name` (alphabetical), `activity`, or `manual` (the order you dragged them into; groups never dragged come last). Groups with a session waiting on you always come first; under `manual`, so do groups with a session that finished while you weren't looking |
-| `session_sort_order` | `name` | Sort sessions within groups: `name` (alphabetical), `activity`, or `manual` (tmux window order, which dragging changes). Sessions waiting on you always come first; under `manual`, so do sessions that finished while you weren't looking, until you select them |
+| `group_sort_order` | `name` | Sort tmux session groups: `name` (alphabetical), `activity`, or `manual` (the order you dragged them into; groups never dragged come last). Groups holding a pinned session come first, then groups with a session waiting on you or done unseen |
+| `session_sort_order` | `name` | Sort sessions within groups: `name` (alphabetical), `activity`, or `manual` (tmux window order, which dragging changes). The order applies within each section of a group (see [Sections](#sections)) |
 | `popup_width` | `85` | Width of the `naviclaude open` floating pane or popup (percentage of the window) |
 | `popup_height` | `85` | Height of the `naviclaude open` floating pane or popup (percentage of the window) |
 | `resume_in_current_session` | `true` | Resume sessions in the current tmux pane |

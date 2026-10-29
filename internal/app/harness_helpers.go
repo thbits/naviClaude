@@ -31,12 +31,13 @@ func (m Model) defaultInfo() harness.Info {
 // menuCaps reports which lifecycle actions the context menu may offer for s.
 func (m Model) menuCaps(s *session.Session) ui.MenuCaps {
 	h := m.harnessFor(s)
+	pinned := m.sidebar.IsPinned(s)
 	if h == nil {
-		return ui.MenuCaps{Branch: m.branchFor(s)}
+		return ui.MenuCaps{Branch: m.branchFor(s), Pinned: pinned}
 	}
 	_, canResume := harness.AsResumer(h)
 	_, canFork := harness.AsForker(h)
-	return ui.MenuCaps{CanResume: canResume, CanFork: canFork, Branch: m.branchFor(s)}
+	return ui.MenuCaps{CanResume: canResume, CanFork: canFork, Branch: m.branchFor(s), Pinned: pinned}
 }
 
 // branchFor is the branch a live session is on now, or the one a closed session

@@ -22,6 +22,7 @@ type KeyMap struct {
 	Help           string
 	ToggleChanged  string
 	MoveWindow     string
+	PinSession     string
 }
 
 // DefaultKeyMap returns the default key bindings.
@@ -40,6 +41,7 @@ func DefaultKeyMap() KeyMap {
 		Help:           "?",
 		ToggleChanged:  "F",
 		MoveWindow:     "m",
+		PinSession:     "p",
 	}
 }
 
@@ -66,6 +68,7 @@ func keyFieldBindings(kb config.KeyBindings, km *KeyMap) []keyFieldBinding {
 		{"help", kb.Help, &km.Help},
 		{"toggle_changed", kb.ToggleChanged, &km.ToggleChanged},
 		{"move_window", kb.MoveWindow, &km.MoveWindow},
+		{"pin_session", kb.PinSession, &km.PinSession},
 	}
 }
 
@@ -102,6 +105,7 @@ func (km KeyMap) HelpBindings() []HelpBinding {
 		{km.NewTmuxSession, "New tmux session"},
 		{km.RenameSession, "Rename session / tmux session (on a header)"},
 		{km.MoveWindow, "Move to another tmux session"},
+		{km.PinSession, "Pin / unpin to the top of its group"},
 		{km.KillSession, "Kill session"},
 		// Inspect the selected session
 		{km.ToggleChanged, "Changed files panel"},

@@ -111,6 +111,7 @@ const (
 	IconMonitor  = "\U000f0208" // nf-md-eye: Monitor tool watches
 	IconRepo     = "\uea62"     // nf-cod-repo: git repository name
 	IconThinking = "\U000f09d1" // nf-md-brain: main thread thinking between tools
+	IconPin      = "\U000f0403" // nf-md-pin: session pinned to the top of its group
 )
 
 // SidebarWaitingFlash is applied during the active->waiting transition flash.

@@ -33,6 +33,8 @@ type sessionGroup struct {
 type flatItem struct {
 	isGroup   bool
 	groupName string // the header's group, or the group a session row sits in
+	section   int    // session rows only: the section of its group it sorts into
+	newSect   bool   // session rows only: first row of a section, in a group with several
 	session   *session.Session
 	// Group items only: cached so renderGroupHeader needn't rescan m.groups every frame.
 	groupIdx   int
@@ -71,6 +73,8 @@ type SidebarModel struct {
 	groupOrder        []string  // dragged group order, read by the manual group sort
 	baseOrder         []string  // live groups in sort order before waiting groups float
 	drop              *dropMark // drag-and-drop marker; nil when nothing is dragged
+	pinned            []string  // keys of sessions pinned to the top of their group
+	sections          map[*session.Session]int
 
 	// Working sessions hold their slot under activity sort instead of racing on
 	// LastActivity: key -> rebuild tick it started working (newer sorts first).
@@ -343,11 +347,16 @@ func (m *SidebarModel) rebuildGroups() {
 			})
 		}
 	}
+	m.rekeyPins()
+	m.sections = make(map[*session.Session]int, len(m.Sessions))
 	for _, sessions := range groupMap {
 		sortFn(sessions)
-		// Sessions that need the user float above the configured order.
+		for _, s := range sessions {
+			m.sections[s] = m.sectionOf(s)
+		}
+		// The configured order applies within each section.
 		sort.SliceStable(sessions, func(i, j int) bool {
-			return m.floats(sessions[i], manual) && !m.floats(sessions[j], manual)
+			return m.sections[sessions[i]] < m.sections[sessions[j]]
 		})
 	}
 	// Closed sessions always sort by activity (slug context is sparse).
@@ -396,19 +405,21 @@ func (m *SidebarModel) rebuildGroups() {
 		sort.Strings(names)
 	}
 	m.baseOrder = slices.Clone(names)
-	// Groups holding a session that needs the user come first.
-	groupManual := m.groupSortOrder == "manual"
-	waitingGroup := make(map[string]bool, len(groupMap))
+	// Groups holding a pinned session come first, then ones holding a session
+	// waiting on the user or done unseen; sessions[0] is the group's top section.
+	groupRank := make(map[string]int, len(groupMap))
 	for name, sessions := range groupMap {
-		for _, s := range sessions {
-			if m.floats(s, groupManual) {
-				waitingGroup[name] = true
-				break
-			}
+		switch sec := m.sections[sessions[0]]; {
+		case sec == sectionPinned:
+			groupRank[name] = 0
+		case sec <= sectionDone:
+			groupRank[name] = 1
+		default:
+			groupRank[name] = 2
 		}
 	}
 	sort.SliceStable(names, func(i, j int) bool {
-		return waitingGroup[names[i]] && !waitingGroup[names[j]]
+		return groupRank[names[i]] < groupRank[names[j]]
 	})
 
 	m.groups = nil
@@ -479,10 +490,16 @@ func (m *SidebarModel) rebuildFlatItems() {
 			groupCount: len(g.Sessions),
 		})
 		if !m.collapsed[g.Name] {
-			for _, s := range g.Sessions {
+			// Sessions sort by section, so the ends differ when there are several.
+			labeled := g.Name != ClosedGroupName && len(g.Sessions) > 0 &&
+				m.sections[g.Sessions[0]] != m.sections[g.Sessions[len(g.Sessions)-1]]
+			for i, s := range g.Sessions {
+				sec := m.sections[s]
 				m.flatItems = append(m.flatItems, flatItem{
 					groupName: g.Name,
 					session:   s,
+					section:   sec,
+					newSect:   labeled && (i == 0 || m.sections[g.Sessions[i-1]] != sec),
 				})
 			}
 		}
@@ -608,6 +625,10 @@ func (m *SidebarModel) syncViewport() {
 		isCursor := i == m.cursor
 		key := item.key()
 		hovered := !isCursor && m.hoverKey != "" && key == m.hoverKey
+		if item.newSect {
+			lines = append(lines, m.renderSectionLine(item.section))
+			m.lineItems = append(m.lineItems, -1)
+		}
 		lineBefore := m.drop != nil && !m.drop.header && !m.drop.after && m.drop.key == key
 		if lineBefore && !(item.isGroup && item.groupIdx > 0) {
 			lines = append(lines, dropLine)
@@ -1021,16 +1042,6 @@ func (m SidebarModel) View() string {
 // needsUser reports a session blocked on the user (approval or question).
 func needsUser(s *session.Session) bool { return s.Status == session.StatusWaiting }
 
-// floats reports a session that rises to the top of its group: one waiting on
-// the user, or under manual order also one that finished while unseen.
-func (m *SidebarModel) floats(s *session.Session, manual bool) bool {
-	if needsUser(s) {
-		return true
-	}
-	return manual && s.Attention == attention.Done &&
-		session.EffectiveStatus(s, m.background[s.ID]) == session.StatusIdle
-}
-
 // windowOrder returns the window and pane index of a session's tmux target;
 // targets that don't parse sort last.
 func windowOrder(s *session.Session) (int, int) {
@@ -1161,6 +1172,9 @@ func (m SidebarModel) renderGroupHeader(name string, count, idx int, isCursor, h
 
 func (m SidebarModel) renderSessionItem(s *session.Session, isCursor, hovered bool) []string {
 	relTime := relativeTime(time.Since(s.LastActivity))
+	if m.IsPinned(s) {
+		relTime = styles.IconPin + " " + relTime
+	}
 
 	displayName := sessionTitle(s)
 	if displayName == "" && len(s.ID) >= 8 {

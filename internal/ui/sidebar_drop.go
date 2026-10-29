@@ -67,11 +67,14 @@ func (m *SidebarModel) sessionDropMark(hit SidebarHit, src string) *dropMark {
 	}
 	idx, before := hit.Index, hit.Upper
 	if !before {
-		if next := idx + 1; next < len(m.flatItems) && !m.flatItems[next].isGroup && true {
+		if next := idx + 1; next < len(m.flatItems) && !m.flatItems[next].isGroup && m.sameSection(srcSess, m.flatItems[next].session) {
 			idx, before = next, true
 		}
 	}
 	anchor := m.flatItems[idx].session
+	if !m.sameSection(srcSess, anchor) {
+		return nil // the sections, not the drag, decide where it shows
+	}
 	if anchor.TmuxPaneID == src {
 		return nil // dropping right above itself
 	}

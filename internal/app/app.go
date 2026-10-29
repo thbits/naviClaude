@@ -341,6 +341,7 @@ func New(version string) Model {
 	m.sidebar.SetGroupSortOrder(cfg.GroupSortOrder)
 	m.sidebar.SetSessionSortOrder(cfg.SessionSortOrder)
 	m.sidebar.SetGroupOrder(m.viewState.Get().GroupOrder)
+	m.sidebar.SetPinned(m.viewState.Get().Pinned)
 
 	if cfg.RestoreSessions {
 		m.liveState = session.NewLiveStateStore("")
@@ -1119,6 +1120,9 @@ func (m Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case m.keys.RenameSession:
 		return m.startRenameSession()
+
+	case m.keys.PinSession:
+		return m.togglePin(m.sidebar.SelectedSession())
 
 	case m.keys.MoveWindow:
 		if sess := m.sidebar.SelectedSession(); sess != nil && sess.Status != session.StatusClosed {
@@ -2052,6 +2056,11 @@ func (m Model) executeContextAction(action string, sess *session.Session) (tea.M
 		m.statusbar.SetMode(ModeList.String())
 		m.selectSessionInSidebar(sess)
 		return m.jumpToPane()
+
+	case "toggle_pin":
+		m.mode = ModeList
+		m.statusbar.SetMode(ModeList.String())
+		return m.togglePin(sess)
 
 	case "move_window":
 		m.mode = ModeList
@@ -2991,7 +3000,7 @@ func (m Model) persistViewState() {
 	if m.viewState == nil {
 		return
 	}
-	vs := session.ViewState{CollapsedGroups: m.sidebar.ToggledGroups(), GroupOrder: m.sidebar.GroupOrder()}
+	vs := session.ViewState{CollapsedGroups: m.sidebar.ToggledGroups(), GroupOrder: m.sidebar.GroupOrder(), Pinned: m.sidebar.Pinned()}
 	if sel := m.sidebar.SelectedSession(); sel != nil {
 		vs.LastSessionID = sel.Key()
 	}

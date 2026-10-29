@@ -262,3 +262,20 @@ func TestMoveKeyOpensMovePickerForSelectedSession(t *testing.T) {
 		t.Errorf("m on a row: mode %v, pending %v; want the move picker for s2", got.mode, got.pendingMoveSession)
 	}
 }
+
+func TestPinKeyPinsAndPersists(t *testing.T) {
+	m, _, _ := dragModel(t)
+	m.viewState = session.NewViewStateStore(t.TempDir() + "/view-state.json")
+	m.sidebar.SelectByID("s2")
+	next, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("p")})
+	*m = next.(Model)
+	if got := m.viewState.Get().Pinned; len(got) != 1 || got[0] != "s2" {
+		t.Fatalf("saved pins = %v, want [s2]", got)
+	}
+	if rowOf(t, m, "s2") > rowOf(t, m, "s1") {
+		t.Error("pinned s2 still renders below s1")
+	}
+	if sel := m.sidebar.SelectedSession(); sel == nil || sel.ID != "s2" {
+		t.Errorf("selection moved off the pinned row to %v", sel)
+	}
+}
