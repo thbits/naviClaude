@@ -165,9 +165,11 @@ func (m *SidebarModel) RenameGroup(oldName, newName string) {
 			delete(mp, oldName)
 		}
 	}
-	for i, n := range m.groupOrder {
-		if n == oldName {
-			m.groupOrder[i] = newName
+	for _, list := range [][]string{m.groupOrder, m.pinnedGroups} {
+		for i, n := range list {
+			if n == oldName {
+				list[i] = newName
+			}
 		}
 	}
 	if m.trackedGroup == oldName {

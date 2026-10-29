@@ -48,7 +48,7 @@ func (m *ContextMenuModel) Show(x, y int, s *session.Session, caps MenuCaps) {
 }
 
 // ShowGroup positions the menu for a group header naming tmux session name.
-func (m *ContextMenuModel) ShowGroup(x, y int, name string, collapsed bool) {
+func (m *ContextMenuModel) ShowGroup(x, y int, name string, collapsed, pinned bool) {
 	m.visible = true
 	m.x, m.y = x, y
 	m.session = nil
@@ -58,9 +58,14 @@ func (m *ContextMenuModel) ShowGroup(x, y int, name string, collapsed bool) {
 	if collapsed {
 		toggle = "Expand"
 	}
+	pin := "Pin to top"
+	if pinned {
+		pin = "Unpin"
+	}
 	m.items = []MenuItem{
 		{Label: "Rename tmux session", Shortcut: "r", Action: "rename_group"},
 		{Label: "New session here", Shortcut: "n", Action: "new_in_group"},
+		{Label: pin, Shortcut: "p", Action: "pin_group"},
 		{IsSep: true},
 		{Label: toggle, Shortcut: "Enter", Action: "toggle_group"},
 	}

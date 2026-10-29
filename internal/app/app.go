@@ -342,6 +342,7 @@ func New(version string) Model {
 	m.sidebar.SetSessionSortOrder(cfg.SessionSortOrder)
 	m.sidebar.SetGroupOrder(m.viewState.Get().GroupOrder)
 	m.sidebar.SetPinned(m.viewState.Get().Pinned)
+	m.sidebar.SetPinnedGroups(m.viewState.Get().PinnedGroups)
 
 	if cfg.RestoreSessions {
 		m.liveState = session.NewLiveStateStore("")
@@ -3000,7 +3001,7 @@ func (m Model) persistViewState() {
 	if m.viewState == nil {
 		return
 	}
-	vs := session.ViewState{CollapsedGroups: m.sidebar.ToggledGroups(), GroupOrder: m.sidebar.GroupOrder(), Pinned: m.sidebar.Pinned()}
+	vs := session.ViewState{CollapsedGroups: m.sidebar.ToggledGroups(), GroupOrder: m.sidebar.GroupOrder(), Pinned: m.sidebar.Pinned(), PinnedGroups: m.sidebar.PinnedGroups()}
 	if sel := m.sidebar.SelectedSession(); sel != nil {
 		vs.LastSessionID = sel.Key()
 	}

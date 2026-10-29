@@ -20,6 +20,8 @@ type ViewState struct {
 	GroupOrder []string `json:"group_order,omitempty"`
 	// Pinned holds the keys of sessions pinned to the top of their group.
 	Pinned []string `json:"pinned,omitempty"`
+	// PinnedGroups holds the tmux sessions pinned to the top of the list.
+	PinnedGroups []string `json:"pinned_groups,omitempty"`
 }
 
 // ViewStateStore persists ViewState as JSON at
@@ -55,7 +57,8 @@ func DefaultViewStatePath() string {
 func (s *ViewStateStore) Get() ViewState {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	out := ViewState{LastSessionID: s.state.LastSessionID, GroupOrder: slices.Clone(s.state.GroupOrder), Pinned: slices.Clone(s.state.Pinned)}
+	out := ViewState{LastSessionID: s.state.LastSessionID, GroupOrder: slices.Clone(s.state.GroupOrder), Pinned: slices.Clone(s.state.Pinned),
+		PinnedGroups: slices.Clone(s.state.PinnedGroups)}
 	if s.state.CollapsedGroups != nil {
 		out.CollapsedGroups = make(map[string]bool, len(s.state.CollapsedGroups))
 		for k, v := range s.state.CollapsedGroups {

@@ -118,7 +118,7 @@ The title bar shows live counts (`● 2 working · ◎ 1 needs you · ◉ 1 done
 | `N` | New tmux session (prompts for name) |
 | `r` | Rename session; on a group header, rename that tmux session |
 | `m` | Move the session's window to another tmux session (pick one, or type a new name to create it) |
-| `p` | Pin the session to the top of its group, whatever its status (again to unpin) |
+| `p` | Pin the session to the top of its group, whatever its status; on a group header, pin that tmux session to the top of the list (again to unpin) |
 | `K` | Kill session |
 | `F` | Open the changed-files sidebar and focus it; inside it, `F` closes it again (`Esc` drops focus but keeps it open) |
 | `j` / `k` | In the changed-files sidebar, navigate files |
@@ -155,7 +155,7 @@ A row moves to its section as its status changes; the sort order applies within 
 | Drag a session | Drop it on another row to move its tmux window there, or on a group header to move it to the end of that tmux session. Sets `session_sort_order` to `manual` |
 | Drag a group header | Reorder the tmux session groups. Sets `group_sort_order` to `manual` |
 | Right-click a session | Open the context menu for that session (also on search results; `Esc` returns to the search). "Move to tmux session…" moves its window to another (or a new) tmux session |
-| Right-click a group header | Rename the tmux session, start a new session in it, or collapse / expand it |
+| Right-click a group header | Rename the tmux session, start a new session in it, pin it to the top, or collapse / expand it |
 | Long-press a session (hold ~450ms) | Open the context menu -- for tmux setups whose `MouseDown3Pane` binding swallows right-click |
 | Wheel over the session list | Move the selection up / down |
 | Wheel over the preview / changed files | Scroll them |
@@ -220,7 +220,7 @@ restore_sessions: true
 | `sidebar_width` | `30` | Width of the session list panel, in percent of the terminal width (also set by dragging its border) |
 | `refresh_interval` | `200ms` | How often to refresh session data |
 | `closed_session_hours` | `8` | Show closed sessions from the last N hours |
-| `group_sort_order` | `name` | Sort tmux session groups: `name` (alphabetical), `activity`, or `manual` (the order you dragged them into; groups never dragged come last). Groups holding a pinned session come first, then groups with a session waiting on you or done unseen |
+| `group_sort_order` | `name` | Sort tmux session groups: `name` (alphabetical), `activity`, or `manual` (the order you dragged them into; groups never dragged come last). Pinned tmux sessions come first, then groups holding a pinned session, then groups with a session waiting on you or done unseen |
 | `session_sort_order` | `name` | Sort sessions within groups: `name` (alphabetical), `activity`, or `manual` (tmux window order, which dragging changes). The order applies within each section of a group (see [Sections](#sections)) |
 | `popup_width` | `85` | Width of the `naviclaude open` floating pane or popup (percentage of the window) |
 | `popup_height` | `85` | Height of the `naviclaude open` floating pane or popup (percentage of the window) |

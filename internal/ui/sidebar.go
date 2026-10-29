@@ -74,6 +74,7 @@ type SidebarModel struct {
 	baseOrder         []string  // live groups in sort order before waiting groups float
 	drop              *dropMark // drag-and-drop marker; nil when nothing is dragged
 	pinned            []string  // keys of sessions pinned to the top of their group
+	pinnedGroups      []string  // tmux sessions pinned to the top of the list
 	sections          map[*session.Session]int
 
 	// Working sessions hold their slot under activity sort instead of racing on
@@ -405,17 +406,20 @@ func (m *SidebarModel) rebuildGroups() {
 		sort.Strings(names)
 	}
 	m.baseOrder = slices.Clone(names)
-	// Groups holding a pinned session come first, then ones holding a session
-	// waiting on the user or done unseen; sessions[0] is the group's top section.
+	// Pinned groups come first, then groups holding a pinned session, then ones
+	// holding a session waiting on the user or done unseen; sessions[0] is the
+	// group's top section.
 	groupRank := make(map[string]int, len(groupMap))
 	for name, sessions := range groupMap {
 		switch sec := m.sections[sessions[0]]; {
-		case sec == sectionPinned:
+		case m.IsGroupPinned(name):
 			groupRank[name] = 0
-		case sec <= sectionDone:
+		case sec == sectionPinned:
 			groupRank[name] = 1
-		default:
+		case sec <= sectionDone:
 			groupRank[name] = 2
+		default:
+			groupRank[name] = 3
 		}
 	}
 	sort.SliceStable(names, func(i, j int) bool {
@@ -1115,6 +1119,14 @@ func groupRecentActivity(sessions []*session.Session) time.Time {
 	return newest
 }
 
+// groupCount is a header's right-hand count, after a pin mark when the group is pinned.
+func (m SidebarModel) groupCount(name string, count int) string {
+	if m.IsGroupPinned(name) {
+		return styles.IconPin + " " + strconv.Itoa(count)
+	}
+	return strconv.Itoa(count)
+}
+
 // renderGroupHeader renders a group header row; count and idx come from the
 // flatItems walk to avoid rescanning m.groups every frame.
 func (m SidebarModel) renderGroupHeader(name string, count, idx int, isCursor, hovered bool) string {
@@ -1125,7 +1137,7 @@ func (m SidebarModel) renderGroupHeader(name string, count, idx int, isCursor, h
 
 	if isCursor {
 		content := fmt.Sprintf("%s %s", arrow, name)
-		countRendered := fmt.Sprintf("%d", count)
+		countRendered := m.groupCount(name, count)
 		innerWidth := m.width - 2 // PaddingLeft(1) inside Width; border is outside
 		if innerWidth < 10 {
 			innerWidth = 10
@@ -1155,7 +1167,7 @@ func (m SidebarModel) renderGroupHeader(name string, count, idx int, isCursor, h
 		ghStyle, gcStyle, fill = ghStyle.Background(styles.ColorBgHover), gcStyle.Background(styles.ColorBgHover), fill.Background(styles.ColorBgHover)
 	}
 	left := ghStyle.Render(fmt.Sprintf("%s %s", arrow, name))
-	right := gcStyle.Render(fmt.Sprintf("%d", count))
+	right := gcStyle.Render(m.groupCount(name, count))
 	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right) - 1
 	if gap < 1 {
 		gap = 1

@@ -279,3 +279,24 @@ func TestPinKeyPinsAndPersists(t *testing.T) {
 		t.Errorf("selection moved off the pinned row to %v", sel)
 	}
 }
+
+func TestPinKeyOnHeaderPinsTmuxSession(t *testing.T) {
+	m, _, _ := dragModel(t)
+	m.viewState = session.NewViewStateStore(t.TempDir() + "/view-state.json")
+	press(m, tea.MouseButtonLeft, xList, viewRow(t, m, "bb"))
+	releaseRun(m, xList, viewRow(t, m, "bb"))
+	if m.sidebar.SelectedGroupName() != "bb" {
+		t.Fatalf("precondition: header bb not selected (got %q)", m.sidebar.SelectedGroupName())
+	}
+	next, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("p")})
+	*m = next.(Model)
+	if got := m.viewState.Get().PinnedGroups; len(got) != 1 || got[0] != "bb" {
+		t.Fatalf("saved group pins = %v, want [bb]", got)
+	}
+	if viewRow(t, m, "bb") > viewRow(t, m, "aa") {
+		t.Error("pinned bb still renders below aa")
+	}
+	if m.sidebar.SelectedGroupName() != "bb" {
+		t.Errorf("selection left the bb header: %q", m.sidebar.SelectedGroupName())
+	}
+}

@@ -189,12 +189,32 @@ func (m Model) saveGroupOrder() {
 	vs := m.viewState.Get()
 	vs.GroupOrder = m.sidebar.GroupOrder()
 	vs.Pinned = m.sidebar.Pinned()
+	vs.PinnedGroups = m.sidebar.PinnedGroups()
 	_ = m.viewState.Save(vs)
 }
 
-// togglePin pins a live session to the top of its group, or unpins it.
+// toggleGroupPin pins tmux session group to the top of the list, or unpins it.
+func (m Model) toggleGroupPin(group string) (tea.Model, tea.Cmd) {
+	if group == "" || group == ui.ClosedGroupName {
+		return m, nil
+	}
+	prev := m.selectionIdentity()
+	if m.sidebar.ToggleGroupPin(group) {
+		m.statusbar.SetNotice("pinned " + group + " to the top")
+	} else {
+		m.statusbar.SetNotice("unpinned " + group)
+	}
+	m.saveGroupOrder()
+	return m, m.syncSelectionAfterRebuild(prev)
+}
+
+// togglePin pins a live session to the top of its group, or unpins it; on a
+// group header it pins the tmux session instead.
 func (m Model) togglePin(sess *session.Session) (tea.Model, tea.Cmd) {
-	if sess == nil || sess.Status == session.StatusClosed {
+	if sess == nil {
+		return m.toggleGroupPin(m.sidebar.SelectedGroupName())
+	}
+	if sess.Status == session.StatusClosed {
 		return m, nil
 	}
 	prev := m.selectionIdentity()
@@ -220,7 +240,7 @@ func (m Model) openGroupMenu(hit ui.SidebarHit, x, y int) (tea.Model, tea.Cmd) {
 	}
 	m.sidebar.SetCursor(hit.Index)
 	cmd = tea.Batch(cmd, m.afterSelectionChange())
-	m.contextMenu.ShowGroup(x, y, hit.Group, m.sidebar.IsCollapsed(hit.Group))
+	m.contextMenu.ShowGroup(x, y, hit.Group, m.sidebar.IsCollapsed(hit.Group), m.sidebar.IsGroupPinned(hit.Group))
 	m.mode = ModeContextMenu
 	m.statusbar.SetMode(ModeContextMenu.String())
 	return m, cmd
@@ -234,6 +254,8 @@ func (m Model) executeGroupAction(action, group string) (tea.Model, tea.Cmd) {
 		return m.startRenameGroup(group)
 	case "new_in_group":
 		return m.createNewSession()
+	case "pin_group":
+		return m.toggleGroupPin(group)
 	case "toggle_group":
 		if m.sidebar.SelectedGroupName() == group {
 			m.sidebar.ToggleGroupAtCursor()

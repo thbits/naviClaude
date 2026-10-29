@@ -181,3 +181,21 @@ func TestTopSectionLabeledWhenGroupHasSeveral(t *testing.T) {
 		t.Errorf("working line is not above the working row:\n%s", view)
 	}
 }
+
+func TestPinnedGroupLeadsTheList(t *testing.T) {
+	m := sectionSidebar("manual", []string{"p"},
+		row("q", "aa", 1, session.StatusWaiting), row("p", "bb", 1, session.StatusIdle), row("x", "cc", 1, session.StatusIdle))
+	if !m.ToggleGroupPin("cc") {
+		t.Fatal("cc did not pin")
+	}
+	if got, want := groupRows(m), "[cc] x [bb] p [aa] q"; got != want {
+		t.Errorf("rows = %s, want %s", got, want)
+	}
+	if m.ToggleGroupPin(ClosedGroupName) {
+		t.Error("the Closed group pinned")
+	}
+	m.RenameGroup("cc", "dd")
+	if !m.IsGroupPinned("dd") || m.IsGroupPinned("cc") {
+		t.Errorf("pin did not follow the rename: %v", m.PinnedGroups())
+	}
+}

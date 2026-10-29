@@ -45,6 +45,33 @@ func (m *SidebarModel) SetPinned(keys []string) { m.pinned = keys }
 // Pinned returns the keys of the pinned sessions.
 func (m *SidebarModel) Pinned() []string { return m.pinned }
 
+// SetPinnedGroups sets the tmux sessions pinned to the top of the list.
+func (m *SidebarModel) SetPinnedGroups(names []string) { m.pinnedGroups = names }
+
+// PinnedGroups returns the tmux sessions pinned to the top of the list.
+func (m *SidebarModel) PinnedGroups() []string { return m.pinnedGroups }
+
+// IsGroupPinned reports whether tmux session name is pinned to the top of the list.
+func (m *SidebarModel) IsGroupPinned(name string) bool {
+	return name != "" && slices.Contains(m.pinnedGroups, name)
+}
+
+// ToggleGroupPin pins or unpins group name and re-sorts, reporting whether it
+// is now pinned. The Closed group can't be pinned.
+func (m *SidebarModel) ToggleGroupPin(name string) bool {
+	if name == "" || name == ClosedGroupName {
+		return false
+	}
+	pinned := !m.IsGroupPinned(name)
+	if pinned {
+		m.pinnedGroups = append(slices.Clone(m.pinnedGroups), name)
+	} else {
+		m.pinnedGroups = slices.DeleteFunc(slices.Clone(m.pinnedGroups), func(n string) bool { return n == name })
+	}
+	m.rebuildGroups()
+	return pinned
+}
+
 // pinKey is what a pin on s is stored under: its session key, or its tmux pane
 // until the session has an ID.
 func pinKey(s *session.Session) string {
