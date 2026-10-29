@@ -116,7 +116,8 @@ The title bar shows live counts (`● 2 working · ◎ 1 needs you · ◉ 1 done
 | `PgUp` / `PgDn` (in search) | Scroll the preview, e.g. a closed session's conversation |
 | `n` | New session (same tmux session) |
 | `N` | New tmux session (prompts for name) |
-| `r` | Rename session |
+| `r` | Rename session; on a group header, rename that tmux session |
+| `m` | Move the session's window to another tmux session (pick one, or type a new name to create it) |
 | `K` | Kill session |
 | `F` | Open the changed-files sidebar and focus it; inside it, `F` closes it again (`Esc` drops focus but keeps it open) |
 | `j` / `k` | In the changed-files sidebar, navigate files |
@@ -136,7 +137,10 @@ All key bindings except navigation and passthrough exit keys are configurable. A
 | Click a session | Select it (and focus the session list) |
 | Double-click a session | Same as `Enter`: focus an active session, open the resume picker for a closed one |
 | Click a group header | Collapse / expand the group |
-| Right-click a session | Open the context menu for that session (also on search results; `Esc` returns to the search) |
+| Drag a session | Drop it on another row to move its tmux window there, or on a group header to move it to the end of that tmux session. Sets `session_sort_order` to `manual` |
+| Drag a group header | Reorder the tmux session groups. Sets `group_sort_order` to `manual` |
+| Right-click a session | Open the context menu for that session (also on search results; `Esc` returns to the search). "Move to tmux session…" moves its window to another (or a new) tmux session |
+| Right-click a group header | Rename the tmux session, start a new session in it, or collapse / expand it |
 | Long-press a session (hold ~450ms) | Open the context menu -- for tmux setups whose `MouseDown3Pane` binding swallows right-click |
 | Wheel over the session list | Move the selection up / down |
 | Wheel over the preview / changed files | Scroll them |
@@ -169,6 +173,7 @@ keys:
   detail: "d"
   stats: "s"
   toggle_changed: "F"
+  move_window: "m"
   help: "?"
 
 sidebar_width: 30
@@ -199,8 +204,8 @@ restore_sessions: true
 | `sidebar_width` | `30` | Width of the session list panel, in percent of the terminal width (also set by dragging its border) |
 | `refresh_interval` | `200ms` | How often to refresh session data |
 | `closed_session_hours` | `8` | Show closed sessions from the last N hours |
-| `group_sort_order` | `name` | Sort tmux session groups: `name` (alphabetical) or `activity`. Groups with a session waiting on you always come first |
-| `session_sort_order` | `name` | Sort sessions within groups: `name` (alphabetical) or `activity`. Sessions waiting on you always come first |
+| `group_sort_order` | `name` | Sort tmux session groups: `name` (alphabetical), `activity`, or `manual` (the order you dragged them into; groups never dragged come last). Groups with a session waiting on you always come first; under `manual`, so do groups with a session that finished while you weren't looking |
+| `session_sort_order` | `name` | Sort sessions within groups: `name` (alphabetical), `activity`, or `manual` (tmux window order, which dragging changes). Sessions waiting on you always come first; under `manual`, so do sessions that finished while you weren't looking, until you select them |
 | `popup_width` | `85` | Width of the `naviclaude open` floating pane or popup (percentage of the window) |
 | `popup_height` | `85` | Height of the `naviclaude open` floating pane or popup (percentage of the window) |
 | `resume_in_current_session` | `true` | Resume sessions in the current tmux pane |

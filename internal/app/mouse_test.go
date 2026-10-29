@@ -158,6 +158,10 @@ func TestMouseClickGroupHeaderToggles(t *testing.T) {
 	m, _ := clickModel(t)
 	before := len(m.sidebar.FlatItems())
 	press(m, tea.MouseButtonLeft, xList, yClosed)
+	if got := len(m.sidebar.FlatItems()); got != before {
+		t.Fatalf("flat items = %d, want %d (toggles on release, not press)", got, before)
+	}
+	release(m, xList, yClosed)
 	if got := len(m.sidebar.FlatItems()); got != before+1 {
 		t.Fatalf("flat items = %d, want %d (Closed expanded)", got, before+1)
 	}
@@ -165,6 +169,7 @@ func TestMouseClickGroupHeaderToggles(t *testing.T) {
 		t.Errorf("cursor = %q, want the Closed header", m.sidebar.SelectedGroupName())
 	}
 	press(m, tea.MouseButtonLeft, xList, yClosed)
+	release(m, xList, yClosed)
 	if got := len(m.sidebar.FlatItems()); got != before {
 		t.Errorf("flat items = %d, want %d (Closed collapsed again)", got, before)
 	}
@@ -194,7 +199,7 @@ func TestMouseRightClickOpensMenuForRow(t *testing.T) {
 }
 
 func TestMouseRightClickEmptySpaceDoesNothing(t *testing.T) {
-	for _, y := range []int{yBlank, ySpacer, yHeader} {
+	for _, y := range []int{yBlank, ySpacer, yClosed} {
 		m, _ := clickModel(t)
 		press(m, tea.MouseButtonRight, xList, y)
 		if m.contextMenu.IsVisible() || m.mode != ModeList {

@@ -54,6 +54,9 @@ func (m *SessionPickerModel) Show(sessions []string, current string) {
 	}
 }
 
+// SetTitle sets the popup title, e.g. "Move to session".
+func (m *SessionPickerModel) SetTitle(title string) { m.title = title }
+
 // Hide closes the picker and clears its state.
 func (m *SessionPickerModel) Hide() {
 	m.visible = false

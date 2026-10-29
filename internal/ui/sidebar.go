@@ -3,8 +3,11 @@ package ui
 import (
 	"fmt"
 	"maps"
+	"math"
 	"path/filepath"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -29,7 +32,7 @@ type sessionGroup struct {
 // flatItem is an entry in the flattened visible list for cursor navigation.
 type flatItem struct {
 	isGroup   bool
-	groupName string
+	groupName string // the header's group, or the group a session row sits in
 	session   *session.Session
 	// Group items only: cached so renderGroupHeader needn't rescan m.groups every frame.
 	groupIdx   int
@@ -59,12 +62,15 @@ type SidebarModel struct {
 	searchActive      bool            // when true, skip auto-collapse in rebuildGroups
 	ConfirmKillTarget string          // tmux target of session pending kill confirmation
 	vp                viewport.Model
-	cursorLineStart   int     // actual line index where the cursor item starts
-	cursorLineCount   int     // actual number of lines the cursor item occupies
-	lineItems         []int   // flat-item index owning each content line; -1 for spacer lines
-	collapseAfterHrs  float64 // auto-collapse groups idle longer than this (hours)
-	groupSortOrder    string  // "name" or "activity"
-	sessionSortOrder  string  // "name" or "activity"
+	cursorLineStart   int       // actual line index where the cursor item starts
+	cursorLineCount   int       // actual number of lines the cursor item occupies
+	lineItems         []int     // flat-item index owning each content line; -1 for spacer lines
+	collapseAfterHrs  float64   // auto-collapse groups idle longer than this (hours)
+	groupSortOrder    string    // "name", "activity" or "manual"
+	sessionSortOrder  string    // "name", "activity" or "manual"
+	groupOrder        []string  // dragged group order, read by the manual group sort
+	baseOrder         []string  // live groups in sort order before waiting groups float
+	drop              *dropMark // drag-and-drop marker; nil when nothing is dragged
 
 	// Working sessions hold their slot under activity sort instead of racing on
 	// LastActivity: key -> rebuild tick it started working (newer sorts first).
@@ -132,6 +138,21 @@ func (m *SidebarModel) SetGroupSortOrder(order string) {
 // SetSessionSortOrder sets the sort order for sessions within groups ("name" or "activity").
 func (m *SidebarModel) SetSessionSortOrder(order string) {
 	m.sessionSortOrder = order
+}
+
+// SetGroupOrder sets the group order the manual group sort follows.
+func (m *SidebarModel) SetGroupOrder(order []string) {
+	m.groupOrder = order
+}
+
+// GroupOrder returns the group order the manual group sort follows.
+func (m *SidebarModel) GroupOrder() []string {
+	return m.groupOrder
+}
+
+// Rebuild re-sorts the list, e.g. after a sort order changed.
+func (m *SidebarModel) Rebuild() {
+	m.rebuildGroups()
 }
 
 // ExpandAll enters search mode: every group stays expanded across SetSessions
@@ -295,8 +316,20 @@ func (m *SidebarModel) rebuildGroups() {
 		})
 	}
 
+	manual := m.sessionSortOrder == "manual"
 	sortFn := nameSort
-	if m.sessionSortOrder == "activity" {
+	if manual {
+		sortFn = func(sessions []*session.Session) {
+			sort.SliceStable(sessions, func(i, j int) bool {
+				wi, pi := windowOrder(sessions[i])
+				wj, pj := windowOrder(sessions[j])
+				if wi != wj {
+					return wi < wj
+				}
+				return pi < pj
+			})
+		}
+	} else if m.sessionSortOrder == "activity" {
 		m.trackWorking()
 		sortFn = func(sessions []*session.Session) {
 			activitySort(sessions)
@@ -314,7 +347,7 @@ func (m *SidebarModel) rebuildGroups() {
 		sortFn(sessions)
 		// Sessions that need the user float above the configured order.
 		sort.SliceStable(sessions, func(i, j int) bool {
-			return needsUser(sessions[i]) && !needsUser(sessions[j])
+			return m.floats(sessions[i], manual) && !m.floats(sessions[j], manual)
 		})
 	}
 	// Closed sessions always sort by activity (slug context is sparse).
@@ -325,7 +358,26 @@ func (m *SidebarModel) rebuildGroups() {
 	for name := range groupMap {
 		names = append(names, name)
 	}
-	if m.groupSortOrder == "activity" {
+	if m.groupSortOrder == "manual" {
+		rank := make(map[string]int, len(m.groupOrder))
+		for i, name := range m.groupOrder {
+			if _, dup := rank[name]; !dup {
+				rank[name] = i
+			}
+		}
+		// Groups never dragged yet follow the dragged ones, by name.
+		sort.Slice(names, func(i, j int) bool {
+			ri, oki := rank[names[i]]
+			rj, okj := rank[names[j]]
+			if oki != okj {
+				return oki
+			}
+			if oki && ri != rj {
+				return ri < rj
+			}
+			return names[i] < names[j]
+		})
+	} else if m.groupSortOrder == "activity" {
 		// Most-recent activity first, name as tiebreaker. Scan the whole group:
 		// Sessions[0] is only the newest under the activity session-sort.
 		recent := make(map[string]time.Time, len(groupMap))
@@ -343,11 +395,13 @@ func (m *SidebarModel) rebuildGroups() {
 	} else {
 		sort.Strings(names)
 	}
+	m.baseOrder = slices.Clone(names)
 	// Groups holding a session that needs the user come first.
+	groupManual := m.groupSortOrder == "manual"
 	waitingGroup := make(map[string]bool, len(groupMap))
 	for name, sessions := range groupMap {
 		for _, s := range sessions {
-			if needsUser(s) {
+			if m.floats(s, groupManual) {
 				waitingGroup[name] = true
 				break
 			}
@@ -427,7 +481,8 @@ func (m *SidebarModel) rebuildFlatItems() {
 		if !m.collapsed[g.Name] {
 			for _, s := range g.Sessions {
 				m.flatItems = append(m.flatItems, flatItem{
-					session: s,
+					groupName: g.Name,
+					session:   s,
 				})
 			}
 		}
@@ -548,19 +603,31 @@ func (m *SidebarModel) syncViewport() {
 	var lines []string
 	// Fresh slice: View() runs on a copy that shares this backing array.
 	m.lineItems = make([]int, 0, len(m.lineItems))
+	dropLine := lipgloss.NewStyle().Foreground(styles.ColorBlue).Render(" " + strings.Repeat("━", max(m.width-2, 1)))
 	for i, item := range m.flatItems {
 		isCursor := i == m.cursor
-		hovered := !isCursor && m.hoverKey != "" && item.key() == m.hoverKey
+		key := item.key()
+		hovered := !isCursor && m.hoverKey != "" && key == m.hoverKey
+		lineBefore := m.drop != nil && !m.drop.header && !m.drop.after && m.drop.key == key
+		if lineBefore && !(item.isGroup && item.groupIdx > 0) {
+			lines = append(lines, dropLine)
+			m.lineItems = append(m.lineItems, dropLineOwner)
+		}
 		if isCursor {
 			m.cursorLineStart = len(lines)
 		}
 		if item.isGroup {
+			hovered = hovered || (m.drop != nil && m.drop.header && m.drop.key == key)
 			rendered := m.renderGroupHeader(item.groupName, item.groupCount, item.groupIdx, isCursor, hovered)
 			// Split on embedded newlines -- Width().Render() may wrap text.
 			for j, l := range strings.Split(rendered, "\n") {
 				owner := i
 				if j == 0 && item.groupIdx > 0 {
 					owner = -1 // the blank spacer renderGroupHeader prepends
+					if lineBefore {
+						// The spacer turns into the line, so nothing below shifts.
+						l, owner = dropLine, dropLineOwner
+					}
 				}
 				lines = append(lines, l)
 				m.lineItems = append(m.lineItems, owner)
@@ -578,10 +645,16 @@ func (m *SidebarModel) syncViewport() {
 		if isCursor {
 			m.cursorLineCount = len(lines) - m.cursorLineStart
 		}
+		if m.drop != nil && !m.drop.header && m.drop.after && m.drop.key == key {
+			lines = append(lines, dropLine)
+			m.lineItems = append(m.lineItems, dropLineOwner)
+		}
 	}
 	m.content = strings.Join(lines, "\n")
 	m.vp.SetContent(m.content)
-	m.scrollToCursor()
+	if m.drop == nil {
+		m.scrollToCursor() // a drag scrolls on its own and leaves the selection behind
+	}
 }
 
 // SetHover marks flat item idx as under the mouse; -1 clears it. It re-renders
@@ -615,30 +688,46 @@ type SidebarHit struct {
 	Kind    SidebarHitKind
 	Index   int // flat-item index, valid for HitSession and HitGroup
 	Session *session.Session
-	Group   string
+	Group   string // the header's group, or the group a session row sits in
+	Upper   bool   // the point is in the item's top half
+}
+
+// lineAt maps sidebar-local (x, y), y=0 being the pane title, to a content line.
+func (m *SidebarModel) lineAt(x, y int) (int, bool) {
+	// The title wraps to two lines on very narrow panes.
+	headerH := lipgloss.Height(m.renderHeader())
+	if x < 0 || x >= m.width || y < headerH || y >= headerH+m.vp.Height {
+		return 0, false
+	}
+	line := m.vp.YOffset + y - headerH
+	return line, line >= 0 && line < len(m.lineItems)
 }
 
 // HitTest reports the item at sidebar-local (x, y), y=0 being the pane title,
 // from the line map syncViewport built for the last render (scroll included).
 func (m *SidebarModel) HitTest(x, y int) SidebarHit {
-	// The title wraps to two lines on very narrow panes.
-	headerH := lipgloss.Height(m.renderHeader())
-	if x < 0 || x >= m.width || y < headerH || y >= headerH+m.vp.Height {
-		return SidebarHit{}
-	}
-	line := m.vp.YOffset + y - headerH
-	if line < 0 || line >= len(m.lineItems) {
+	line, ok := m.lineAt(x, y)
+	if !ok {
 		return SidebarHit{}
 	}
 	idx := m.lineItems[line]
 	if idx < 0 || idx >= len(m.flatItems) {
 		return SidebarHit{}
 	}
+	first, last := line, line
+	for first > 0 && m.lineItems[first-1] == idx {
+		first--
+	}
+	for last < len(m.lineItems)-1 && m.lineItems[last+1] == idx {
+		last++
+	}
+	n := last - first + 1
+	upper := line-first < (n+1)/2
 	item := m.flatItems[idx]
 	if item.isGroup {
-		return SidebarHit{Kind: HitGroup, Index: idx, Group: item.groupName}
+		return SidebarHit{Kind: HitGroup, Index: idx, Group: item.groupName, Upper: upper}
 	}
-	return SidebarHit{Kind: HitSession, Index: idx, Session: item.session}
+	return SidebarHit{Kind: HitSession, Index: idx, Session: item.session, Group: item.groupName, Upper: upper}
 }
 
 // MoveCursor moves the selection by delta rows, clamped to the list.
@@ -931,6 +1020,32 @@ func (m SidebarModel) View() string {
 
 // needsUser reports a session blocked on the user (approval or question).
 func needsUser(s *session.Session) bool { return s.Status == session.StatusWaiting }
+
+// floats reports a session that rises to the top of its group: one waiting on
+// the user, or under manual order also one that finished while unseen.
+func (m *SidebarModel) floats(s *session.Session, manual bool) bool {
+	if needsUser(s) {
+		return true
+	}
+	return manual && s.Attention == attention.Done &&
+		session.EffectiveStatus(s, m.background[s.ID]) == session.StatusIdle
+}
+
+// windowOrder returns the window and pane index of a session's tmux target;
+// targets that don't parse sort last.
+func windowOrder(s *session.Session) (int, int) {
+	t := s.TmuxTarget
+	colon, dot := strings.LastIndex(t, ":"), strings.LastIndex(t, ".")
+	if colon < 0 || dot < colon {
+		return math.MaxInt, math.MaxInt
+	}
+	w, errW := strconv.Atoi(t[colon+1 : dot])
+	p, errP := strconv.Atoi(t[dot+1:])
+	if errW != nil || errP != nil {
+		return math.MaxInt, math.MaxInt
+	}
+	return w, p
+}
 
 // workingKey identifies a session across refreshes; the pane id outlives a new
 // session's ID settling.

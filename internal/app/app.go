@@ -190,6 +190,8 @@ type Model struct {
 	pendingDirAction     dirAction          // which flow opened the directory picker
 	pendingDirTmux       string             // target tmux session for the new-agent (n) flow
 	renameSessionID      string             // session ID being renamed
+	renameGroup          string             // tmux session being renamed from its group header
+	pendingMoveSession   *session.Session   // live session whose window the picker moves to another tmux session
 	pendingResumeSession *session.Session   // closed session awaiting a resume-target choice
 	pendingResumeJump    bool               // when true, jump to the resumed pane (f) instead of focusing it in passthrough (Enter)
 	previewTarget        string             // tmux target currently shown in the preview panel
@@ -246,6 +248,8 @@ type Model struct {
 	lastClickAt     time.Time                 // when that press happened
 	pendingPress    *mousePress               // left press on a session row awaiting release, for long-press
 	draggingSidebar bool                      // left press on the sidebar border, resizing until release
+	rowDrag         *rowDrag                  // left press on a sidebar row or header, maybe dragging it
+	mover           tmuxMover                 // test override; nil means tmuxClient
 	saveConfig      func(config.Config) error // config writer; nil writes the default config path
 	copyText        func(string) error        // clipboard writer; nil uses copyToClipboard
 	now             func() time.Time          // clock override for tests; nil means time.Now
@@ -336,6 +340,7 @@ func New(version string) Model {
 	m.sidebar.SetCollapseAfterHours(cfg.CollapseAfterHours)
 	m.sidebar.SetGroupSortOrder(cfg.GroupSortOrder)
 	m.sidebar.SetSessionSortOrder(cfg.SessionSortOrder)
+	m.sidebar.SetGroupOrder(m.viewState.Get().GroupOrder)
 
 	if cfg.RestoreSessions {
 		m.liveState = session.NewLiveStateStore("")
@@ -786,6 +791,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.fail(msg.err)
 		return m, nil
 
+	case windowMovedMsg:
+		return m, m.applyWindowMoved(msg)
+
 	case killDoneMsg:
 		delete(m.killing, msg.target)
 		if msg.err != nil {
@@ -1112,6 +1120,12 @@ func (m Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case m.keys.RenameSession:
 		return m.startRenameSession()
 
+	case m.keys.MoveWindow:
+		if sess := m.sidebar.SelectedSession(); sess != nil && sess.Status != session.StatusClosed {
+			return m.openMovePicker(sess)
+		}
+		return m, nil
+
 	case m.keys.NewSession:
 		return m.createNewSession()
 
@@ -1436,11 +1450,12 @@ func (m Model) handleNameInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m Model) startRenameSession() (tea.Model, tea.Cmd) {
 	sess := m.sidebar.SelectedSession()
 	if sess == nil {
-		return m, nil
+		return m.startRenameGroup(m.sidebar.SelectedGroupName())
 	}
 	m.renameSessionID = sess.Key()
 	m.mode = ModeRenameSession
 	m.renameInput.SetSize(m.sidebarWidth())
+	m.renameInput.SetPlaceholder("new name (empty to clear)")
 	// Pre-fill with current display name.
 	current := sess.DisplayName
 	if current == "" {
@@ -1458,6 +1473,7 @@ func (m Model) handleRenameSessionKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "esc":
 		m.renameInput.Deactivate()
 		m.renameSessionID = ""
+		m.renameGroup = ""
 		m.mode = ModeList
 		m.statusbar.SetMode(ModeList.String())
 		return m, nil
@@ -1468,6 +1484,10 @@ func (m Model) handleRenameSessionKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.mode = ModeList
 		m.statusbar.SetMode(ModeList.String())
 
+		if group := m.renameGroup; group != "" {
+			m.renameGroup = ""
+			return m, m.renameGroupCmd(group, name)
+		}
 		if m.renameSessionID != "" {
 			if err := m.aliasStore.Set(m.renameSessionID, name); err != nil {
 				m.statusbar.SetError("rename failed: " + err.Error())
@@ -1513,8 +1533,12 @@ func (m Model) handleContextMenuKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m Model) runContextMenuSelection() (tea.Model, tea.Cmd) {
 	action := m.contextMenu.SelectedAction()
 	target := m.contextMenu.Session()
+	group := m.contextMenu.Group()
 	m.closeContextMenu()
 	m.leaveSearchForAction()
+	if group != "" {
+		return m.executeGroupAction(action, group)
+	}
 	return m.executeContextAction(action, target)
 }
 
@@ -1704,6 +1728,7 @@ func (m Model) openResumePicker(sess *session.Session, jump bool) (tea.Model, te
 	names := sessionNamesByRecency(m.tmuxClient.ListSessions())
 	m.pendingResumeSession = sess
 	m.pendingResumeJump = jump
+	m.resumePicker.SetTitle("Resume into session")
 	m.resumePicker.SetSize(m.width, m.height)
 	m.resumePicker.Show(names, m.currentTmuxSession)
 	m.mode = ModeResumePicker
@@ -1719,6 +1744,7 @@ func (m Model) handleResumePickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.resumePicker.Hide()
 		m.pendingResumeSession = nil
 		m.pendingResumeJump = false
+		m.pendingMoveSession = nil
 		m.mode = m.overlayExitMode()
 		m.statusbar.SetMode(m.mode.String())
 		return m, nil
@@ -1739,6 +1765,15 @@ func (m Model) handleResumePickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.mode = ModeList
 		m.statusbar.SetMode(ModeList.String())
 		m.leaveSearchForAction()
+		if mv := m.pendingMoveSession; mv != nil {
+			m.pendingMoveSession = nil
+			if name == "" {
+				return m, nil
+			}
+			m.sidebar.ExpandGroup(name)
+			pane := mv.TmuxPaneID
+			return m, m.moveWindowCmd(func(t tmuxMover) error { return t.MoveWindowToSession(pane, name) })
+		}
 		if sess == nil || name == "" {
 			return m, nil
 		}
@@ -2017,6 +2052,11 @@ func (m Model) executeContextAction(action string, sess *session.Session) (tea.M
 		m.statusbar.SetMode(ModeList.String())
 		m.selectSessionInSidebar(sess)
 		return m.jumpToPane()
+
+	case "move_window":
+		m.mode = ModeList
+		m.statusbar.SetMode(ModeList.String())
+		return m.openMovePicker(sess)
 
 	case "kill":
 		m.mode = ModeList
@@ -2951,7 +2991,7 @@ func (m Model) persistViewState() {
 	if m.viewState == nil {
 		return
 	}
-	vs := session.ViewState{CollapsedGroups: m.sidebar.ToggledGroups()}
+	vs := session.ViewState{CollapsedGroups: m.sidebar.ToggledGroups(), GroupOrder: m.sidebar.GroupOrder()}
 	if sel := m.sidebar.SelectedSession(); sel != nil {
 		vs.LastSessionID = sel.Key()
 	}

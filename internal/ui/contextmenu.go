@@ -26,6 +26,7 @@ type ContextMenuModel struct {
 	cursor       int
 	items        []MenuItem
 	session      *session.Session
+	group        string // tmux session the menu is for when opened on a group header
 	termW, termH int
 }
 
@@ -40,9 +41,34 @@ func (m *ContextMenuModel) Show(x, y int, s *session.Session, caps MenuCaps) {
 	m.x = x
 	m.y = y
 	m.session = s
+	m.group = ""
 	m.cursor = 0
 	m.items = m.buildItems(s, caps)
 	m.skipSeparators(1) // ensure cursor is on a real item
+}
+
+// ShowGroup positions the menu for a group header naming tmux session name.
+func (m *ContextMenuModel) ShowGroup(x, y int, name string, collapsed bool) {
+	m.visible = true
+	m.x, m.y = x, y
+	m.session = nil
+	m.group = name
+	m.cursor = 0
+	toggle := "Collapse"
+	if collapsed {
+		toggle = "Expand"
+	}
+	m.items = []MenuItem{
+		{Label: "Rename tmux session", Shortcut: "r", Action: "rename_group"},
+		{Label: "New session here", Shortcut: "n", Action: "new_in_group"},
+		{IsSep: true},
+		{Label: toggle, Shortcut: "Enter", Action: "toggle_group"},
+	}
+}
+
+// Group returns the tmux session a group-header menu was opened for, or "".
+func (m *ContextMenuModel) Group() string {
+	return m.group
 }
 
 // SetTermSize updates the terminal dimensions used for overflow clamping.
@@ -177,6 +203,9 @@ func (m *ContextMenuModel) buildItems(s *session.Session, caps MenuCaps) []MenuI
 		// Only an idle session can show the done mark, so only it can be re-marked.
 		if s.Status == session.StatusIdle && s.Attention == "" && s.TmuxPaneID != "" {
 			items = append(items, MenuItem{Label: "Set as unread", Action: "mark_unread"})
+		}
+		if s.TmuxPaneID != "" {
+			items = append(items, MenuItem{Label: "Move to tmux session…", Shortcut: "m", Action: "move_window"})
 		}
 	}
 

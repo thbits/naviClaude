@@ -1,6 +1,7 @@
 package tmux
 
 import (
+	"fmt"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -44,4 +45,64 @@ func ParseSessions(raw string) []SessionInfo {
 		sessions = append(sessions, SessionInfo{Name: name, Activity: activity})
 	}
 	return sessions
+}
+
+// RenameSession renames tmux session oldName to newName, reporting tmux's own
+// message (e.g. "duplicate session") on failure.
+func (c *Client) RenameSession(oldName, newName string) error {
+	return runReporting("rename-session", "-t", "="+oldName, newName)
+}
+
+// MoveWindow moves the window holding srcPane next to the window holding dstPane,
+// before or after it, across sessions too. The moved window is not selected.
+func (c *Client) MoveWindow(srcPane, dstPane string, before bool) error {
+	out, err := exec.Command("tmux", "display-message", "-p", "-t", dstPane, "#{window_id}").Output()
+	if err != nil {
+		return fmt.Errorf("tmux move-window: destination %s is gone", dstPane)
+	}
+	flag := "-a"
+	if before {
+		flag = "-b"
+	}
+	return runReporting("move-window", "-d", flag, "-s", srcPane, "-t", strings.TrimSpace(string(out)))
+}
+
+// MoveWindowToSession moves the window holding srcPane after the last window of
+// session name, creating the session when missing. The moved window is not selected.
+func (c *Client) MoveWindowToSession(srcPane, name string) error {
+	out, err := exec.Command("tmux", "list-windows", "-t", "="+name+":", "-F", "#{window_id}").Output()
+	if err != nil {
+		return moveWindowToNewSession(srcPane, name)
+	}
+	ids := strings.Fields(string(out))
+	if len(ids) == 0 {
+		return fmt.Errorf("tmux move-window: session %q has no windows", name)
+	}
+	return runReporting("move-window", "-d", "-a", "-s", srcPane, "-t", ids[len(ids)-1])
+}
+
+// moveWindowToNewSession creates session name and swaps the window holding
+// srcPane in for the shell window tmux starts it with.
+func moveWindowToNewSession(srcPane, name string) error {
+	out, err := exec.Command("tmux", "new-session", "-d", "-s", name, "-P", "-F", "#{window_id}").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("tmux new-session: %s", strings.TrimSpace(string(out)))
+	}
+	shell := strings.TrimSpace(string(out))
+	if err := runReporting("move-window", "-a", "-s", srcPane, "-t", shell); err != nil {
+		return err
+	}
+	return runReporting("kill-window", "-t", shell)
+}
+
+// runReporting runs a tmux command, folding its stderr into the error.
+func runReporting(args ...string) error {
+	out, err := exec.Command("tmux", args...).CombinedOutput()
+	if err != nil {
+		if msg := strings.TrimSpace(string(out)); msg != "" {
+			return fmt.Errorf("tmux %s: %s", args[0], msg)
+		}
+		return fmt.Errorf("tmux %s: %w", args[0], err)
+	}
+	return nil
 }

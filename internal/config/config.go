@@ -14,6 +14,7 @@ import (
 var validSortOrders = map[string]bool{
 	"name":     true,
 	"activity": true,
+	"manual":   true, // set by dragging rows in the session list
 }
 
 // Config holds all user-configurable settings for naviClaude.
@@ -33,8 +34,8 @@ type Config struct {
 	ClaudeCommand      string        `yaml:"claude_command"`       // command to start Claude in new sessions (default "claude")
 	WindowName         string        `yaml:"window_name"`          // tmux window name for new/resumed sessions; {project} and {harness} expand (default "{project}")
 	NewSessionDir      string        `yaml:"new_session_dir"`      // working directory for new tmux sessions (default "~")
-	GroupSortOrder     string        `yaml:"group_sort_order"`     // "name" (alphabetical, default) or "activity"
-	SessionSortOrder   string        `yaml:"session_sort_order"`   // "name" (alphabetical, default) or "activity"
+	GroupSortOrder     string        `yaml:"group_sort_order"`     // "name" (alphabetical, default), "activity" or "manual" (dragged order)
+	SessionSortOrder   string        `yaml:"session_sort_order"`   // "name" (alphabetical, default), "activity" or "manual" (tmux window order)
 	CheckForUpdates    bool          `yaml:"check_for_updates"`    // check GitHub for a newer release on startup (default true)
 	Editor             string        `yaml:"editor"`               // editor for opening changed files; empty falls back to $EDITOR, then vi
 	FocusLastSession   bool          `yaml:"focus_last_session"`   // re-select the last focused session on startup (default true)
@@ -72,6 +73,7 @@ type KeyBindings struct {
 	Help           string `yaml:"help"`
 	Quit           string `yaml:"quit"`
 	ToggleChanged  string `yaml:"toggle_changed"`
+	MoveWindow     string `yaml:"move_window"`
 }
 
 // DefaultConfig returns the default configuration.
@@ -90,6 +92,7 @@ func DefaultConfig() Config {
 			Help:           "?",
 			Quit:           "q",
 			ToggleChanged:  "F",
+			MoveWindow:     "m",
 		},
 		SidebarWidth:       30,
 		RefreshInterval:    "200ms",

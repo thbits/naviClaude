@@ -36,6 +36,9 @@ func NewRenameInput() NameInputModel {
 	return NameInputModel{input: ti}
 }
 
+// SetPlaceholder sets the hint shown while the input is empty.
+func (m *NameInputModel) SetPlaceholder(p string) { m.input.Placeholder = p }
+
 // Activate shows the input and focuses it.
 func (m *NameInputModel) Activate() tea.Cmd {
 	m.active = true

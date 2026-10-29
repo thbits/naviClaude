@@ -6,7 +6,6 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/thbits/naviClaude/internal/config"
 	"github.com/thbits/naviClaude/internal/session"
 	"github.com/thbits/naviClaude/internal/styles"
 	"github.com/thbits/naviClaude/internal/ui"
@@ -50,6 +49,9 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		if msg.Button == tea.MouseButtonLeft && m.draggingSidebar {
 			return m.dragSidebar(msg.X)
 		}
+		if msg.Button == tea.MouseButtonLeft && m.rowDrag != nil {
+			return m.dragRow(msg)
+		}
 		if msg.Button == tea.MouseButtonLeft && m.preview.Selecting() {
 			m.preview.ExtendSelection(m.previewPoint(msg.X, msg.Y))
 			return m, nil
@@ -67,6 +69,8 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	// pending long press or preview drag.
 	m.pendingPress = nil
 	m.draggingSidebar = false
+	m.rowDrag = nil
+	m.sidebar.ClearDrop()
 	m.preview.ClearSelection()
 
 	// Inline inputs and the kill prompt keep ignoring the mouse; a click must
@@ -168,6 +172,13 @@ func (m Model) handleMouseRelease(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	if m.preview.Selecting() {
 		return m.finishPreviewSelection(msg)
 	}
+	if m.rowDrag != nil {
+		next, cmd, done := m.finishRowDrag()
+		if done {
+			return next, cmd
+		}
+		m = next.(Model)
+	}
 	p := m.pendingPress
 	m.pendingPress = nil
 	if p == nil || m.overlayOpen() || m.mode == ModeSearch ||
@@ -209,11 +220,7 @@ func (m Model) finishSidebarDrag(x int) (tea.Model, tea.Cmd) {
 	}
 	m.cfg.SidebarWidth = pct
 	m.sidebarWidthPct = pct
-	save := m.saveConfig
-	if save == nil {
-		save = func(c config.Config) error { return config.Save(c, "") }
-	}
-	if err := save(m.cfg); err != nil {
+	if err := m.writeConfig(); err != nil {
 		m.statusbar.SetError("sidebar width kept for this session only (config write failed: " + err.Error() + ")")
 	}
 	return m, nil
@@ -285,7 +292,8 @@ func (m Model) leftPressSidebar(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		m.lastClickID = ""
 		cmd := m.setFocus(ModeList)
 		m.sidebar.SetCursor(hit.Index)
-		m.sidebar.ToggleGroupAtCursor()
+		// The release toggles it, unless the press turns into a drag.
+		m.rowDrag = &rowDrag{group: hit.Group, key: hitIdentity(hit)}
 		return m, tea.Batch(cmd, m.afterSelectionChange())
 	default:
 		if m.mode == ModeSearch {
@@ -326,6 +334,9 @@ func (m Model) clickSession(hit ui.SidebarHit, msg tea.MouseMsg) (tea.Model, tea
 	m.lastClickID, m.lastClickAt = id, now
 	if !searching {
 		m.pendingPress = &mousePress{id: id, x: msg.X, y: msg.Y, at: now}
+		if s := hit.Session; s.Status != session.StatusClosed && s.TmuxPaneID != "" {
+			m.rowDrag = &rowDrag{pane: s.TmuxPaneID, key: hitIdentity(hit)}
+		}
 	}
 	return m, tea.Batch(cmds...)
 }
@@ -333,6 +344,9 @@ func (m Model) clickSession(hit ui.SidebarHit, msg tea.MouseMsg) (tea.Model, tea
 // rightPressSidebar opens the context menu for the clicked session row.
 func (m Model) rightPressSidebar(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	hit := m.sidebarHit(msg.X, msg.Y)
+	if hit.Kind == ui.HitGroup && hit.Group != ui.ClosedGroupName {
+		return m.openGroupMenu(hit, msg.X, msg.Y)
+	}
 	if hit.Kind != ui.HitSession {
 		return m, nil
 	}

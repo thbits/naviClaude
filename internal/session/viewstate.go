@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 )
 
@@ -14,6 +15,9 @@ type ViewState struct {
 	// CollapsedGroups maps a manually-toggled group name to its collapsed value.
 	// Only groups the user explicitly toggled are stored.
 	CollapsedGroups map[string]bool `json:"collapsed_groups"`
+	// GroupOrder is the dragged order of tmux session groups, used when
+	// group_sort_order is "manual"; tmux itself has no session order.
+	GroupOrder []string `json:"group_order,omitempty"`
 }
 
 // ViewStateStore persists ViewState as JSON at
@@ -49,7 +53,7 @@ func DefaultViewStatePath() string {
 func (s *ViewStateStore) Get() ViewState {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	out := ViewState{LastSessionID: s.state.LastSessionID}
+	out := ViewState{LastSessionID: s.state.LastSessionID, GroupOrder: slices.Clone(s.state.GroupOrder)}
 	if s.state.CollapsedGroups != nil {
 		out.CollapsedGroups = make(map[string]bool, len(s.state.CollapsedGroups))
 		for k, v := range s.state.CollapsedGroups {
