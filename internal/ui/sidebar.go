@@ -69,7 +69,7 @@ type SidebarModel struct {
 	lineItems         []int     // flat-item index owning each content line; -1 for spacer lines
 	collapseAfterHrs  float64   // auto-collapse groups idle longer than this (hours)
 	groupSortOrder    string    // "name", "activity" or "manual"
-	sessionSortOrder  string    // "name", "activity" or "manual"
+	sessionSortOrder  string    // "name", "activity" or "manual"; orders pinned and working rows
 	groupOrder        []string  // dragged group order, read by the manual group sort
 	baseOrder         []string  // live groups in sort order before waiting groups float
 	drop              *dropMark // drag-and-drop marker; nil when nothing is dragged
@@ -296,14 +296,7 @@ func (m *SidebarModel) rebuildGroups() {
 
 	// Sort sessions within each group.
 	activitySort := func(sessions []*session.Session) {
-		sort.Slice(sessions, func(i, j int) bool {
-			ti := sessions[i].LastActivity
-			tj := sessions[j].LastActivity
-			if !ti.Equal(tj) {
-				return ti.After(tj)
-			}
-			return sessions[i].ID < sessions[j].ID
-		})
+		sort.Slice(sessions, func(i, j int) bool { return newerFirst(sessions[i], sessions[j]) })
 	}
 	nameSort := func(sessions []*session.Session) {
 		sort.Slice(sessions, func(i, j int) bool {
@@ -355,9 +348,14 @@ func (m *SidebarModel) rebuildGroups() {
 		for _, s := range sessions {
 			m.sections[s] = m.sectionOf(s)
 		}
-		// The configured order applies within each section.
+		// The configured order applies to pinned and working rows; the rest put
+		// whatever just changed on top.
 		sort.SliceStable(sessions, func(i, j int) bool {
-			return m.sections[sessions[i]] < m.sections[sessions[j]]
+			si, sj := m.sections[sessions[i]], m.sections[sessions[j]]
+			if si != sj {
+				return si < sj
+			}
+			return recencySection(si) && newerFirst(sessions[i], sessions[j])
 		})
 	}
 	// Closed sessions always sort by activity (slug context is sparse).
@@ -1048,6 +1046,14 @@ func needsUser(s *session.Session) bool { return s.Status == session.StatusWaiti
 
 // windowOrder returns the window and pane index of a session's tmux target;
 // targets that don't parse sort last.
+// newerFirst orders by most recent activity, ID breaking ties.
+func newerFirst(a, b *session.Session) bool {
+	if !a.LastActivity.Equal(b.LastActivity) {
+		return a.LastActivity.After(b.LastActivity)
+	}
+	return a.ID < b.ID
+}
+
 func windowOrder(s *session.Session) (int, int) {
 	t := s.TmuxTarget
 	colon, dot := strings.LastIndex(t, ":"), strings.LastIndex(t, ".")

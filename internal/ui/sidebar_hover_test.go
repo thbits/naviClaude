@@ -12,9 +12,10 @@ import (
 )
 
 func hoverTestSessions() []*session.Session {
+	now := time.Now()
 	return []*session.Session{
-		{ID: "one", TmuxSession: "work", TmuxTarget: "work:1.0", ProjectName: "alpha", Status: session.StatusIdle, LastActivity: time.Now()},
-		{ID: "two", TmuxSession: "work", TmuxTarget: "work:2.0", ProjectName: "beta", Status: session.StatusIdle, LastActivity: time.Now()},
+		{ID: "one", TmuxSession: "work", TmuxTarget: "work:1.0", ProjectName: "alpha", Status: session.StatusIdle, LastActivity: now},
+		{ID: "two", TmuxSession: "work", TmuxTarget: "work:2.0", ProjectName: "beta", Status: session.StatusIdle, LastActivity: now.Add(-time.Minute)},
 	}
 }
 

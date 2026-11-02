@@ -75,6 +75,9 @@ func releaseRun(m *Model, x, y int) tea.Msg {
 
 func TestDragRowAboveAnotherMovesItsWindow(t *testing.T) {
 	m, mover, saved := dragModel(t)
+	// Working rows keep a dragged order; idle ones sort by recency.
+	m.allSessions[0].Status, m.allSessions[1].Status = session.StatusActive, session.StatusActive
+	m.sidebar.SetSessions(m.allSessions)
 	press(m, tea.MouseButtonLeft, xList, rowOf(t, m, "s2"))
 	motion(m, xList, rowOf(t, m, "s1")) // top line of "one": land before it
 	if got := ansiFree(m.sidebar.View()); !strings.Contains(got, "━") {
@@ -92,6 +95,15 @@ func TestDragRowAboveAnotherMovesItsWindow(t *testing.T) {
 	}
 	if strings.Contains(ansiFree(m.sidebar.View()), "━") {
 		t.Error("drop line still drawn after release")
+	}
+}
+
+func TestDragIdleRowWithinItsSectionDoesNothing(t *testing.T) {
+	m, mover, _ := dragModel(t)
+	press(m, tea.MouseButtonLeft, xList, rowOf(t, m, "s2"))
+	motion(m, xList, rowOf(t, m, "s1"))
+	if msg := releaseRun(m, xList, rowOf(t, m, "s1")); msg != nil || len(mover.calls) != 0 {
+		t.Errorf("drop = %T, tmux calls = %v; want neither", msg, mover.calls)
 	}
 }
 

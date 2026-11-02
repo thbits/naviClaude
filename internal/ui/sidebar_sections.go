@@ -11,7 +11,7 @@ import (
 )
 
 // Sections a group's rows sort into, top to bottom; the sort order applies
-// within each one.
+// within pinned and working, the others list the most recent first.
 const (
 	sectionPinned = iota
 	sectionWaiting
@@ -123,12 +123,19 @@ func (m *SidebarModel) rekeyPins() {
 }
 
 // sameSection reports whether src may land next to anchor: within one group a
-// row only moves among its own section, since the sections decide the rest.
+// row only moves among its own section, and not at all in one sorted by recency.
 func (m *SidebarModel) sameSection(src, anchor *session.Session) bool {
 	if src == nil || anchor == nil || src.TmuxSession != anchor.TmuxSession {
 		return true
 	}
-	return m.sections[src] == m.sections[anchor]
+	sec := m.sections[src]
+	return sec == m.sections[anchor] && !recencySection(sec)
+}
+
+// recencySection reports whether a section lists its rows most recent first,
+// whatever the sort order, so a session that just finished shows on top.
+func recencySection(sec int) bool {
+	return sec == sectionWaiting || sec == sectionDone || sec == sectionIdle
 }
 
 // renderSectionLine is the one-row break above a section: a solid rule across

@@ -24,7 +24,7 @@ func groupRows(m *SidebarModel) string {
 	return strings.Join(out, " ")
 }
 
-func TestManualOrderFollowsWindowsAndDraggedGroups(t *testing.T) {
+func TestManualOrderFollowsDraggedGroupsWithIdleNewestFirst(t *testing.T) {
 	now := time.Now()
 	m := NewSidebar(40, 40)
 	m.SetSessionSortOrder("manual")
@@ -36,7 +36,7 @@ func TestManualOrderFollowsWindowsAndDraggedGroups(t *testing.T) {
 		{ID: "z1", TmuxSession: "zz", TmuxTarget: "zz:1.0", Status: session.StatusIdle, LastActivity: now},
 		{ID: "n1", TmuxSession: "new", TmuxTarget: "new:1.0", Status: session.StatusIdle, LastActivity: now},
 	})
-	if got, want := groupRows(&m), "[zz] z1 [aa] a2 a10 [new] n1"; got != want {
+	if got, want := groupRows(&m), "[zz] z1 [aa] a10 a2 [new] n1"; got != want {
 		t.Errorf("rows = %s, want %s", got, want)
 	}
 }
@@ -133,6 +133,7 @@ func TestPinnedGroupFloatsAboveWaitingGroup(t *testing.T) {
 
 func TestTogglePinMovesRowAndBack(t *testing.T) {
 	a, b := row("a", "g", 1, session.StatusIdle), row("b", "g", 2, session.StatusIdle)
+	b.LastActivity = a.LastActivity.Add(-time.Minute)
 	m := sectionSidebar("manual", nil, a, b)
 	if !m.TogglePin(b) || groupRows(m) != "[g] b a" {
 		t.Fatalf("after pin: rows = %s", groupRows(m))
@@ -197,5 +198,38 @@ func TestPinnedGroupLeadsTheList(t *testing.T) {
 	m.RenameGroup("cc", "dd")
 	if !m.IsGroupPinned("dd") || m.IsGroupPinned("cc") {
 		t.Errorf("pin did not follow the rename: %v", m.PinnedGroups())
+	}
+}
+
+func TestFinishedRowTopsIdleAndDoneUnderEverySort(t *testing.T) {
+	now := time.Now()
+	for _, order := range []string{"manual", "name", "activity"} {
+		old, fresh := row("a", "g", 1, session.StatusIdle), row("b", "g", 2, session.StatusIdle)
+		old.LastActivity, fresh.LastActivity = now.Add(-time.Hour), now
+		old.DisplayName, fresh.DisplayName = "a", "b"
+		m := sectionSidebar(order, nil, old, fresh)
+		if got, want := groupRows(m), "[g] b a"; got != want {
+			t.Errorf("%s idle: rows = %s, want %s", order, got, want)
+		}
+		doneOld, doneNew := row("d1", "g", 3, session.StatusIdle), row("d2", "g", 4, session.StatusIdle)
+		doneOld.Attention, doneNew.Attention = attention.Done, attention.Done
+		doneOld.LastActivity, doneNew.LastActivity = now.Add(-time.Minute), now.Add(time.Minute)
+		doneOld.DisplayName, doneNew.DisplayName = "c", "d"
+		m.SetSessions([]*session.Session{old, fresh, doneOld, doneNew})
+		if got, want := groupRows(m), "[g] d2 d1 b a"; got != want {
+			t.Errorf("%s done: rows = %s, want %s", order, got, want)
+		}
+	}
+}
+
+func TestNoDropWithinARecencySection(t *testing.T) {
+	a, b := row("a", "g", 1, session.StatusIdle), row("b", "g", 2, session.StatusIdle)
+	w1, w2 := row("w1", "g", 3, session.StatusActive), row("w2", "g", 4, session.StatusActive)
+	m := sectionSidebar("manual", nil, a, b, w1, w2)
+	if m.sameSection(a, b) {
+		t.Error("an idle row may be dropped among idle rows, which sort by recency")
+	}
+	if !m.sameSection(w1, w2) {
+		t.Error("a working row can no longer be reordered among working rows")
 	}
 }

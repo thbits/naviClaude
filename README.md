@@ -178,7 +178,7 @@ Each tmux session group splits its rows into sections, top to bottom. When a gro
 | working | Sessions working, including background subagents, shells and Monitor watches |
 | idle | Everything else |
 
-A row moves to its section as its status changes; the sort order applies within each section, and dragging reorders a row within its own section.
+A row moves to its section as its status changes. The sort order applies within pinned and working; waiting, done and idle list the most recent first, so a session that just finished lands on top. Dragging reorders a row within the pinned or working section.
 
 Closed sessions sit in a separate Closed group: always last, collapsed until you open it, newest first, and not pinnable or draggable. Pins, pinned tmux sessions and the dragged group order are saved in `~/.config/naviclaude/view-state.json` and kept across restarts.
 
@@ -269,7 +269,7 @@ restore_sessions: true
 | `refresh_interval` | `200ms` | How often to refresh session data (under `50ms` falls back to the default) |
 | `closed_session_hours` | `8` | Show closed sessions from the last N hours |
 | `group_sort_order` | `name` | Sort tmux session groups: `name` (alphabetical), `activity`, or `manual` (the order you dragged them into; groups never dragged come last). Pinned tmux sessions come first, then groups holding a pinned session, then groups with a session waiting on you or done unseen |
-| `session_sort_order` | `name` | Sort sessions within groups: `name` (alphabetical), `activity` (working sessions keep their slot, newest to start working on top, so they don't swap places as each writes), or `manual` (tmux window order, which dragging changes). The order applies within each section of a group (see [Sections](#sections)) |
+| `session_sort_order` | `name` | Sort sessions within groups: `name` (alphabetical), `activity` (working sessions keep their slot, newest to start working on top, so they don't swap places as each writes), or `manual` (tmux window order, which dragging changes). The order applies within the pinned and working sections of a group; waiting, done and idle always list the most recent first (see [Sections](#sections)) |
 | `popup_width` | `85` | Width of the `naviclaude open` floating pane or popup (percentage of the window, up to 100) |
 | `popup_height` | `85` | Height of the `naviclaude open` floating pane or popup (percentage of the window, up to 100) |
 | `resume_in_current_session` | `true` | Resume sessions in the current tmux pane |

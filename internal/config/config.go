@@ -35,7 +35,7 @@ type Config struct {
 	WindowName         string        `yaml:"window_name"`          // tmux window name for new/resumed sessions; {project} and {harness} expand (default "{project}")
 	NewSessionDir      string        `yaml:"new_session_dir"`      // working directory for new tmux sessions (default "~")
 	GroupSortOrder     string        `yaml:"group_sort_order"`     // "name" (alphabetical, default), "activity" or "manual" (dragged order)
-	SessionSortOrder   string        `yaml:"session_sort_order"`   // "name" (alphabetical, default), "activity" or "manual" (tmux window order)
+	SessionSortOrder   string        `yaml:"session_sort_order"`   // "name" (alphabetical, default), "activity" or "manual" (tmux window order); waiting/done/idle rows are newest-first regardless
 	CheckForUpdates    bool          `yaml:"check_for_updates"`    // check GitHub for a newer release on startup (default true)
 	Editor             string        `yaml:"editor"`               // editor for opening changed files; empty falls back to $EDITOR, then vi
 	FocusLastSession   bool          `yaml:"focus_last_session"`   // re-select the last focused session on startup (default true)
