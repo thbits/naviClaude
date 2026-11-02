@@ -10,6 +10,7 @@ import (
 	"github.com/thbits/naviClaude/internal/app"
 	"github.com/thbits/naviClaude/internal/session"
 	"github.com/thbits/naviClaude/internal/tmux"
+	"github.com/thbits/naviClaude/internal/ttyin"
 )
 
 // version is set at build time via -ldflags "-X main.version=..."
@@ -79,7 +80,12 @@ func main() {
 	m := app.New(version)
 	// All motion adds buttonless moves for hover highlighting; hover ignores moves
 	// that stay on the same row, so the flood costs a View and no re-render.
-	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseAllMotion())
+	opts := []tea.ProgramOption{tea.WithAltScreen(), tea.WithMouseAllMotion()}
+	// Keep wheel reports whole, or split ones get typed into the focused pane.
+	if fi, err := os.Stdin.Stat(); err == nil && fi.Mode()&os.ModeCharDevice != 0 {
+		opts = append(opts, tea.WithInput(ttyin.New(os.Stdin)))
+	}
+	p := tea.NewProgram(m, opts...)
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
