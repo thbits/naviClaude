@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // privateTmux points tmux at a throwaway server for this test and returns a
@@ -42,9 +43,17 @@ func TestFormatQueriesOnRealTmux(t *testing.T) {
 	tm("set-option", "-p", "-t", "my sess:0.0", "@naviclaude_attn", "waiting")
 
 	c := &Client{}
-	panes, err := c.ListPanes()
-	if err != nil || len(panes) != 1 {
-		t.Fatalf("ListPanes = %+v, %v; want one pane", panes, err)
+	var panes []PaneInfo
+	var err error
+	// On Linux tmux reads /proc/<pid>/cwd, which can lag the pane's chdir briefly.
+	for deadline := time.Now().Add(2 * time.Second); ; time.Sleep(50 * time.Millisecond) {
+		panes, err = c.ListPanes()
+		if err != nil || len(panes) != 1 {
+			t.Fatalf("ListPanes = %+v, %v; want one pane", panes, err)
+		}
+		if got, _ := filepath.EvalSymlinks(panes[0].CurrentPath); got == mustEval(t, cwd) || time.Now().After(deadline) {
+			break
+		}
 	}
 	p := panes[0]
 	if p.SessionName != "my sess" || p.Target != "my sess:0.0" || p.Attention != "waiting" || !strings.HasPrefix(p.PaneID, "%") {
