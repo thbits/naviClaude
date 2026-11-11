@@ -378,6 +378,66 @@ func TestDoneInBackgroundClearsOnVisit(t *testing.T) {
 	}
 }
 
+func TestDoneWaitsOutSlowStopHook(t *testing.T) {
+	var te *testEngine
+	var hooksDone time.Time
+	sawMarker := false
+	te = newTestEngine(func() claude.NativeState {
+		if te.clock.Before(hooksDone) {
+			return claude.NativeState{Status: "busy", UpdatedAt: 2} // another Stop hook still running
+		}
+		if te.fake.panes["%1"].opts[optAttn] == Done {
+			sawMarker = te.fake.windowName() == markedName("cc", config.DefaultConfig().Notifications.DoneMarker)
+			te.fake.panes["%1"].onScreen, te.fake.focused = true, true // user switches to the pane
+		}
+		return claude.NativeState{Status: "idle", UpdatedAt: 3}
+	})
+	hooksDone = te.clock.Add(45 * time.Second)
+	te.fake.focused = false
+	te.fake.panes["%1"].opts[optBusy] = "turn"
+	te.Raise(KindDone, "%1", "sid")
+	if len(te.played) != 1 || te.played[0] != notify.Done {
+		t.Errorf("played %v, want [done]", te.played)
+	}
+	if !sawMarker {
+		t.Error("done marker never set after the Stop hook finished")
+	}
+}
+
+func TestDoneDroppedWhenNewPromptDuringStopHooks(t *testing.T) {
+	var te *testEngine
+	reads := 0
+	te = newTestEngine(func() claude.NativeState {
+		reads++
+		if reads == 20 {
+			te.fake.panes["%1"].opts[optBusy] = "next" // UserPromptSubmit for a queued prompt
+		}
+		return claude.NativeState{Status: "busy", UpdatedAt: 2}
+	})
+	te.fake.focused = false
+	te.fake.panes["%1"].opts[optBusy] = "turn"
+	te.Raise(KindDone, "%1", "sid")
+	if len(te.played) != 0 || te.fake.panes["%1"].opts[optAttn] != "" {
+		t.Errorf("done raised for a turn that moved on: played %v attn %q", te.played, te.fake.panes["%1"].opts[optAttn])
+	}
+	if reads > 25 {
+		t.Errorf("kept waiting after the new prompt (%d reads)", reads)
+	}
+}
+
+func TestDoneGivesUpWhenStopHooksNeverFinish(t *testing.T) {
+	te := newTestEngine(func() claude.NativeState { return claude.NativeState{Status: "busy", UpdatedAt: 2} })
+	te.fake.focused = false
+	start := te.clock
+	te.Raise(KindDone, "%1", "sid")
+	if len(te.played) != 0 || te.fake.panes["%1"].opts[optAttn] != "" {
+		t.Errorf("done raised while still busy: played %v", te.played)
+	}
+	if waited := te.clock.Sub(start); waited < stopHookWait || waited > stopHookWait+2*time.Second {
+		t.Errorf("waited %v, want about %v", waited, stopHookWait)
+	}
+}
+
 func TestWaitingBeatsDoneAcrossPanes(t *testing.T) {
 	te := newTestEngine(nil)
 	te.fake.panes["%1"].opts[optAttn] = Done

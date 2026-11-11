@@ -39,6 +39,10 @@ const (
 // busyGrace is how long a new turn may still read as idle before it starts.
 const busyGrace = 3 * time.Second
 
+// stopHookWait bounds how long a done event waits for other synchronous Stop
+// hooks, which keep Claude "busy" after the Stop event until they finish.
+const stopHookWait = 10 * time.Minute
+
 // engine holds the injectable dependencies; tests swap them out.
 type engine struct {
 	tmux    tmuxAPI
@@ -93,7 +97,16 @@ func (e *engine) Raise(kind Kind, pane, sessionID string) {
 	if kind == KindDone {
 		attn, sound, want, window = Done, notify.Done, isIdle, 700*time.Millisecond
 	}
+	var turn string // busy token of the turn this Stop ends
+	if kind == KindDone {
+		if ps, err := e.tmux.Pane(pane); err == nil {
+			turn = ps.Busy
+		}
+	}
 	st, ok := e.confirm(sessionID, want, window)
+	if !ok && kind == KindDone && st.Status == "busy" {
+		st, ok = e.awaitStopHooks(pane, sessionID, turn)
+	}
 	if !ok {
 		e.logf("%s %s: native status %q, not raising", kind, pane, st.Status)
 		return
@@ -146,6 +159,27 @@ func (e *engine) Raise(kind Kind, pane, sessionID string) {
 	if token != "" {
 		e.watch(pane, ps.Window, sessionID, attn, token)
 	}
+}
+
+// awaitStopHooks waits for Claude to go idle once the remaining Stop hooks finish.
+// A new prompt (fresh busy token) or any status besides busy means the turn moved on.
+func (e *engine) awaitStopHooks(pane, sessionID, turn string) (claude.NativeState, bool) {
+	deadline := e.now().Add(stopHookWait)
+	for e.now().Before(deadline) {
+		e.sleep(e.poll)
+		st, ok := e.native(sessionID)
+		if !ok || (st.Status != "busy" && !isIdle(st.Status)) {
+			return st, false
+		}
+		cur, err := e.tmux.Pane(pane)
+		if err != nil || (cur.Busy != "" && cur.Busy != turn) {
+			return st, false
+		}
+		if isIdle(st.Status) {
+			return st, true
+		}
+	}
+	return claude.NativeState{Status: "busy"}, false
 }
 
 func isWaiting(status string) bool { return status == "waiting" }
