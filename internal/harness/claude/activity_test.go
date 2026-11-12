@@ -69,6 +69,15 @@ func queuedNotification(sec int, id string) string {
 	}})
 }
 
+// batched is how completions that land together are delivered: one message, many blocks.
+func batched(sec int, blocks ...string) string {
+	return metaUser(sec, "[SYSTEM NOTIFICATION - NOT USER INPUT]\n\n"+strings.Join(blocks, "\n\n"))
+}
+
+func doneBlock(task, id, summary string) string {
+	return "<task-notification>\n<task-id>" + task + "</task-id>\n<tool-use-id>" + id + "</tool-use-id>\n<status>completed</status>\n<summary>" + summary + "</summary>\n</task-notification>"
+}
+
 func bgShellResult(sec int, id, task string) string {
 	return jl(map[string]any{"type": "user", "timestamp": ats(sec), "toolUseResult": map[string]any{"backgroundTaskId": task},
 		"message": map[string]any{"role": "user", "content": []any{map[string]any{"type": "tool_result", "tool_use_id": id, "content": "ok"}}}})
@@ -208,6 +217,10 @@ func TestLoadActivitySubagentShells(t *testing.T) {
 			"agent-a1": {sideBash(2, "s2"), sideResult(2, "s2", "b2"), metaUser(5, "[SYSTEM NOTIFICATION - NOT USER INPUT]\n\n"+
 				"<task-notification>\n<task-id>b2</task-id>\n<status>completed</status>\n</task-notification>")},
 		}, -1, 0},
+		{"batched notifications clear every shell", map[string][]string{
+			"agent-a1": {sideBash(2, "s2"), sideResult(2, "s2", "b2"), sideBash(3, "s3"), sideResult(3, "s3", "b3"),
+				batched(5, doneBlock("b2", "s2", "Background command \"x\" completed"), doneBlock("b3", "s3", "Background command \"y\" completed"))},
+		}, -1, 0},
 		{"earlier run's subagent shells are gone", map[string][]string{
 			"agent-a1": {sideBash(2, "s2"), sideResult(2, "s2", "b2")},
 		}, 60, 0},
@@ -269,6 +282,10 @@ func TestLoadActivityMonitors(t *testing.T) {
 			monitorEvent(5, "t1"), monitorEvent(6, "t1")}, 0, 1, 0},
 		{"stream end clears it", []string{prompt(0, "go"), mon(1, "m1"), monitorResult(1, "m1", "t1", long, false),
 			monitorEvent(5, "t1"), monitorEnded(9, "m1", "t1")}, 0, 0, 0},
+		{"event batched with a shell completion keeps it running", []string{prompt(0, "go"), mon(1, "m1"), monitorResult(1, "m1", "t1", long, false),
+			toolUse(2, "s1", "Bash", map[string]any{"command": "make", "run_in_background": true}), bgShellResult(2, "s1", "b1"),
+			batched(5, "<task-notification>\n<task-id>t1</task-id>\n<summary>Monitor event: \"x\"</summary>\n<event>tick</event>\n</task-notification>",
+				doneBlock("b1", "s1", "Background command \"make\" completed"))}, 0, 1, 0},
 		{"TaskStop clears it", []string{prompt(0, "go"), mon(1, "m1"), monitorResult(1, "m1", "t1", 0, true),
 			toolUse(2, "k1", "TaskStop", map[string]any{"task_id": "t1"})}, 0, 0, 0},
 		{"expired timeout clears it", []string{prompt(0, "go"), mon(1, "m1"), monitorResult(1, "m1", "t1", 60_000, false)}, 0, 0, 0},
@@ -373,6 +390,16 @@ func TestLoadActivity(t *testing.T) {
 				toolUse(2, "a2", "Agent", map[string]any{"description": "two"}), toolResult(2, "a2", true),
 				assistantText(3, "launched"), turnEnd(4, 2), notification(60, "a1"), assistantText(61, "a1 done"), turnEnd(62, 1)},
 			turnStart: 60, lastAsst: 61, agents: 1, tokensUsed: 62000, ended: true,
+		},
+		{
+			name: "batched notifications clear every background agent",
+			lines: []string{prompt(0, "go"),
+				toolUse(1, "a1", "Agent", map[string]any{"description": "one"}), toolResult(1, "a1", true),
+				toolUse(2, "a2", "Agent", map[string]any{"description": "two"}), toolResult(2, "a2", true),
+				assistantText(3, "launched"), turnEnd(4, 2),
+				prompt(60, doneBlock("x1", "a1", "Agent \"one\" completed")+"\n"+doneBlock("x2", "a2", "Agent \"two\" completed")),
+				assistantText(61, "both done")},
+			turnStart: 60, lastAsst: 61, tokensUsed: 62000,
 		},
 		{
 			name: "notification mid-turn does not restart the turn",

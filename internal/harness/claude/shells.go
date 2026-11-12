@@ -173,18 +173,20 @@ func (l *shellLedger) addLine(line []byte) {
 	}
 }
 
-// notified records the task a <task-notification> reports finished; some
-// notifications open with a system preamble, so the tag may not lead. A monitor's
-// events carry no status, only its final notice does.
+// notified records the tasks the <task-notification> blocks in text report
+// finished; the tag may follow a system preamble. A monitor's events carry no
+// status, only its final notice does.
 func (l *shellLedger) notified(text string) {
-	if !strings.Contains(text, "<task-notification>") || !strings.Contains(text, "<status>") {
-		return
-	}
-	if m := notificationToolUseID.FindStringSubmatch(text); m != nil {
-		l.ended[m[1]] = true
-	}
-	if m := notificationTaskID.FindStringSubmatch(text); m != nil {
-		l.ended[m[1]] = true
+	for _, b := range notificationBlocks(text) {
+		if !strings.Contains(b, "<status>") {
+			continue
+		}
+		if m := notificationToolUseID.FindStringSubmatch(b); m != nil {
+			l.ended[m[1]] = true
+		}
+		if m := notificationTaskID.FindStringSubmatch(b); m != nil {
+			l.ended[m[1]] = true
+		}
 	}
 }
 

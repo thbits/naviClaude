@@ -179,6 +179,12 @@ type pendingTool struct {
 
 var notificationToolUseID = regexp.MustCompile(`<tool-use-id>([^<]+)</tool-use-id>`)
 
+// notificationBlocks splits text into its <task-notification> blocks, since
+// tasks that finish together are reported in one message.
+func notificationBlocks(text string) []string {
+	return strings.Split(text, "<task-notification>")[1:]
+}
+
 // parseActivity derives the main thread's current activity from transcript lines
 // in file order. Tools and agents recorded before since are dropped; shells
 // and monitors are counted separately by countBackground.
@@ -215,12 +221,14 @@ func parseActivity(data []byte, truncated bool, since time.Time) (act session.Se
 		pending = nil // tools from an abandoned turn never get results
 	}
 	taskNotified := func(text string) {
-		if m := notificationToolUseID.FindStringSubmatch(text); m != nil {
-			delete(async, m[1])
-		}
-		// Shell and monitor notifications leave the agent floor alone.
-		if !strings.Contains(text, "<summary>Background command") && !strings.Contains(text, "<summary>Monitor") {
-			bgDoneAft++
+		for _, b := range notificationBlocks(text) {
+			if m := notificationToolUseID.FindStringSubmatch(b); m != nil {
+				delete(async, m[1])
+			}
+			// Shell and monitor notifications leave the agent floor alone.
+			if !strings.Contains(b, "<summary>Background command") && !strings.Contains(b, "<summary>Monitor") {
+				bgDoneAft++
+			}
 		}
 	}
 
