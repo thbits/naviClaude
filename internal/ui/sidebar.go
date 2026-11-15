@@ -1208,6 +1208,9 @@ func (m SidebarModel) renderSessionItem(s *session.Session, isCursor, hovered bo
 	// Truncate display name if needed. Rune/display-width aware so multibyte
 	// names are never split mid-rune; an ellipsis marks the cut.
 	maxNameWidth := m.width - 10
+	if m.ultracode(s) {
+		maxNameWidth -= lipgloss.Width(styles.IconUltra + " ")
+	}
 	if maxNameWidth < 8 {
 		maxNameWidth = 8
 	}
@@ -1238,6 +1241,9 @@ func (m SidebarModel) renderSessionItem(s *session.Session, isCursor, hovered bo
 		iconStyled := m.sessionIconWithBg(s, selBg)
 		nameStyled := lipgloss.NewStyle().Foreground(styles.ColorBlue).Background(selBg).Bold(true).Render(displayName)
 		timeStyled := lipgloss.NewStyle().Foreground(styles.ColorGray).Background(selBg).Render(relTime)
+		if m.ultracode(s) {
+			timeStyled = ultraBadge(selBg) + timeStyled
+		}
 
 		innerWidth := m.width - 2 // PaddingLeft(1) inside Width; border is outside
 		if innerWidth < 10 {
@@ -1333,6 +1339,9 @@ func (m SidebarModel) renderSessionItem(s *session.Session, isCursor, hovered bo
 	pad := func(n int) string { return fill.Render(strings.Repeat(" ", n)) }
 	nameStyled := nameStyle.Render(displayName)
 	timeStyled := timeStyle.Render(relTime)
+	if m.ultracode(s) {
+		timeStyled = ultraBadge(hoverBg) + timeStyled
+	}
 
 	iconWidth := lipgloss.Width(icon)
 	nameWidth := lipgloss.Width(nameStyled)
@@ -1357,6 +1366,16 @@ func (m SidebarModel) renderSessionItem(s *session.Session, isCursor, hovered bo
 		return []string{line1, line2, line3}
 	}
 	return []string{line1, line2}
+}
+
+// ultracode reports a live session running with ultracode on.
+func (m SidebarModel) ultracode(s *session.Session) bool {
+	return s.ID != "" && s.Status != session.StatusClosed && m.background[s.ID].Ultracode
+}
+
+// ultraBadge is the ultracode marker shown before a row's time; bg is "" when unpainted.
+func ultraBadge(bg lipgloss.Color) string {
+	return lipgloss.NewStyle().Foreground(styles.ColorPurple).Background(bg).Render(styles.IconUltra + " ")
 }
 
 // statusIconProps returns the foreground color and character for a status.

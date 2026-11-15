@@ -421,3 +421,35 @@ func TestSessionIconIdleWithBackgroundBreathesAsActive(t *testing.T) {
 		t.Errorf("waiting with background work should stay waiting, got (%v, %q)", gotFg, gotCh)
 	}
 }
+
+// Ultracode is marked on every live row, idle or not, without making it working.
+func TestUltracodeBadgeOnRows(t *testing.T) {
+	const width = 45
+	sb := NewSidebar(width, 30)
+	sb.SetSize(width, 30)
+	now := time.Now()
+	mk := func(id string) *session.Session {
+		return &session.Session{ID: id, DisplayName: strings.Repeat("name"+id, 10), TmuxSession: "alpha",
+			TmuxTarget: "alpha:0." + id, Status: session.StatusIdle, LastActivity: now, Summary: "s"}
+	}
+	sb.SetSessions([]*session.Session{mk("1"), mk("2"), mk("3")})
+	sb.SetCursor(1)
+	sb.SetBackground(map[string]session.Background{"1": {Ultracode: true}, "2": {Ultracode: true}})
+
+	lines := strings.Split(sb.View(), "\n")
+	badges := 0
+	for i, l := range lines {
+		if strings.Contains(ansi.Strip(l), styles.IconUltra) {
+			badges++
+		}
+		if w := ansi.StringWidth(l); w > width {
+			t.Errorf("line %d is %d cells: %q", i, w, ansi.Strip(l))
+		}
+	}
+	if badges != 2 {
+		t.Errorf("ultracode badges = %d, want 2 (selected and unselected row):\n%s", badges, ansi.Strip(sb.View()))
+	}
+	if session.EffectiveStatus(mk("1"), session.Background{Ultracode: true}) != session.StatusIdle {
+		t.Error("ultracode alone made an idle session working")
+	}
+}

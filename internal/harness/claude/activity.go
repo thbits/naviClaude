@@ -69,7 +69,7 @@ func loadActivity(path string, since time.Time) (*session.SessionActivity, error
 	activityMu.Unlock()
 	if hit && prev.size == fi.Size() && prev.mod.Equal(fi.ModTime()) && prev.since.Equal(since) {
 		act := prev.act
-		act.Shells, act.Monitors = countBackground(path, since)
+		act.Shells, act.Monitors, act.Ultracode = countBackground(path, since)
 		return &act, nil
 	}
 
@@ -102,7 +102,7 @@ func loadActivity(path string, since time.Time) (*session.SessionActivity, error
 	activityMu.Lock()
 	activityCache[path] = activityCacheEntry{size: fi.Size(), mod: fi.ModTime(), since: since, act: act}
 	activityMu.Unlock()
-	act.Shells, act.Monitors = countBackground(path, since)
+	act.Shells, act.Monitors, act.Ultracode = countBackground(path, since)
 	return &act, nil
 }
 

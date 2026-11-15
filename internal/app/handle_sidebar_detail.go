@@ -110,9 +110,11 @@ func (m *Model) backgroundCmd() tea.Cmd {
 		counts := backgroundMsg{}
 		for _, j := range jobs {
 			if a, _ := j.h.LoadActivity(&j.snap); a != nil {
-				bg := session.Background{Agents: a.Agents, Shells: a.Shells, Monitors: a.Monitors}
+				bg := session.Background{Agents: a.Agents, Shells: a.Shells, Monitors: a.Monitors, Ultracode: a.Ultracode}
 				if bg.Busy() {
 					bg.Thinking = a.Tool == "" && !a.TurnEnded
+				}
+				if bg.Busy() || bg.Ultracode {
 					counts[j.snap.ID] = bg
 				}
 			}

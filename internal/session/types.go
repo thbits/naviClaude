@@ -49,14 +49,16 @@ type SessionActivity struct {
 	Monitors      int       // Monitor tool watches still running
 	TokensUsed    int       // context fill from the latest assistant usage in the tail
 	Model         string    // model id of the latest main-thread assistant record ("" when none in the tail)
+	Ultracode     bool      // the running process has ultracode (workflows on every task) on
 }
 
 // Background counts the subagents and background shells a session has running.
 type Background struct {
-	Agents   int
-	Shells   int
-	Monitors int
-	Thinking bool // the main thread is mid-turn with no tool in flight
+	Agents    int
+	Shells    int
+	Monitors  int
+	Thinking  bool // the main thread is mid-turn with no tool in flight
+	Ultracode bool // ultracode is on; not background work, so Busy ignores it
 }
 
 // Busy reports whether any subagent, shell or monitor is still running.

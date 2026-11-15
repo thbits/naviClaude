@@ -112,6 +112,7 @@ const (
 	IconRepo     = "\uea62"     // nf-cod-repo: git repository name
 	IconThinking = "\U000f09d1" // nf-md-brain: main thread thinking between tools
 	IconPin      = "\U000f0403" // nf-md-pin: session pinned to the top of its group
+	IconUltra    = "\U000f0241" // nf-md-flash: ultracode on (workflows on every task)
 )
 
 // SidebarWaitingFlash is applied during the active->waiting transition flash.

@@ -591,3 +591,91 @@ func TestLoadActivityRecordsMainThreadModel(t *testing.T) {
 		t.Errorf("Model = %q, want the latest main-thread model claude-sonnet-5-5", act.Model)
 	}
 }
+
+func effortOutput(sec int, out string) string {
+	return prompt(sec, "<local-command-stdout>"+out+"</local-command-stdout>")
+}
+
+func ultraAttachment(sec int, typ string) string {
+	return jl(map[string]any{"type": "attachment", "timestamp": ats(sec), "attachment": map[string]any{"type": typ, "reminderType": "full"}})
+}
+
+func TestUltracodeToggle(t *testing.T) {
+	tests := []struct {
+		out    string
+		on, ok bool
+	}{
+		{"Ultracode on (this session only): dynamic workflows on every task. Effort stays high.", true, true},
+		{"Ultracode off. Effort stays high.", false, true},
+		{"Set effort level to medium (saved as your default for new sessions): Balanced approach · Ultracode on", true, true},
+		{"Set effort level to high (saved as your default for new sessions): Comprehensive · Ultracode off", false, true},
+		{"Invalid argument: off. Valid options are: low, medium, high, xhigh, max, auto, ultracode [on|off]", false, false},
+		{"Set effort level to high", false, false},
+	}
+	for _, tt := range tests {
+		on, ok := ultracodeToggle("<local-command-stdout>" + tt.out + "</local-command-stdout>")
+		if on != tt.on || ok != tt.ok {
+			t.Errorf("%q: got (%v, %v), want (%v, %v)", tt.out, on, ok, tt.on, tt.ok)
+		}
+	}
+	if _, ok := ultracodeToggle("Ultracode on (this session only)"); ok {
+		t.Error("text outside a command's output toggled ultracode")
+	}
+}
+
+func TestLoadActivityUltracode(t *testing.T) {
+	skill := metaUser(5, "# Workflow authoring\nUltracode on: optimize for the most exhaustive answer")
+	tests := []struct {
+		name  string
+		lines []string
+		since time.Time
+		want  bool
+	}{
+		{name: "off by default", lines: []string{prompt(0, "go"), assistantText(1, "ok")}},
+		{name: "command output turns it on before the next prompt", lines: []string{
+			prompt(0, "go"), effortOutput(2, "Ultracode on (this session only): dynamic workflows on every task.")}, want: true},
+		{name: "attachment turns it on", lines: []string{ultraAttachment(0, "ultra_effort_enter"), prompt(0, "go")}, want: true},
+		{name: "exit attachment wins over an earlier enter", lines: []string{
+			ultraAttachment(0, "ultra_effort_enter"), prompt(0, "go"),
+			effortOutput(3, "Ultracode off. Effort stays high."), ultraAttachment(4, "ultra_effort_exit")}},
+		{name: "skill and prompt text mentioning it are ignored", lines: []string{
+			prompt(0, "is Ultracode on?"), skill, effortOutput(6, "Invalid argument: off. Valid options are: ultracode [on|off]")}},
+		{name: "an earlier run's toggle is dropped", lines: []string{
+			effortOutput(0, "Ultracode on (this session only)"), prompt(120, "resumed")}, since: actBase.Add(time.Minute)},
+		{name: "re-announced in the current run", lines: []string{
+			effortOutput(0, "Ultracode on (this session only)"), ultraAttachment(120, "ultra_effort_enter"), prompt(120, "resumed")},
+			since: actBase.Add(time.Minute), want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := loadActivity(writeTranscript(t, tt.lines...), tt.since)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Ultracode != tt.want {
+				t.Errorf("Ultracode = %v, want %v", got.Ultracode, tt.want)
+			}
+		})
+	}
+}
+
+func TestLoadActivityUltracodeBeyondTail(t *testing.T) {
+	lines := []string{effortOutput(0, "Ultracode on (this session only)"), prompt(1, "go")}
+	for i := range 40 {
+		lines = append(lines, assistantText(2+i, strings.Repeat("y", 10<<10)))
+	}
+	path := writeTranscript(t, append(lines, prompt(100, "next"))...)
+	if got, _ := LoadActivity(path); !got.Ultracode {
+		t.Fatal("toggle before the tail window was lost")
+	}
+
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = f.WriteString(effortOutput(101, "Ultracode off. Effort stays high.") + "\n")
+	f.Close()
+	if got, _ := LoadActivity(path); got.Ultracode {
+		t.Error("still on after it was turned off")
+	}
+}

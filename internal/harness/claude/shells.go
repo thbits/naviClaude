@@ -15,12 +15,14 @@ import (
 // Background shells and monitors often outlive the transcript tail parseActivity
 // reads, and a subagent's are logged in its own transcript, so they are tallied
 // from every transcript of the session, each read once and then incrementally.
+// The ultracode toggle is tracked here too, since it also scrolls out of the tail.
 
 type shellLedger struct {
-	size     int64 // bytes consumed, ending at a line boundary
-	since    time.Time
-	launched map[string]bgTask // task id -> what it is
-	ended    map[string]bool   // task and tool_use ids that completed or were stopped
+	size      int64 // bytes consumed, ending at a line boundary
+	since     time.Time
+	launched  map[string]bgTask // task id -> what it is
+	ended     map[string]bool   // task and tool_use ids that completed or were stopped
+	ultracode bool              // the latest ultracode toggle of the current run turned it on
 }
 
 // bgTask is a background shell or Monitor launched by a tool call.
@@ -38,8 +40,9 @@ var (
 var notificationTaskID = regexp.MustCompile(`<task-id>([^<]+)</task-id>`)
 
 // countBackground returns the background shells and monitors still running in
-// the session whose main transcript is path, launched at or after since.
-func countBackground(path string, since time.Time) (shells, monitors int) {
+// the session whose main transcript is path, launched at or after since, and
+// whether that run has ultracode on.
+func countBackground(path string, since time.Time) (shells, monitors int, ultracode bool) {
 	files := []string{path}
 	dir := filepath.Join(strings.TrimSuffix(path, ".jsonl"), "subagents")
 	if entries, err := os.ReadDir(dir); err == nil {
@@ -54,10 +57,13 @@ func countBackground(path string, since time.Time) (shells, monitors int) {
 	defer shellMu.Unlock()
 	launched := map[string]bgTask{}
 	ended := map[string]bool{}
-	for _, f := range files {
+	for i, f := range files {
 		l := updateShellLedger(f, since)
 		if l == nil {
 			continue
+		}
+		if i == 0 {
+			ultracode = l.ultracode
 		}
 		for task, bt := range l.launched {
 			launched[task] = bt
@@ -76,7 +82,7 @@ func countBackground(path string, since time.Time) (shells, monitors int) {
 			monitors++
 		}
 	}
-	return shells, monitors
+	return shells, monitors, ultracode
 }
 
 // updateShellLedger reads what was appended to path since the last call; nil
@@ -122,18 +128,29 @@ func updateShellLedger(path string, since time.Time) *shellLedger {
 func (l *shellLedger) addLine(line []byte) {
 	if !bytes.Contains(line, []byte("backgroundTaskId")) && !bytes.Contains(line, []byte(`"timeoutMs"`)) &&
 		!bytes.Contains(line, []byte("task-notification")) &&
-		!bytes.Contains(line, []byte(`"TaskStop"`)) && !bytes.Contains(line, []byte(`"KillShell"`)) {
+		!bytes.Contains(line, []byte(`"TaskStop"`)) && !bytes.Contains(line, []byte(`"KillShell"`)) &&
+		!bytes.Contains(line, []byte("ultra_effort_")) && !bytes.Contains(line, []byte("Ultracode o")) {
 		return
 	}
 	var rec activityRecord
 	if json.Unmarshal(line, &rec) != nil {
 		return
 	}
+	ts := parseTimestamp(rec.Timestamp)
+	// An earlier run's toggle died with its process; a still-on mode is re-announced.
+	currentRun := l.since.IsZero() || ts.IsZero() || !ts.Before(l.since)
 	switch rec.Type {
 	case "attachment":
 		var text string
-		if a := rec.Attachment; a != nil && a.Type == "queued_command" && json.Unmarshal(a.Prompt, &text) == nil {
+		a := rec.Attachment
+		switch {
+		case a == nil:
+		case a.Type == "queued_command" && json.Unmarshal(a.Prompt, &text) == nil:
 			l.notified(text)
+		case a.Type == "ultra_effort_enter" && currentRun:
+			l.ultracode = true
+		case a.Type == "ultra_effort_exit" && currentRun:
+			l.ultracode = false
 		}
 
 	case "assistant":
@@ -160,9 +177,11 @@ func (l *shellLedger) addLine(line []byte) {
 			return
 		}
 		text, results := userContent(msg.Content)
-		ts := parseTimestamp(rec.Timestamp)
+		if on, ok := ultracodeToggle(text); ok && currentRun {
+			l.ultracode = on
+		}
 		// Tasks launched by an earlier run died with its process (e.g. a resumed session).
-		if len(results) > 0 && (l.since.IsZero() || ts.IsZero() || !ts.Before(l.since)) {
+		if len(results) > 0 && currentRun {
 			if _, task := asyncLaunch(rec.ToolUseResult); task != "" {
 				l.launched[task] = bgTask{toolUseID: results[0]}
 			} else if task, expires, ok := monitorLaunch(rec.ToolUseResult, ts); ok {
@@ -171,6 +190,23 @@ func (l *shellLedger) addLine(line []byte) {
 		}
 		l.notified(text)
 	}
+}
+
+// ultracodeToggle reads the /effort command's output, which lands a prompt
+// before the ultra_effort attachment does.
+func ultracodeToggle(text string) (on, ok bool) {
+	out, found := strings.CutPrefix(strings.TrimSpace(text), "<local-command-stdout>")
+	if !found {
+		return false, false
+	}
+	out = strings.TrimSuffix(out, "</local-command-stdout>")
+	switch {
+	case strings.HasPrefix(out, "Ultracode on") || strings.HasSuffix(out, "· Ultracode on"):
+		return true, true
+	case strings.HasPrefix(out, "Ultracode off") || strings.HasSuffix(out, "· Ultracode off"):
+		return false, true
+	}
+	return false, false
 }
 
 // notified records the tasks the <task-notification> blocks in text report
