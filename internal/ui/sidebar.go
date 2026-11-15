@@ -70,6 +70,7 @@ type SidebarModel struct {
 	collapseAfterHrs  float64   // auto-collapse groups idle longer than this (hours)
 	groupSortOrder    string    // "name", "activity" or "manual"
 	sessionSortOrder  string    // "name", "activity" or "manual"; orders pinned and working rows
+	lineNumbers       string    // row-number gutter: "off", "absolute" or "relative"
 	groupOrder        []string  // dragged group order, read by the manual group sort
 	baseOrder         []string  // live groups in sort order before waiting groups float
 	drop              *dropMark // drag-and-drop marker; nil when nothing is dragged
@@ -622,6 +623,9 @@ func (m *SidebarModel) syncViewport() {
 	var lines []string
 	// Fresh slice: View() runs on a copy that shares this backing array.
 	m.lineItems = make([]int, 0, len(m.lineItems))
+	// Rows render narrower by the number gutter; every renderer sizes from m.width.
+	gutter := m.gutterWidth()
+	m.width -= gutter
 	dropLine := lipgloss.NewStyle().Foreground(styles.ColorBlue).Render(" " + strings.Repeat("━", max(m.width-2, 1)))
 	for i, item := range m.flatItems {
 		isCursor := i == m.cursor
@@ -672,6 +676,10 @@ func (m *SidebarModel) syncViewport() {
 			lines = append(lines, dropLine)
 			m.lineItems = append(m.lineItems, dropLineOwner)
 		}
+	}
+	m.width += gutter
+	if gutter > 0 {
+		m.addGutter(lines, gutter)
 	}
 	m.content = strings.Join(lines, "\n")
 	m.vp.SetContent(m.content)
@@ -964,10 +972,6 @@ func (m SidebarModel) Update(msg tea.Msg) (SidebarModel, tea.Cmd) {
 				m.updateTracked()
 				m.syncViewport()
 			}
-		case "g":
-			m.cursor = 0
-			m.updateTracked()
-			m.syncViewport()
 		}
 	}
 	return m, nil

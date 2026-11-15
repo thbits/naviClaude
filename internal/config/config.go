@@ -17,6 +17,9 @@ var validSortOrders = map[string]bool{
 	"manual":   true, // set by dragging rows in the session list
 }
 
+// validLineNumbers is the set of allowed line_numbers modes.
+var validLineNumbers = map[string]bool{"off": true, "absolute": true, "relative": true}
+
 // Config holds all user-configurable settings for naviClaude.
 type Config struct {
 	Keys               KeyBindings   `yaml:"keys"`
@@ -36,6 +39,7 @@ type Config struct {
 	NewSessionDir      string        `yaml:"new_session_dir"`      // working directory for new tmux sessions (default "~")
 	GroupSortOrder     string        `yaml:"group_sort_order"`     // "name" (alphabetical, default), "activity" or "manual" (dragged order)
 	SessionSortOrder   string        `yaml:"session_sort_order"`   // "name" (alphabetical, default), "activity" or "manual" (tmux window order); waiting/done/idle rows are newest-first regardless
+	LineNumbers        string        `yaml:"line_numbers"`         // session-list row numbers: "off" (default), "absolute" or "relative" (distance from the cursor)
 	CheckForUpdates    bool          `yaml:"check_for_updates"`    // check GitHub for a newer release on startup (default true)
 	Editor             string        `yaml:"editor"`               // editor for opening changed files; empty falls back to $EDITOR, then vi
 	FocusLastSession   bool          `yaml:"focus_last_session"`   // re-select the last focused session on startup (default true)
@@ -75,6 +79,7 @@ type KeyBindings struct {
 	ToggleChanged  string `yaml:"toggle_changed"`
 	MoveWindow     string `yaml:"move_window"`
 	PinSession     string `yaml:"pin_session"`
+	LineNumbers    string `yaml:"toggle_line_numbers"`
 }
 
 // DefaultConfig returns the default configuration.
@@ -95,6 +100,7 @@ func DefaultConfig() Config {
 			ToggleChanged:  "F",
 			MoveWindow:     "m",
 			PinSession:     "p",
+			LineNumbers:    "#",
 		},
 		SidebarWidth:       30,
 		RefreshInterval:    "200ms",
@@ -111,6 +117,7 @@ func DefaultConfig() Config {
 		WindowName:         "{project}",
 		GroupSortOrder:     "name",
 		SessionSortOrder:   "name",
+		LineNumbers:        "off",
 		CheckForUpdates:    true,
 		FocusLastSession:   true,
 		RememberGroupState: true,
@@ -256,5 +263,8 @@ func sanitizeConfig(cfg *Config) {
 	}
 	if !validSortOrders[cfg.SessionSortOrder] {
 		cfg.SessionSortOrder = d.SessionSortOrder
+	}
+	if !validLineNumbers[cfg.LineNumbers] {
+		cfg.LineNumbers = d.LineNumbers
 	}
 }

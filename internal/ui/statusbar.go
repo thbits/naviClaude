@@ -17,8 +17,9 @@ type StatusBarModel struct {
 	updateAvailable bool         // a newer release exists on GitHub
 	listHints       []statusHint // configurable list-mode hints
 	errText         string
-	notice          bool // errText is a success notice, not an error
-	confirmKill     bool // the kill prompt is up, whatever the mode
+	notice          bool   // errText is a success notice, not an error
+	pending         string // a typed count awaiting its motion, shown like vim's showcmd
+	confirmKill     bool   // the kill prompt is up, whatever the mode
 }
 
 // statusHint is one key hint. key is the label replayed when the hint is
@@ -69,6 +70,11 @@ func (m *StatusBarModel) SetKeyHints(hints []StatusHintInput) {
 // SetMode sets the current mode which determines which hints are displayed.
 func (m *StatusBarModel) SetMode(mode string) {
 	m.mode = mode
+}
+
+// SetPending shows a typed but not yet used count beside the version; "" hides it.
+func (m *StatusBarModel) SetPending(s string) {
+	m.pending = s
 }
 
 // SetConfirmKill swaps in the kill prompt's hints while the confirmation is up.
@@ -123,7 +129,7 @@ func (m StatusBarModel) View() string {
 	}
 
 	left, _ := m.layoutHints()
-	right := styles.StatusBarVersion.Render(m.version)
+	right := m.rightView()
 	if m.updateAvailable {
 		withLabel := right + styles.StatusBarVersion.Render("  ") + styles.StatusBarUpdate.Render("update available")
 		// Only show the label when it fits: an overflowing bar wraps to a
@@ -189,9 +195,18 @@ func fitHints(hints []statusHint, budget int) []statusHint {
 	return out
 }
 
+// rightView is the right-aligned version, led by any pending count.
+func (m StatusBarModel) rightView() string {
+	right := styles.StatusBarVersion.Render(m.version)
+	if m.pending != "" {
+		right = styles.StatusBarKey.Render(m.pending) + " " + right
+	}
+	return right
+}
+
 // fittedHints is the current mode's hints that fit beside the version.
 func (m StatusBarModel) fittedHints() []statusHint {
-	budget := m.width - lipgloss.Width(styles.StatusBarVersion.Render(m.version)) - 1
+	budget := m.width - lipgloss.Width(m.rightView()) - 1
 	return fitHints(m.hintsForMode(), budget)
 }
 

@@ -23,6 +23,7 @@ type KeyMap struct {
 	ToggleChanged  string
 	MoveWindow     string
 	PinSession     string
+	LineNumbers    string
 }
 
 // DefaultKeyMap returns the default key bindings.
@@ -42,6 +43,7 @@ func DefaultKeyMap() KeyMap {
 		ToggleChanged:  "F",
 		MoveWindow:     "m",
 		PinSession:     "p",
+		LineNumbers:    "#",
 	}
 }
 
@@ -69,6 +71,7 @@ func keyFieldBindings(kb config.KeyBindings, km *KeyMap) []keyFieldBinding {
 		{"toggle_changed", kb.ToggleChanged, &km.ToggleChanged},
 		{"move_window", kb.MoveWindow, &km.MoveWindow},
 		{"pin_session", kb.PinSession, &km.PinSession},
+		{"toggle_line_numbers", kb.LineNumbers, &km.LineNumbers},
 	}
 }
 
@@ -94,7 +97,7 @@ type HelpBinding struct {
 func (km KeyMap) HelpBindings() []HelpBinding {
 	return []HelpBinding{
 		// Move around
-		{"j/k", "Navigate sessions"},
+		{"j/k g/G {/}", "Rows (5j: 5 down), first / last (5G: row 5), prev / next group"},
 		{"Tab/Shift+Tab", "Cycle panes"},
 		{"Ctrl+U/Ctrl+D", "Scroll preview"},
 		{km.Search, "Search"},
@@ -112,6 +115,7 @@ func (km KeyMap) HelpBindings() []HelpBinding {
 		{km.Detail, "Detail"},
 		{km.Stats, "Stats"},
 		// App
+		{km.LineNumbers, "Toggle row numbers"},
 		{KeyThemePicker, "Theme picker"},
 		{km.Help, "Help"},
 		{km.Quit, "Quit"},

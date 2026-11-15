@@ -42,6 +42,9 @@ func clickID(s *session.Session) string {
 }
 
 func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	if msg.Action == tea.MouseActionPress {
+		m.clearPending() // a click is a new action, like any key
+	}
 	switch msg.Action {
 	case tea.MouseActionRelease:
 		return m.handleMouseRelease(msg)

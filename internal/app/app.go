@@ -228,6 +228,8 @@ type Model struct {
 	cfg                config.Config
 	version            string // build version, for the update check
 	keys               KeyMap
+	count              int    // vim count typed in the list, applied by the next motion
+	lineNumbersOn      string // the line_numbers mode the toggle turns on
 	sidebarWidthPct    int
 	sidebarCols        int // width dragged with the mouse; 0 uses sidebarWidthPct
 	closedSessionHours float64
@@ -342,6 +344,8 @@ func New(version string) Model {
 	m.sidebar.SetCollapseAfterHours(cfg.CollapseAfterHours)
 	m.sidebar.SetGroupSortOrder(cfg.GroupSortOrder)
 	m.sidebar.SetSessionSortOrder(cfg.SessionSortOrder)
+	m.sidebar.SetLineNumbers(cfg.LineNumbers)
+	m.lineNumbersOn = cfg.LineNumbers
 	m.sidebar.SetGroupOrder(m.viewState.Get().GroupOrder)
 	m.sidebar.SetPinned(m.viewState.Get().Pinned)
 	m.sidebar.SetPinnedGroups(m.viewState.Get().PinnedGroups)
@@ -1031,6 +1035,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	}
 
+	// A count only prefixes a list key.
+	if m.mode != ModeList {
+		m.clearPending()
+	}
+
 	// Kill confirmation takes priority.
 	if m.confirmKill {
 		return m.handleKillConfirm(msg)
@@ -1083,6 +1092,9 @@ func (m Model) focusSelected() (tea.Model, tea.Cmd) {
 
 func (m Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
+	// Every key consumes the pending count; only motions use it.
+	count := m.count
+	m.clearPending()
 
 	switch key {
 	case m.keys.Quit:
@@ -1134,6 +1146,10 @@ func (m Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case m.keys.PinSession:
 		return m.togglePin(m.sidebar.SelectedSession())
+
+	case m.keys.LineNumbers:
+		m.toggleLineNumbers()
+		return m, nil
 
 	case m.keys.MoveWindow:
 		if sess := m.sidebar.SelectedSession(); sess != nil && sess.Status != session.StatusClosed {
@@ -1200,8 +1216,16 @@ func (m Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	default:
-		// Navigation keys: delegate to sidebar.
+		// Checked after the configured keys, so a digit bound to an action keeps it.
+		if d, ok := countDigit(msg, count); ok {
+			m.count = count
+			m.addCountDigit(d)
+			return m, nil
+		}
 		prev := m.selectionIdentity()
+		if m.listMotion(key, count) {
+			return m, m.selectionMoved(prev)
+		}
 		var cmd tea.Cmd
 		m.sidebar, cmd = m.sidebar.Update(msg)
 		return m, tea.Batch(cmd, m.selectionMoved(prev))

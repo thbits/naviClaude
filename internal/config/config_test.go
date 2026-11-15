@@ -400,3 +400,17 @@ func TestNotificationsPartialOverride(t *testing.T) {
 		t.Errorf("invalid values not sanitized: %+v", n)
 	}
 }
+
+func TestLoadLineNumbers(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	for in, want := range map[string]string{"relative": "relative", "absolute": "absolute", "bogus": "off", "": "off"} {
+		os.WriteFile(path, []byte("line_numbers: "+in+"\n"), 0o644)
+		cfg, err := Load(path)
+		if err != nil {
+			t.Fatalf("Load error: %v", err)
+		}
+		if cfg.LineNumbers != want {
+			t.Errorf("line_numbers %q loaded as %q, want %q", in, cfg.LineNumbers, want)
+		}
+	}
+}
