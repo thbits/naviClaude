@@ -3,13 +3,15 @@ package claude
 import (
 	"bytes"
 	"encoding/json"
-	"io"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/thbits/naviClaude/internal/session"
 )
 
 // Background shells and monitors often outlive the transcript tail parseActivity
@@ -20,9 +22,21 @@ import (
 type shellLedger struct {
 	size      int64 // bytes consumed, ending at a line boundary
 	since     time.Time
-	launched  map[string]bgTask // task id -> what it is
-	ended     map[string]bool   // task and tool_use ids that completed or were stopped
-	ultracode bool              // the latest ultracode toggle of the current run turned it on
+	launched  map[string]bgTask   // task id -> what it is
+	ended     map[string]bool     // task and tool_use ids that completed or were stopped
+	workflows map[string]wfLaunch // task id -> Workflow tool run
+	ultracode bool                // the latest ultracode toggle of the current run turned it on
+}
+
+// background is the session-wide state countBackground gathers.
+type background struct {
+	shells, monitors int
+	ultracode        bool
+	workflows        []session.WorkflowRun
+}
+
+func (b background) applyTo(act *session.SessionActivity) {
+	act.Shells, act.Monitors, act.Ultracode, act.Workflows = b.shells, b.monitors, b.ultracode, b.workflows
 }
 
 // bgTask is a background shell or Monitor launched by a tool call.
@@ -39,10 +53,10 @@ var (
 
 var notificationTaskID = regexp.MustCompile(`<task-id>([^<]+)</task-id>`)
 
-// countBackground returns the background shells and monitors still running in
-// the session whose main transcript is path, launched at or after since, and
-// whether that run has ultracode on.
-func countBackground(path string, since time.Time) (shells, monitors int, ultracode bool) {
+// countBackground returns the background shells, monitors and workflows still
+// running in the session whose main transcript is path, launched at or after
+// since, and whether that run has ultracode on.
+func countBackground(path string, since time.Time) (out background) {
 	files := []string{path}
 	dir := filepath.Join(strings.TrimSuffix(path, ".jsonl"), "subagents")
 	if entries, err := os.ReadDir(dir); err == nil {
@@ -57,16 +71,20 @@ func countBackground(path string, since time.Time) (shells, monitors int, ultrac
 	defer shellMu.Unlock()
 	launched := map[string]bgTask{}
 	ended := map[string]bool{}
+	workflows := map[string]wfLaunch{}
 	for i, f := range files {
 		l := updateShellLedger(f, since)
 		if l == nil {
 			continue
 		}
 		if i == 0 {
-			ultracode = l.ultracode
+			out.ultracode = l.ultracode
 		}
 		for task, bt := range l.launched {
 			launched[task] = bt
+		}
+		for task, w := range l.workflows {
+			workflows[task] = w
 		}
 		for id := range l.ended {
 			ended[id] = true
@@ -77,12 +95,40 @@ func countBackground(path string, since time.Time) (shells, monitors int, ultrac
 		switch {
 		case ended[task] || ended[bt.toolUseID]:
 		case !bt.monitor:
-			shells++
+			out.shells++
 		case bt.expires.IsZero() || now.Before(bt.expires):
-			monitors++
+			out.monitors++
 		}
 	}
-	return shells, monitors, ultracode
+	out.workflows = activeWorkflows(path, workflows, ended)
+	return out
+}
+
+// activeWorkflows returns the runs not yet reported ended, oldest first.
+// Callers hold shellMu.
+func activeWorkflows(path string, launched map[string]wfLaunch, ended map[string]bool) []session.WorkflowRun {
+	dir := strings.TrimSuffix(path, ".jsonl")
+	var live []wfLaunch
+	for task, w := range launched {
+		if ended[task] || ended[w.toolUseID] {
+			delete(wfJournals, journalPath(dir, w.runID))
+		} else {
+			live = append(live, w)
+		}
+	}
+	slices.SortFunc(live, func(a, b wfLaunch) int {
+		if c := a.at.Compare(b.at); c != 0 {
+			return c
+		}
+		return strings.Compare(a.runID, b.runID)
+	})
+	var runs []session.WorkflowRun
+	for _, w := range live {
+		if run, done := workflowRun(dir, w); !done {
+			runs = append(runs, run)
+		}
+	}
+	return runs
 }
 
 // updateShellLedger reads what was appended to path since the last call; nil
@@ -95,31 +141,19 @@ func updateShellLedger(path string, since time.Time) *shellLedger {
 	}
 	l := shellLedgers[path]
 	if l == nil || !l.since.Equal(since) || fi.Size() < l.size {
-		l = &shellLedger{since: since, launched: map[string]bgTask{}, ended: map[string]bool{}}
+		l = &shellLedger{since: since, launched: map[string]bgTask{}, ended: map[string]bool{}, workflows: map[string]wfLaunch{}}
 		shellLedgers[path] = l
 	}
 	if fi.Size() == l.size {
 		return l
 	}
 
-	f, err := os.Open(path)
-	if err != nil {
+	lines, next, ok := appendedLines(path, l.size, fi.Size())
+	if !ok {
 		return l
 	}
-	defer f.Close()
-	data := make([]byte, fi.Size()-l.size)
-	n, err := f.ReadAt(data, l.size)
-	if err != nil && err != io.EOF {
-		return l
-	}
-	data = data[:n]
-	// A trailing partial line is still being written; read it next time.
-	end := bytes.LastIndexByte(data, '\n')
-	if end < 0 {
-		return l
-	}
-	l.size += int64(end + 1)
-	for _, line := range bytes.Split(data[:end], []byte{'\n'}) {
+	l.size = next
+	for _, line := range lines {
 		l.addLine(line)
 	}
 	return l
@@ -129,7 +163,8 @@ func (l *shellLedger) addLine(line []byte) {
 	if !bytes.Contains(line, []byte("backgroundTaskId")) && !bytes.Contains(line, []byte(`"timeoutMs"`)) &&
 		!bytes.Contains(line, []byte("task-notification")) &&
 		!bytes.Contains(line, []byte(`"TaskStop"`)) && !bytes.Contains(line, []byte(`"KillShell"`)) &&
-		!bytes.Contains(line, []byte("ultra_effort_")) && !bytes.Contains(line, []byte("Ultracode o")) {
+		!bytes.Contains(line, []byte("ultra_effort_")) && !bytes.Contains(line, []byte("Ultracode o")) &&
+		!bytes.Contains(line, []byte("local_workflow")) {
 		return
 	}
 	var rec activityRecord
@@ -186,6 +221,9 @@ func (l *shellLedger) addLine(line []byte) {
 				l.launched[task] = bgTask{toolUseID: results[0]}
 			} else if task, expires, ok := monitorLaunch(rec.ToolUseResult, ts); ok {
 				l.launched[task] = bgTask{toolUseID: results[0], monitor: true, expires: expires}
+			} else if task, w, ok := workflowLaunch(rec.ToolUseResult); ok {
+				w.toolUseID, w.at = results[0], ts
+				l.workflows[task] = w
 			}
 		}
 		l.notified(text)

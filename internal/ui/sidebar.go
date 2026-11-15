@@ -1476,6 +1476,11 @@ func (m SidebarModel) renderDetailLines(s *session.Session, bg lipgloss.Color, b
 		act = m.activity
 	}
 	lines := []string{box.Render(renderSegments(activitySegments(s, act, time.Now()), bg, maxWidth))}
+	if act != nil && s.Status != session.StatusClosed {
+		for _, w := range act.Workflows {
+			lines = append(lines, box.Render(renderSegments(workflowSegments(w), bg, maxWidth)))
+		}
+	}
 
 	var metrics *session.SessionMetrics
 	if s.ID != "" && m.metricsID == s.ID {

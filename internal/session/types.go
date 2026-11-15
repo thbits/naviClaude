@@ -42,27 +42,52 @@ type SessionActivity struct {
 	TurnStart       time.Time
 	TurnStartApprox bool
 
-	LastAssistant time.Time // timestamp of the latest assistant record
-	TurnEnded     bool      // the latest turn finished; only background work may remain
-	Agents        int       // subagents still running, foreground or background
-	Shells        int       // background shell commands still running
-	Monitors      int       // Monitor tool watches still running
-	TokensUsed    int       // context fill from the latest assistant usage in the tail
-	Model         string    // model id of the latest main-thread assistant record ("" when none in the tail)
-	Ultracode     bool      // the running process has ultracode (workflows on every task) on
+	LastAssistant time.Time     // timestamp of the latest assistant record
+	TurnEnded     bool          // the latest turn finished; only background work may remain
+	Agents        int           // subagents still running, foreground or background
+	Shells        int           // background shell commands still running
+	Monitors      int           // Monitor tool watches still running
+	TokensUsed    int           // context fill from the latest assistant usage in the tail
+	Model         string        // model id of the latest main-thread assistant record ("" when none in the tail)
+	Ultracode     bool          // the running process has ultracode (workflows on every task) on
+	Workflows     []WorkflowRun // Workflow tool runs still going, in launch order
+}
+
+// WorkflowRun is a Workflow tool run in progress and the agents it has running.
+type WorkflowRun struct {
+	Name   string   // workflow name from the script's meta
+	Phase  string   // phase of the latest agent started
+	Agents []string // labels of the agents running now; empty between phases
+}
+
+// Background is the background work a, which may be nil, has running.
+func (a *SessionActivity) Background() Background {
+	if a == nil {
+		return Background{}
+	}
+	bg := Background{Agents: a.Agents, Shells: a.Shells, Monitors: a.Monitors, Ultracode: a.Ultracode,
+		Workflows: len(a.Workflows)}
+	for _, w := range a.Workflows {
+		bg.WorkflowAgents += len(w.Agents)
+	}
+	return bg
 }
 
 // Background counts the subagents and background shells a session has running.
 type Background struct {
-	Agents    int
-	Shells    int
-	Monitors  int
-	Thinking  bool // the main thread is mid-turn with no tool in flight
-	Ultracode bool // ultracode is on; not background work, so Busy ignores it
+	Agents         int
+	Shells         int
+	Monitors       int
+	Workflows      int  // Workflow tool runs still going
+	WorkflowAgents int  // agents those runs have running; counted apart from Agents
+	Thinking       bool // the main thread is mid-turn with no tool in flight
+	Ultracode      bool // ultracode is on; not background work, so Busy ignores it
 }
 
-// Busy reports whether any subagent, shell or monitor is still running.
-func (b Background) Busy() bool { return b.Agents > 0 || b.Shells > 0 || b.Monitors > 0 }
+// Busy reports whether any subagent, shell, monitor or workflow is still running.
+func (b Background) Busy() bool {
+	return b.Agents > 0 || b.Shells > 0 || b.Monitors > 0 || b.Workflows > 0
+}
 
 // EffectiveStatus is s.Status, except an idle session with background work still
 // running is active.

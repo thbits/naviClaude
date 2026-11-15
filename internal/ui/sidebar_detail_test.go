@@ -453,3 +453,45 @@ func TestUltracodeBadgeOnRows(t *testing.T) {
 		t.Error("ultracode alone made an idle session working")
 	}
 }
+
+// A workflow run shows as a count on every row and one line per run on the selected row.
+func TestWorkflowRunsOnRows(t *testing.T) {
+	const width = 45
+	sb := NewSidebar(width, 40)
+	sb.SetSize(width, 40)
+	now := time.Now()
+	mk := func(id string) *session.Session {
+		return &session.Session{ID: id, DisplayName: "name" + id, TmuxSession: "alpha",
+			TmuxTarget: "alpha:0." + id, Status: session.StatusIdle, LastActivity: now, Summary: "s"}
+	}
+	sb.SetSessions([]*session.Session{mk("1"), mk("2")})
+	act := &session.SessionActivity{TurnEnded: true, Workflows: []session.WorkflowRun{
+		{Name: "native-arch-build-design", Phase: "Review",
+			Agents: []string{"review:infra-ops", "review:tests-compat", "review:registry-buildx", "review:gha-semantics"}},
+		{Name: "between", Phase: "Understand"},
+	}}
+	sb.SetBackground(map[string]session.Background{"1": act.Background(), "2": act.Background()})
+	sb.SetCursor(1)
+	sb.SetActivity("1", act)
+
+	body := ansi.Strip(sb.View())
+	if want := styles.IconWorkflow + " 2 workflows (4 agents)"; !strings.Contains(body, want) {
+		t.Errorf("unselected row lacks %q:\n%s", want, body)
+	}
+	if want := styles.IconWorkflow + " 2 workflows"; strings.Count(body, want) != 2 {
+		t.Errorf("want %q on both rows:\n%s", want, body)
+	}
+	for _, want := range []string{styles.IconWorkflow + " native-arch-build-design · Review · re", styles.IconWorkflow + " between · Understand"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("selected row lacks %q:\n%s", want, body)
+		}
+	}
+	for i, l := range strings.Split(sb.View(), "\n") {
+		if w := ansi.StringWidth(l); w > width {
+			t.Errorf("line %d is %d cells: %q", i, w, ansi.Strip(l))
+		}
+	}
+	if session.EffectiveStatus(mk("1"), act.Background()) != session.StatusActive {
+		t.Error("an idle session with a workflow running is not working")
+	}
+}

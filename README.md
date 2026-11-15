@@ -16,6 +16,7 @@ it layers on top of your existing tmux setup instead of replacing it.
 - **Breathing status dots** -- active sessions pulse green (including ones whose subagents, background shells or Monitor watches are still running), waiting sessions pulse amber, a blue `◉` marks a session that finished while you were away
 - **Live activity line** -- under the selected session, what Claude is doing right now: running subagents, background shells and Monitor watches first (`󰚩 2 agents ·  1 shell · 󰈈 1 monitor`, Nerd Font glyphs), then the tool in flight, its target and the turn time (`Bash · go test ./... · 42s`, or `󰧑 thinking` between tools); what it is waiting on you for (`needs approval: Edit`, `question: ...`, `plan approval`); or `✓ done 5m ago`
 - **Background work on every row** -- sessions you are not on show the same `󰚩 2 agents ·  1 shell · 󰈈 1 monitor` counts under their summary while anything is still running, plus `󰧑 thinking` while the main thread is mid-turn
+- **Workflow runs** -- running Workflow tool runs count as background work, so the session stays working while only a workflow is left: rows show ` 1 workflow (3 agents)`, and the selected session gets one line per run with its name, current phase and the agents running now (` native-arch-build-design · Review · review:infra, review:tests`)
 - **Ultracode marker** -- a purple `󰉁` before the row's time marks a session running with ultracode on (`/effort ultracode`), detected from the transcript and cleared when it is turned off or the process restarts
 - **Context usage bar** -- current token usage vs the context window (`ctx ━━━──── 62K/1M (6%)`), amber from 60% and red above 85%; the window size is inferred from the model id (1M for Claude 5 models, Fable, Opus and `[1m]` variants, 200K otherwise, bumped if usage already exceeds it)
 - **Repo, branch and changes line** -- the session's git repo, branch and its edited files at a glance (` naviClaude ⎇ main · 3 files +120/−8`); the repo name is dropped when the pane is too narrow for both
@@ -178,7 +179,7 @@ Each tmux session group splits its rows into sections, top to bottom. When a gro
 | pinned | Live sessions you pinned with `p`, whatever their status (marked with a pin) |
 | waiting | Sessions waiting on you: a permission prompt or a question |
 | done | Sessions that finished while you weren't looking, until you select them |
-| working | Sessions working, including background subagents, shells and Monitor watches |
+| working | Sessions working, including background subagents, shells, Monitor watches and Workflow runs |
 | idle | Everything else |
 
 A row moves to its section as its status changes. The sort order applies within pinned and working; waiting, done and idle list the most recent first, so a session that just finished lands on top. Dragging reorders a row within the pinned or working section.

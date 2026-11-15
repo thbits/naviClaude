@@ -69,7 +69,7 @@ func loadActivity(path string, since time.Time) (*session.SessionActivity, error
 	activityMu.Unlock()
 	if hit && prev.size == fi.Size() && prev.mod.Equal(fi.ModTime()) && prev.since.Equal(since) {
 		act := prev.act
-		act.Shells, act.Monitors, act.Ultracode = countBackground(path, since)
+		countBackground(path, since).applyTo(&act)
 		return &act, nil
 	}
 
@@ -102,7 +102,7 @@ func loadActivity(path string, since time.Time) (*session.SessionActivity, error
 	activityMu.Lock()
 	activityCache[path] = activityCacheEntry{size: fi.Size(), mod: fi.ModTime(), since: since, act: act}
 	activityMu.Unlock()
-	act.Shells, act.Monitors, act.Ultracode = countBackground(path, since)
+	countBackground(path, since).applyTo(&act)
 	return &act, nil
 }
 
@@ -225,8 +225,9 @@ func parseActivity(data []byte, truncated bool, since time.Time) (act session.Se
 			if m := notificationToolUseID.FindStringSubmatch(b); m != nil {
 				delete(async, m[1])
 			}
-			// Shell and monitor notifications leave the agent floor alone.
-			if !strings.Contains(b, "<summary>Background command") && !strings.Contains(b, "<summary>Monitor") {
+			// Shell, monitor and workflow notifications leave the agent floor alone.
+			if !strings.Contains(b, "<summary>Background command") && !strings.Contains(b, "<summary>Monitor") &&
+				!strings.Contains(b, "<summary>Dynamic workflow") {
 				bgDoneAft++
 			}
 		}
