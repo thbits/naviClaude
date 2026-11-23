@@ -307,11 +307,11 @@ func ctxLine(used, limit int, bg lipgloss.Color, maxWidth int) string {
 	}, bg, maxWidth)
 }
 
-// repoSegments renders " naviClaude ⎇ main · 3 files +120/−8" within maxWidth;
+// repoSegments renders " naviClaude ⎇ main ↑2↓1 · 3 files +120/−8" within maxWidth;
 // the file part appears only once the changed-files list has been loaded. The
 // repo name shrinks first and is dropped when the branch would be cut instead.
 func repoSegments(ref session.GitRef, files []session.ChangedFile, maxWidth int) []segment {
-	segs := branchSegments(ref.Branch, files)
+	segs := branchSegments(ref, files)
 	if ref.Repo == "" {
 		return segs
 	}
@@ -331,8 +331,18 @@ func segmentsWidth(segs []segment) int {
 	return w
 }
 
-func branchSegments(branch string, files []session.ChangedFile) []segment {
-	segs := []segment{seg("⎇ ", styles.ColorPurple), flexSeg(branch, styles.ColorGreen)}
+func branchSegments(ref session.GitRef, files []session.ChangedFile) []segment {
+	segs := []segment{seg("⎇ ", styles.ColorPurple), flexSeg(ref.Branch, styles.ColorGreen)}
+	if ref.Ahead > 0 {
+		segs = append(segs, seg(fmt.Sprintf(" ↑%d", ref.Ahead), styles.ColorCyan))
+	}
+	if ref.Behind > 0 {
+		sep := " "
+		if ref.Ahead > 0 {
+			sep = ""
+		}
+		segs = append(segs, seg(fmt.Sprintf("%s↓%d", sep, ref.Behind), styles.ColorAmber))
+	}
 	if len(files) == 0 {
 		return segs
 	}

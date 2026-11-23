@@ -48,6 +48,10 @@ const (
 	// ModeChangedFiles gives focus to the right-hand changed-files panel: j/k
 	// navigate the edited files and Enter opens the selected file in $EDITOR.
 	ModeChangedFiles
+
+	// ModePreviewSearch has the preview's one-line query input open: typing
+	// searches the preview text, Enter keeps the matches and Esc drops them.
+	ModePreviewSearch
 )
 
 // dirAction records which session-creation flow opened the directory picker, so
@@ -89,6 +93,8 @@ func (m Mode) String() string {
 		return "resume picker"
 	case ModeChangedFiles:
 		return "changed files"
+	case ModePreviewSearch:
+		return "preview search"
 	default:
 		return "unknown"
 	}

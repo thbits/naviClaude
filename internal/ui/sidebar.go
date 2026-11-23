@@ -78,6 +78,8 @@ type SidebarModel struct {
 	pinned            []string  // keys of sessions pinned to the top of their group
 	pinnedGroups      []string  // tmux sessions pinned to the top of the list
 	sections          map[*session.Session]int
+	statusFilter      StatusFilter // show only sessions in this status
+	stickyKey         string       // workingKey of the row the filter keeps while the cursor is on it
 
 	// Working sessions hold their slot under activity sort instead of racing on
 	// LastActivity: key -> rebuild tick it started working (newer sorts first).
@@ -174,7 +176,8 @@ func (m *SidebarModel) ExpandAll() {
 		m.collapsed[k] = false
 	}
 	m.rebuildFlatItems()
-	m.clampCursor()
+	// By identity: rows a status filter or a collapsed group hid shift the index.
+	m.restoreCursor(m.trackedID, m.trackedTarget, m.trackedGroup)
 }
 
 // RestoreCollapsed clears search mode and restores the collapsed state saved
@@ -486,24 +489,43 @@ func (m *SidebarModel) rebuildGroups() {
 
 func (m *SidebarModel) rebuildFlatItems() {
 	m.flatItems = nil
-	for gi, g := range m.groups {
+	filtering := m.filtering()
+	headers := 0
+	for _, g := range m.groups {
+		sessions := g.Sessions
+		if filtering {
+			if g.Name == ClosedGroupName {
+				continue
+			}
+			sessions = nil
+			for _, s := range g.Sessions {
+				if m.shown(s) {
+					sessions = append(sessions, s)
+				}
+			}
+			if len(sessions) == 0 {
+				continue
+			}
+		}
 		m.flatItems = append(m.flatItems, flatItem{
 			isGroup:    true,
 			groupName:  g.Name,
-			groupIdx:   gi,
-			groupCount: len(g.Sessions),
+			groupIdx:   headers, // counts shown headers: only the first has no spacer above
+			groupCount: len(sessions),
 		})
-		if !m.collapsed[g.Name] {
-			// Sessions sort by section, so the ends differ when there are several.
-			labeled := g.Name != ClosedGroupName && len(g.Sessions) > 0 &&
-				m.sections[g.Sessions[0]] != m.sections[g.Sessions[len(g.Sessions)-1]]
-			for i, s := range g.Sessions {
+		headers++
+		if !m.groupCollapsed(g.Name) {
+			// Sessions sort by section, so the ends differ when there are several;
+			// a filter already says what the rows are.
+			labeled := !filtering && g.Name != ClosedGroupName && len(sessions) > 0 &&
+				m.sections[sessions[0]] != m.sections[sessions[len(sessions)-1]]
+			for i, s := range sessions {
 				sec := m.sections[s]
 				m.flatItems = append(m.flatItems, flatItem{
 					groupName: g.Name,
 					session:   s,
 					section:   sec,
-					newSect:   labeled && (i == 0 || m.sections[g.Sessions[i-1]] != sec),
+					newSect:   labeled && (i == 0 || m.sections[sessions[i-1]] != sec),
 				})
 			}
 		}
@@ -572,6 +594,10 @@ func (m *SidebarModel) restoreCursor(id, tmuxTarget, groupName string) {
 	// Not found: clamp, then snap to a session row so the cursor doesn't strand on a header.
 	m.clampCursor()
 	m.snapToNearestSession()
+	if m.filtering() {
+		// The row left the filter for good; follow the one the cursor fell onto.
+		m.updateTracked()
+	}
 }
 
 // snapToNearestSession moves the cursor off a group header onto the closest
@@ -776,8 +802,8 @@ func (m *SidebarModel) ToggleGroupAtCursor() {
 		return
 	}
 	item := m.flatItems[m.cursor]
-	if !item.isGroup {
-		return
+	if !item.isGroup || m.filtering() {
+		return // a filter shows every match, so there is nothing to fold
 	}
 	m.collapsed[item.groupName] = !m.collapsed[item.groupName]
 	m.userToggled[item.groupName] = true // user explicitly toggled
@@ -920,6 +946,7 @@ func (m *SidebarModel) updateTracked() {
 	m.trackedID = ""
 	m.trackedTarget = ""
 	m.trackedGroup = ""
+	m.stickyKey = ""
 	if m.cursor < 0 || m.cursor >= len(m.flatItems) {
 		return
 	}
@@ -930,6 +957,9 @@ func (m *SidebarModel) updateTracked() {
 		m.trackedPaneID = item.session.TmuxPaneID
 		m.trackedID = item.session.ID
 		m.trackedTarget = item.session.TmuxTarget
+		if m.filtering() {
+			m.stickyKey = workingKey(item.session)
+		}
 	}
 }
 
@@ -1020,6 +1050,9 @@ func (m SidebarModel) View() string {
 		if m.searchActive {
 			emptyText = "No matches found"
 			hintText = "Try a different search query"
+		} else if m.filtering() && len(m.Sessions) > 0 {
+			emptyText = "No " + m.statusFilter.String() + " sessions"
+			hintText = "Press Esc to show all"
 		} else if m.spinnerView != "" {
 			emptyText = m.spinnerView + " Loading sessions..."
 			hintText = ""
@@ -1136,7 +1169,7 @@ func (m SidebarModel) groupCount(name string, count int) string {
 // flatItems walk to avoid rescanning m.groups every frame.
 func (m SidebarModel) renderGroupHeader(name string, count, idx int, isCursor, hovered bool) string {
 	arrow := "\u25bc" // down-pointing triangle (expanded)
-	if m.collapsed[name] {
+	if m.groupCollapsed(name) {
 		arrow = "\u25b6" // right-pointing triangle (collapsed)
 	}
 

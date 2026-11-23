@@ -243,6 +243,10 @@ type Model struct {
 	liveRecorder        *liveRecorder           // smooths scans before they overwrite the snapshot
 	serverIdentity      tmux.ServerIdentity     // tmux server the snapshot is written for
 	restoring           []resumedSession        // resumed sessions not yet reporting a status
+	pendingSelect       string                  // session to select once listed (--select or a handoff request)
+	selectTries         int                     // session loads left to find pendingSelect
+	selfPane            string                  // this dashboard's tmux pane, polled for handoff requests
+	handoff             handoffAPI              // reads handoff requests; nil disables them
 	restoredLastSession bool                    // one-shot guard: restore the focused session only once at startup
 	unreadHoldPane      string                  // pane set as unread while selected; kept from the seen-clear until the preview moves
 
@@ -254,6 +258,7 @@ type Model struct {
 	rowDrag         *rowDrag                  // left press on a sidebar row or header, maybe dragging it
 	mover           tmuxMover                 // test override; nil means tmuxClient
 	saveConfig      func(config.Config) error // config writer; nil writes the default config path
+	cfgSaved        *config.Config            // config as loaded or last written; saves write only fields changed since
 	copyText        func(string) error        // clipboard writer; nil uses copyToClipboard
 	pasteInto       func(string) error        // pastes the clipboard into a pane; nil uses pasteClipboard
 	now             func() time.Time          // clock override for tests; nil means time.Now
@@ -263,12 +268,26 @@ type Model struct {
 	scroller              paneScroller // test override; nil means tmuxClient
 	scrollCaptureInFlight bool         // a post-scroll capture is running
 	scrollCaptureDirty    bool         // another scroll landed during it
+
+	previewSearchSel string // selection the preview search was opened on; leaving it clears the search
+
+	// OS appearance, followed while theme_auto is on (see appearance.go).
+	themeName          string      // key of the theme now applied
+	osDark             bool        // the OS appearance last seen
+	detectDark         func() bool // test override; nil means systemDark
+	appearanceAt       time.Time   // when the appearance was last checked
+	appearanceInFlight bool        // a check is running
 }
 
 // New creates a fully-wired Model ready to be passed to tea.NewProgram.
 func New(version string) Model {
 	cfg, cfgErr := config.Load("")
-	styles.ApplyTheme(styles.Named(cfg.Theme))
+	// Checked here once so the first frame already has the right theme.
+	osDark := cfg.ThemeAuto && systemDark()
+	themeName := themeFor(cfg, osDark)
+	styles.ApplyTheme(styles.Named(themeName))
+	// Saved configs then carry the migrated keys too.
+	cfg.Keys = MigrateKeys(cfg.Keys)
 	keys := KeyMapFromConfig(cfg.Keys)
 
 	refreshInterval, err := time.ParseDuration(cfg.RefreshInterval)
@@ -294,7 +313,7 @@ func New(version string) Model {
 		contextMenu:  ui.NewContextMenu(),
 		detail:       ui.NewDetail(),
 		statsModel:   ui.NewStats(),
-		themePicker:  ui.NewThemePicker(cfg.Theme),
+		themePicker:  ui.NewThemePicker(themeName),
 		nameInput:    ui.NewNameInput(),
 		renameInput:  ui.NewRenameInput(),
 		dirPicker:    ui.NewDirPicker(),
@@ -302,6 +321,8 @@ func New(version string) Model {
 
 		// Backend
 		tmuxClient:    tc,
+		handoff:       tc,
+		selfPane:      selfPaneID(),
 		registry:      registry,
 		detector:      harness.NewDetector(tc, registry, cfg.ActiveWindowSecs, cfg.CPUActiveThreshold),
 		manager:       session.NewManager(tc, cfg.WindowName),
@@ -316,6 +337,7 @@ func New(version string) Model {
 
 		// Configuration
 		cfg:                cfg,
+		cfgSaved:           &cfg,
 		version:            version,
 		keys:               keys,
 		mode:               ModeList,
@@ -324,6 +346,10 @@ func New(version string) Model {
 		currentTmuxSession: detectCurrentTmuxSession(),
 		currentTmuxWin:     detectCurrentTmuxWindow(),
 		refreshInterval:    refreshInterval,
+
+		themeName:    themeName,
+		osDark:       osDark,
+		appearanceAt: time.Now(),
 	}
 
 	ttls := make(map[string]time.Duration)
@@ -384,6 +410,8 @@ func New(version string) Model {
 			msgs[i] = c.String()
 		}
 		m.fail(fmt.Errorf("keys: %s", strings.Join(msgs, "; ")))
+	} else if unknown := config.UnknownKeys(""); len(unknown) > 0 {
+		m.fail(fmt.Errorf("config: %s", strings.Join(unknown, "; ")))
 	}
 
 	return m
@@ -460,8 +488,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, m.capturePreviewCmd())
 		return m, tea.Batch(cmds...)
 
+	case selectRequestMsg:
+		m.requestSelect(msg.target)
+		return m, m.applyPendingSelect()
+
 	case tickSessionMsg:
 		cmds = append(cmds, tickSession())
+		if cmd := m.pollSelectCmd(); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
 		// A refresh slower than the tick must not stack another one behind it.
 		if !m.refreshInFlight {
 			m.refreshInFlight = true
@@ -475,7 +510,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, cmd)
 		}
 		cmds = append(cmds, m.backgroundCmd())
+		if cmd := m.appearanceCmd(); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
 		return m, tea.Batch(cmds...)
+
+	case appearanceMsg:
+		m.appearanceInFlight = false
+		m.followAppearance(msg.dark)
+		return m, nil
 
 	case breathingTickMsg:
 		m.breathingFrame++
@@ -590,7 +633,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 			// Restore the last focused session if enabled (may be active).
-			restoreCmd := m.maybeRestoreLastSession()
+			restoreCmd := joinCmds(m.maybeRestoreLastSession(), m.applyPendingSelect())
 			if sel := m.sidebar.SelectedSession(); sel != nil {
 				m.preview.SetSession(sel)
 				// Fire metrics load for the initially selected session.
@@ -637,6 +680,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// scan; if it is still absent then, the default cursor stands.
 			restoreCmd := m.maybeRestoreLastSession()
 			m.restoredLastSession = true
+			restoreCmd = joinCmds(restoreCmd, m.applyPendingSelect())
 			if restoreCmd != nil {
 				return m, restoreCmd
 			}
@@ -657,7 +701,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.err = msg.err
 		} else {
-			cmd = m.applySessionRefresh(msg)
+			cmd = joinCmds(m.applySessionRefresh(msg), m.applyPendingSelect())
 		}
 		return m, tea.Batch(cmd, m.clearSeenAttentionCmd())
 
@@ -1026,6 +1070,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Any keystroke puts the user in control, so cancel a pending history-driven
 	// restore that would otherwise steal focus.
 	m.restoredLastSession = true
+	m.pendingSelect = ""
 	key := msg.String()
 
 	// Global quit — but in passthrough mode Ctrl+C is forwarded to the pane.
@@ -1072,6 +1117,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleResumePickerKey(msg)
 	case ModeChangedFiles:
 		return m.handleChangedFilesKey(msg)
+	case ModePreviewSearch:
+		return m.handlePreviewSearchKey(msg)
 	}
 	return m, nil
 }
@@ -1104,6 +1151,26 @@ func (m Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "esc":
 			return m, nil // cancels the count, nothing else
 		}
+	}
+
+	// Esc peels one layer at a time: the preview search first, then the filter.
+	if key == KeyMenuCancel {
+		if m.preview.HasSearch() {
+			m.clearPreviewSearch()
+			return m, nil
+		}
+		if m.sidebar.StatusFilter() != ui.FilterNone {
+			return m, m.setStatusFilter(ui.FilterNone)
+		}
+	}
+	// While matches are highlighted n / N walk them, as in vim and less.
+	if m.preview.HasSearch() && (key == "n" || key == "N") {
+		if key == "n" {
+			m.preview.StepMatch(1)
+		} else {
+			m.preview.StepMatch(-1)
+		}
+		return m, nil
 	}
 
 	switch key {
@@ -1161,6 +1228,25 @@ func (m Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.toggleLineNumbers()
 		return m, nil
 
+	case m.keys.NextAttention:
+		return m, m.nextAttention()
+
+	case m.keys.FilterWaiting:
+		return m, m.toggleStatusFilter(ui.FilterWaiting)
+
+	case m.keys.FilterDone:
+		return m, m.toggleStatusFilter(ui.FilterDone)
+
+	case m.keys.FilterWorking:
+		return m, m.toggleStatusFilter(ui.FilterWorking)
+
+	case m.keys.FilterIdle:
+		return m, m.toggleStatusFilter(ui.FilterIdle)
+
+	case m.keys.PreviewSearch:
+		m.openPreviewSearch()
+		return m, nil
+
 	case m.keys.MoveWindow:
 		if sess := m.sidebar.SelectedSession(); sess != nil && sess.Status != session.StatusClosed {
 			return m.openMovePicker(sess)
@@ -1206,7 +1292,7 @@ func (m Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case KeyThemePicker:
-		m.themePicker.Show(m.cfg.Theme)
+		m.themePicker.Show(m.currentTheme())
 		m.mode = ModeThemePicker
 		m.statusbar.SetMode(ModeThemePicker.String())
 		return m, nil
@@ -1271,6 +1357,14 @@ func (m *Model) deferSelectionChange() tea.Cmd {
 // the sidebar cursor after it moved (keyboard or mouse).
 func (m *Model) afterSelectionChange() tea.Cmd {
 	m.selectionPending = false
+	if m.preview.HasSearch() && m.selectionIdentity() != m.previewSearchSel {
+		if m.mode == ModePreviewSearch {
+			// A refresh moved the cursor mid-typing; keep the input so keys stay search text.
+			m.previewSearchSel = m.selectionIdentity()
+		} else {
+			m.clearPreviewSearch() // the search belongs to the content it was run on
+		}
+	}
 	var cmds []tea.Cmd
 	if sel := m.sidebar.SelectedSession(); sel != nil {
 		m.selectPreviewSession(sel)
@@ -1291,6 +1385,13 @@ func (m *Model) afterSelectionChange() tea.Cmd {
 		// Show group summary when hovering on a group header.
 		m.preview.SetGroupSummary(groupName, m.sidebar.GroupSessions(groupName))
 		// No session selected: clear the changed-files list.
+		m.rightSidebar.Reset()
+		m.changedFilesSessionID = ""
+	} else if m.sidebar.StatusFilter() != ui.FilterNone {
+		// The filter left no row: don't keep previewing a session it hides.
+		m.selectPreviewSession(nil)
+		m.preview.SetSession(nil)
+		m.preview.SetContent("")
 		m.rightSidebar.Reset()
 		m.changedFilesSessionID = ""
 	}
@@ -1385,9 +1486,14 @@ func (m Model) handleSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch key {
 	case "esc":
 		// Clear search, restore full list, return to list mode.
+		before := m.selectionIdentity()
 		m.endSearch()
 		m.mode = ModeList
 		m.statusbar.SetMode(ModeList.String())
+		if m.selectionIdentity() != before {
+			// An active status filter can hide the highlighted result, moving the cursor.
+			return m, m.afterSelectionChange()
+		}
 		return m, nil
 
 	case "enter":
@@ -2081,6 +2187,7 @@ func (m Model) executeContextAction(action string, sess *session.Session) (tea.M
 			return m.openResumePicker(sess, false)
 		}
 		m.unreadHoldPane = ""
+		m.clearPreviewSearch()
 		m.mode = ModePassthrough
 		m.preview.SetPassthrough(true)
 		m.statusbar.SetMode(ModePassthrough.String())
@@ -2677,6 +2784,10 @@ func (m Model) previewPaneDimensions() (int, int) {
 // counts on the left, the current tmux session on the right.
 func (m Model) renderTitleBar() string {
 	name := styles.TitleBarName.Render(" naviClaude")
+	// Search lists every match, so the filter (and its tag) waits until it ends.
+	if f := m.sidebar.StatusFilter(); f != ui.FilterNone && !m.search.IsActive() {
+		name += " " + filterTag(f)
+	}
 
 	tmuxSess := m.currentTmuxSession
 	if tmuxSess == "" {
@@ -2747,7 +2858,11 @@ func (m *Model) selectSessionInSidebar(target *session.Session) {
 	if target == nil {
 		return
 	}
-	m.sidebar.SelectByID(target.Key())
+	if !m.sidebar.SelectByID(target.Key()) && m.sidebar.StatusFilter() != ui.FilterNone {
+		// Picked from a search the filter does not narrow: show it rather than hide it.
+		m.sidebar.SetStatusFilter(ui.FilterNone)
+		m.sidebar.SelectByID(target.Key())
+	}
 	m.preview.SetSession(target)
 }
 
@@ -2809,6 +2924,13 @@ func (m *Model) maybeRefreshChangedFilesCmd() tea.Cmd {
 // setFocus moves keyboard focus to target, applying passthrough enter/leave side
 // effects; entering the changed-files pane returns its reload command.
 func (m *Model) setFocus(target Mode) tea.Cmd {
+	if m.mode == ModePreviewSearch && target != ModePreviewSearch {
+		// Focus moved by mouse mid-query: keep what was typed, as Enter does.
+		m.statusbar.SetPreviewSearch(m.preview.CommitSearch())
+	}
+	if target == ModePassthrough {
+		m.clearPreviewSearch() // keys now go to the pane, n / N included
+	}
 	if m.mode == ModePassthrough && target != ModePassthrough {
 		m.preview.SetPassthrough(false)
 		m.pendingNewTarget = ""
@@ -2875,6 +2997,9 @@ func (m *Model) applyAliases(list []*session.Session) {
 // enterNewSessionPassthrough selects a new/resumed placeholder at the front and
 // enters passthrough, expanding its group so a collapsed group can't hide it.
 func (m *Model) enterNewSessionPassthrough(placeholder *session.Session) {
+	// Neither a status filter nor a stale search may hide or outlive the new row.
+	m.sidebar.SetStatusFilter(ui.FilterNone)
+	m.clearPreviewSearch()
 	m.sessions = append([]*session.Session{placeholder}, m.sessions...)
 	m.sidebar.SetSessions(m.sessions)
 	m.sidebar.ExpandGroup(placeholder.TmuxSession)

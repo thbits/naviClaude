@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -15,6 +17,27 @@ var validSortOrders = map[string]bool{
 	"name":     true,
 	"activity": true,
 	"manual":   true, // set by dragging rows in the session list
+}
+
+// defaultDesktop is "system" where Notification Center is always there, else "off".
+func defaultDesktop() string {
+	if runtime.GOOS == "darwin" {
+		return "system"
+	}
+	return "off"
+}
+
+// normalizeDesktop maps notifications.desktop, including YAML booleans, to a mode.
+func normalizeDesktop(v, def string) string {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "off", "false", "no", "none":
+		return "off"
+	case "system", "on", "true", "yes":
+		return "system"
+	case "terminal":
+		return "terminal"
+	}
+	return def
 }
 
 // validLineNumbers is the set of allowed line_numbers modes.
@@ -37,6 +60,9 @@ type Config struct {
 	ActiveWindowSecs   int           `yaml:"active_window_secs"`     // seconds after last .jsonl write to keep session "active" (default 5)
 	CPUActiveThreshold float64       `yaml:"cpu_active_threshold"`   // process-subtree CPU% above which a session counts as working (default 5)
 	Theme              string        `yaml:"theme"`                  // color theme name (default "tokyo-night")
+	ThemeAuto          bool          `yaml:"theme_auto"`             // follow the OS light/dark appearance (default false)
+	ThemeLight         string        `yaml:"theme_light"`            // theme while the OS is light (default "catppuccin-latte")
+	ThemeDark          string        `yaml:"theme_dark"`             // theme while the OS is dark; empty uses theme
 	ClaudeCommand      string        `yaml:"claude_command"`         // command to start Claude in new sessions (default "claude")
 	WindowName         string        `yaml:"window_name"`            // tmux window name for new/resumed sessions; {project} and {harness} expand (default "{project}")
 	NewSessionDir      string        `yaml:"new_session_dir"`        // working directory for new tmux sessions (default "~")
@@ -65,6 +91,8 @@ type Notifications struct {
 	WaitingMarker        string  `yaml:"waiting_marker"`          // window-name suffix for "needs input"; may hold tmux #[...] styles
 	DoneMarker           string  `yaml:"done_marker"`             // window-name suffix for "finished, unseen"; may hold tmux #[...] styles
 	BusyMarker           string  `yaml:"busy_marker"`             // window-name suffix while Claude is working; "none" hides it
+	Desktop              string  `yaml:"desktop"`                 // banner per alert: "off", "system" or "terminal" (default "system" on macOS, else "off")
+	Click                string  `yaml:"click"`                   // clicking a banner: "naviclaude" (open it on that session, default) or "pane" (jump to the pane)
 }
 
 // KeyBindings maps user-facing actions to key names (tea.KeyMsg.String() format).
@@ -84,6 +112,12 @@ type KeyBindings struct {
 	MoveWindow     string `yaml:"move_window"`
 	PinSession     string `yaml:"pin_session"`
 	LineNumbers    string `yaml:"toggle_line_numbers"`
+	NextAttention  string `yaml:"next_attention"`
+	FilterWaiting  string `yaml:"filter_waiting"`
+	FilterDone     string `yaml:"filter_done"`
+	FilterWorking  string `yaml:"filter_working"`
+	FilterIdle     string `yaml:"filter_idle"`
+	PreviewSearch  string `yaml:"preview_search"`
 }
 
 // DefaultConfig returns the default configuration.
@@ -97,7 +131,7 @@ func DefaultConfig() Config {
 			NewTmuxSession: "N",
 			KillSession:    "K",
 			RenameSession:  "r",
-			Detail:         "d",
+			Detail:         "D",
 			Stats:          "s",
 			Help:           "?",
 			Quit:           "q",
@@ -105,6 +139,12 @@ func DefaultConfig() Config {
 			MoveWindow:     "m",
 			PinSession:     "p",
 			LineNumbers:    "#",
+			NextAttention:  "space",
+			FilterWaiting:  "w",
+			FilterDone:     "d",
+			FilterWorking:  "a",
+			FilterIdle:     "i",
+			PreviewSearch:  "S",
 		},
 		SidebarWidth:       30,
 		RefreshInterval:    "200ms",
@@ -117,6 +157,7 @@ func DefaultConfig() Config {
 		ActiveWindowSecs:   5,
 		CPUActiveThreshold: 5.0,
 		Theme:              "tokyo-night",
+		ThemeLight:         "catppuccin-latte",
 		ClaudeCommand:      "claude",
 		WindowName:         "{project}",
 		GroupSortOrder:     "name",
@@ -135,6 +176,8 @@ func DefaultConfig() Config {
 			WaitingMarker: "#[fg=yellow,bold]\uf0f3#[nobold]", // nerd font bell
 			DoneMarker:    "#[fg=green,bold]\uf00c#[nobold]",  // nerd font check
 			BusyMarker:    "#[fg=blue,bold]\uf110#[nobold]",   // nerd font spinner
+			Desktop:       defaultDesktop(),
+			Click:         "naviclaude",
 		},
 	}
 }
@@ -148,8 +191,8 @@ func DefaultPath() string {
 	return filepath.Join(home, ".config", "naviclaude", "config.yaml")
 }
 
-// Save writes cfg as YAML to path. Creates the file and parent directories
-// if they do not exist. If path is empty, DefaultPath() is used.
+// Save merges cfg into the YAML file at path (DefaultPath() if empty), keeping
+// its comments and unknown keys; it refuses to replace a file that does not parse.
 func Save(cfg Config, path string) error {
 	if path == "" {
 		path = DefaultPath()
@@ -160,11 +203,36 @@ func Save(cfg Config, path string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("config: mkdir: %w", err)
 	}
-	data, err := yaml.Marshal(cfg)
+	data, err := mergeIntoFile(cfg, path)
 	if err != nil {
-		return fmt.Errorf("config: marshal: %w", err)
+		return err
 	}
-	return os.WriteFile(path, data, 0o644)
+	if err := writeFileAtomic(path, data, 0o644); err != nil {
+		return fmt.Errorf("config: write: %w", err)
+	}
+	return nil
+}
+
+// SaveSince is Save, but writes only the fields cfg changed since prev (the
+// config as loaded or last saved), leaving concurrent hand edits in place.
+func SaveSince(prev, cfg Config, path string) error {
+	if path == "" {
+		path = DefaultPath()
+	}
+	if path == "" {
+		return fmt.Errorf("config: cannot determine config path")
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("config: mkdir: %w", err)
+	}
+	data, err := mergeIntoFileSince(cfg, &prev, path)
+	if err != nil {
+		return err
+	}
+	if err := writeFileAtomic(path, data, 0o644); err != nil {
+		return fmt.Errorf("config: write: %w", err)
+	}
+	return nil
 }
 
 // Load reads a YAML config file and returns a Config. Missing fields retain
@@ -260,6 +328,10 @@ func sanitizeConfig(cfg *Config) {
 	}
 	if n.BusyMarker == "" {
 		n.BusyMarker = d.Notifications.BusyMarker
+	}
+	n.Desktop = normalizeDesktop(n.Desktop, d.Notifications.Desktop)
+	if n.Click = strings.ToLower(strings.TrimSpace(n.Click)); n.Click != "pane" {
+		n.Click = d.Notifications.Click
 	}
 
 	// Sort-order enums must be one of the allowed values; otherwise fall back.

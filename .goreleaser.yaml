@@ -46,6 +46,10 @@ brews:
     homepage: "https://github.com/thbits/naviClaude"
     description: "TUI for managing Claude Code sessions across tmux"
     license: "MIT"
+    # Desktop banners use it so a click jumps to the session's pane.
+    dependencies:
+      - name: terminal-notifier
+        os: mac
     install: |
       bin.install "naviclaude"
     test: |

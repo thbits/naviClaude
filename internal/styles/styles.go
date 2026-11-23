@@ -163,6 +163,12 @@ var StatusBadgeIdle lipgloss.Style
 // PreviewContent is the base style for viewport body.
 var PreviewContent lipgloss.Style
 
+// PreviewMatch highlights a preview search match.
+var PreviewMatch lipgloss.Style
+
+// PreviewMatchCurrent highlights the match n / N stand on.
+var PreviewMatchCurrent lipgloss.Style
+
 // PreviewSep is the separator character in the header.
 var PreviewSep lipgloss.Style
 
@@ -420,6 +426,8 @@ func buildStyles(p Palette) {
 	StatusBadgeIdle = lipgloss.NewStyle().Foreground(ColorGray).Bold(true)
 	PreviewContent = lipgloss.NewStyle().Foreground(ColorFg)
 	PreviewSep = lipgloss.NewStyle().Foreground(ColorBorder)
+	PreviewMatch = lipgloss.NewStyle().Foreground(ColorBg).Background(ColorAmber)
+	PreviewMatchCurrent = lipgloss.NewStyle().Foreground(ColorBg).Background(ColorFg).Bold(true)
 
 	StatusBar = lipgloss.NewStyle().
 		Foreground(ColorFg).

@@ -20,6 +20,7 @@ type StatusBarModel struct {
 	notice          bool   // errText is a success notice, not an error
 	pending         string // a typed count awaiting its motion, shown like vim's showcmd
 	confirmKill     bool   // the kill prompt is up, whatever the mode
+	previewSearch   bool   // preview matches are highlighted, so n / N / Esc act on them
 }
 
 // statusHint is one key hint. key is the label replayed when the hint is
@@ -80,6 +81,12 @@ func (m *StatusBarModel) SetPending(s string) {
 // SetConfirmKill swaps in the kill prompt's hints while the confirmation is up.
 func (m *StatusBarModel) SetConfirmKill(v bool) {
 	m.confirmKill = v
+}
+
+// SetPreviewSearch swaps the list hints for the match keys while a preview
+// search keeps its matches highlighted.
+func (m *StatusBarModel) SetPreviewSearch(v bool) {
+	m.previewSearch = v
 }
 
 // SetUpdateAvailable toggles the "update available" label next to the version.
@@ -295,6 +302,12 @@ func (m StatusBarModel) hintsForMode() []statusHint {
 			{key: "Ctrl+f", label: "Ctrl+F", desc: "jump"},
 			{key: "PgUp", label: "PgUp/Dn", desc: "scroll", inert: true},
 		}
+	case "preview search":
+		return []statusHint{
+			{key: "Enter", desc: "keep matches"},
+			{key: "Esc", desc: "clear"},
+			{key: "Up", label: "↑/↓", desc: "prev/next", inert: true},
+		}
 	case "name input", "rename":
 		return []statusHint{{key: "Enter", desc: "confirm"}, {key: "Esc", desc: "cancel"}}
 	case "dir picker", "resume picker":
@@ -309,17 +322,27 @@ func (m StatusBarModel) hintsForMode() []statusHint {
 	case "contextmenu":
 		return []statusHint{{key: "j/k", desc: "navigate", inert: true}, {key: "Enter", desc: "select"}, {key: "Esc", desc: "cancel"}}
 	default: // "list"
-		if len(m.listHints) > 0 {
-			return m.listHints
+		hints := m.listHints
+		if len(hints) == 0 {
+			hints = []statusHint{
+				{key: "Enter", desc: "open"},
+				{key: "f", desc: "jump"},
+				{key: "n", desc: "new"},
+				{key: "/", desc: "search"},
+				{key: "F", desc: "files"},
+				{key: "K", desc: "kill"},
+				{key: "?", desc: "more", pinned: true},
+			}
 		}
-		return []statusHint{
-			{key: "Enter", desc: "open"},
-			{key: "f", desc: "jump"},
-			{key: "n", desc: "new"},
-			{key: "/", desc: "search"},
-			{key: "F", desc: "files"},
-			{key: "K", desc: "kill"},
-			{key: "?", desc: "more", pinned: true},
+		if m.previewSearch {
+			// These three keys mean something else until the search is cleared.
+			return []statusHint{
+				{key: "n", desc: "next match"},
+				{key: "N", desc: "prev match"},
+				{key: "Esc", desc: "clear search"},
+				hints[len(hints)-1],
+			}
 		}
+		return hints
 	}
 }

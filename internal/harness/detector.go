@@ -94,18 +94,40 @@ func (d *Detector) Detect() ([]*session.Session, error) {
 	return sessions, nil
 }
 
+// HeadlessFilter is a harness that can tell a scripted, non-interactive run
+// (e.g. `claude -p` or an SDK child) from a session the user works in.
+type HeadlessFilter interface {
+	Headless(pid int) bool
+}
+
 // sessionFromPane returns the first harness whose process runs in the pane
 // (directly or as a descendant) and the session built for it.
 func (d *Detector) sessionFromPane(pane tmux.PaneInfo, tree *session.ProcessTree) (Harness, *session.Session) {
 	for _, h := range d.registry.All() {
 		// Check the pane's own process by tmux command and by ps basename: some
 		// CLIs (e.g. newer Claude) retitle themselves, so tmux reports the title.
+		pid := 0
 		if h.MatchProcess(pane.CurrentCommand) || h.MatchProcess(tree.Name(pane.PID)) {
-			return h, d.buildSession(h, pane, pane.PID, tree)
+			pid = pane.PID
+		} else {
+			pid = tree.FindMatchingDescendant(pane.PID, h.MatchProcess, 6)
 		}
-		if pid := tree.FindMatchingDescendant(pane.PID, h.MatchProcess, 6); pid != 0 {
-			return h, d.buildSession(h, pane, pid, tree)
+		if pid == 0 {
+			continue
 		}
+		if f, ok := h.(HeadlessFilter); ok {
+			// tmux can name the command while the pane PID is still its shell.
+			probe := pid
+			if !h.MatchProcess(tree.Name(pid)) {
+				if c := tree.FindMatchingDescendant(pid, h.MatchProcess, 6); c != 0 {
+					probe = c
+				}
+			}
+			if f.Headless(probe) {
+				continue
+			}
+		}
+		return h, d.buildSession(h, pane, pid, tree)
 	}
 	return nil, nil
 }

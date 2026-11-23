@@ -1,6 +1,12 @@
 package session
 
-import "testing"
+import (
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+)
 
 func TestResumeShellCommand(t *testing.T) {
 	tests := []struct {
@@ -58,4 +64,31 @@ func TestNameWindow(t *testing.T) {
 			}
 		})
 	}
+}
+
+// The window command survives a cwd with quotes and $ intact, then hands off to $SHELL.
+func TestResumeWindowCommandQuoting(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), `it's $HOME`)
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("/bin/sh", "-c", resumeWindowCommand(resumeShellCommand(dir, "pwd")))
+	cmd.Env = append(os.Environ(), "SHELL=/bin/echo")
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := dir + "\n-l\n" // pwd, then the fallback shell (echo) gets -l
+	if got, _ := filepath.EvalSymlinks(strings.SplitN(string(out), "\n", 2)[0]); got != mustEvalDir(t, dir) || !strings.HasSuffix(string(out), "\n-l\n") {
+		t.Errorf("output %q, want %q", out, want)
+	}
+}
+
+func mustEvalDir(t *testing.T, p string) string {
+	t.Helper()
+	r, err := filepath.EvalSymlinks(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
 }

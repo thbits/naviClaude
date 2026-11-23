@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"syscall"
 
 	"github.com/thbits/naviClaude/internal/config"
@@ -17,6 +18,13 @@ type Payload struct {
 	SessionID        string            `json:"session_id"`
 	NotificationType string            `json:"notification_type"`
 	ToolName         string            `json:"tool_name"`
+	Message          string            `json:"message"`
+	Cwd              string            `json:"cwd"`
+	TranscriptPath   string            `json:"transcript_path"`
+	ToolInput        json.RawMessage   `json:"tool_input"`
+	LastMessage      string            `json:"last_assistant_message"` // Stop / StopFailure
+	Error            string            `json:"error"`                  // StopFailure
+	ErrorDetails     string            `json:"error_details"`          // StopFailure
 	BackgroundTasks  []json.RawMessage `json:"background_tasks"`
 }
 
@@ -69,19 +77,25 @@ func RunHook(stdin io.Reader) error {
 	debugLogf("hook %s pane=%s session=%s type=%s tool=%s -> %q", p.HookEventName, pane, p.SessionID, p.NotificationType, p.ToolName, kind)
 	switch kind {
 	case KindClear:
-		newEngine(cfg.Notifications).End(pane)
-	case KindAttention, KindDone, KindBusy:
+		newHookEngine(cfg.Notifications, p.SessionID).End(pane)
+	case KindBusy:
 		return spawnWatcher(kind, pane, p.SessionID)
+	case KindAttention, KindDone:
+		return spawnWatcher(kind, pane, p.SessionID, bannerTitle(p), bannerDetail(p), bannerSubtitle(p))
 	}
 	return nil
 }
 
-func spawnWatcher(kind Kind, pane, sessionID string) error {
-	exe, err := os.Executable()
-	if err != nil {
-		return err
+func spawnWatcher(kind Kind, pane, sessionID string, extra ...string) error {
+	// Claude ran us by the path stored in settings.json, which survives upgrades.
+	exe := os.Args[0]
+	if !filepath.IsAbs(exe) {
+		var err error
+		if exe, err = os.Executable(); err != nil {
+			return err
+		}
 	}
-	cmd := exec.Command(exe, "hook", "--watch", string(kind), pane, sessionID)
+	cmd := exec.Command(exe, append([]string{"hook", "--watch", string(kind), pane, sessionID}, extra...)...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("hook: start watcher: %w", err)
@@ -89,12 +103,22 @@ func spawnWatcher(kind Kind, pane, sessionID string) error {
 	return cmd.Process.Release()
 }
 
-// RunWatcher is the detached half of RunHook.
-func RunWatcher(kind, pane, sessionID string) {
+// RunWatcher is the detached half of RunHook; extra is the banner title, detail and subtitle.
+func RunWatcher(kind, pane, sessionID string, extra ...string) {
 	cfg, _ := config.Load("")
 	if Kind(kind) == KindBusy {
-		newEngine(cfg.Notifications).Busy(pane, sessionID)
+		newHookEngine(cfg.Notifications, sessionID).Busy(pane, sessionID)
 		return
 	}
-	newEngine(cfg.Notifications).Raise(Kind(kind), pane, sessionID)
+	e := newHookEngine(cfg.Notifications, sessionID)
+	if len(extra) > 0 {
+		e.event.Title = extra[0]
+	}
+	if len(extra) > 1 {
+		e.event.Detail = extra[1]
+	}
+	if len(extra) > 2 {
+		e.event.Subtitle = extra[2]
+	}
+	e.Raise(Kind(kind), pane, sessionID)
 }

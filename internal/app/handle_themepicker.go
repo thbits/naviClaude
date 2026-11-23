@@ -2,7 +2,6 @@ package app
 
 import (
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/thbits/naviClaude/internal/config"
 	"github.com/thbits/naviClaude/internal/styles"
 )
 
@@ -12,9 +11,21 @@ func (m Model) handleThemePickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		// Confirm: keep the current theme, save to config.
 		selected := m.themePicker.SelectedKey()
-		m.cfg.Theme = selected
-		if err := config.Save(m.cfg, ""); err != nil {
+		// With theme_auto on, the pick belongs to the appearance it was made in.
+		field := "theme"
+		switch {
+		case !m.cfg.ThemeAuto:
+			m.cfg.Theme = selected
+		case m.osDark:
+			m.cfg.ThemeDark, field = selected, "theme_dark"
+		default:
+			m.cfg.ThemeLight, field = selected, "theme_light"
+		}
+		m.setTheme(selected)
+		if err := m.writeConfig(); err != nil {
 			m.statusbar.SetError("theme saved in session only (config write failed: " + err.Error() + ")")
+		} else if m.cfg.ThemeAuto {
+			m.statusbar.SetNotice(field + " set to " + selected)
 		}
 		m.themePicker.Hide()
 		m.mode = ModeList
@@ -23,9 +34,7 @@ func (m Model) handleThemePickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "esc":
 		// Cancel: restore the original theme.
-		original := m.themePicker.OriginalKey()
-		styles.ApplyTheme(styles.Named(original))
-		m.cfg.Theme = original
+		m.setTheme(m.themePicker.OriginalKey())
 		m.themePicker.Hide()
 		m.mode = ModeList
 		m.statusbar.SetMode(ModeList.String())

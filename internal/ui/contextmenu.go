@@ -198,13 +198,13 @@ func (m *ContextMenuModel) buildItems(s *session.Session, caps MenuCaps) []MenuI
 		if len(items) > 0 {
 			items = append(items, MenuItem{IsSep: true})
 		}
-		items = append(items, MenuItem{Label: "Detail", Shortcut: "d", Action: "detail"})
+		items = append(items, MenuItem{Label: "Detail", Shortcut: "D", Action: "detail"})
 	} else {
 		items = append(items,
 			MenuItem{Label: "Focus", Shortcut: "Enter", Action: "focus"},
 			MenuItem{Label: "Jump to pane", Shortcut: "f", Action: "jump"},
 			MenuItem{IsSep: true},
-			MenuItem{Label: "Detail", Shortcut: "d", Action: "detail"},
+			MenuItem{Label: "Detail", Shortcut: "D", Action: "detail"},
 		)
 		// Only an idle session can show the done mark, so only it can be re-marked.
 		if s.Status == session.StatusIdle && s.Attention == "" && s.TmuxPaneID != "" {

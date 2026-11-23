@@ -1,6 +1,8 @@
 package tmux
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"os/exec"
@@ -114,7 +116,7 @@ func (c *Client) SendKeys(target, keys string) error {
 // PasteText pastes text into a pane as tmux's own paste does, bracketed when the
 // app asked for it, so a multi-line paste isn't submitted line by line.
 func (c *Client) PasteText(target, text string) error {
-	const buf = "naviclaude-paste"
+	buf := pasteBufferName()
 	cmd := exec.Command("tmux", "load-buffer", "-b", buf, "-", ";",
 		"paste-buffer", "-p", "-d", "-b", buf, "-t", target)
 	cmd.Stdin = strings.NewReader(text)
@@ -122,6 +124,14 @@ func (c *Client) PasteText(target, text string) error {
 		return fmt.Errorf("tmux paste-buffer -t %s: %w: %s", target, err, strings.TrimSpace(string(out)))
 	}
 	return nil
+}
+
+// pasteBufferName is unique per call, so concurrent sends from separate
+// processes can't paste each other's text out of a shared buffer.
+func pasteBufferName() string {
+	var b [6]byte
+	_, _ = rand.Read(b[:])
+	return fmt.Sprintf("naviclaude-paste-%d-%s", os.Getpid(), hex.EncodeToString(b[:]))
 }
 
 // SwitchClient switches the tmux client to the given target window/pane.

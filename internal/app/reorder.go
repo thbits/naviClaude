@@ -173,11 +173,17 @@ func (m *Model) useManualOrder(field *string, key string) {
 }
 
 func (m Model) writeConfig() error {
-	save := m.saveConfig
-	if save == nil {
-		save = func(c config.Config) error { return config.Save(c, "") }
+	if m.saveConfig != nil {
+		return m.saveConfig(m.cfg)
 	}
-	return save(m.cfg)
+	if m.cfgSaved == nil {
+		return config.Save(m.cfg, "")
+	}
+	if err := config.SaveSince(*m.cfgSaved, m.cfg, ""); err != nil {
+		return err
+	}
+	*m.cfgSaved = m.cfg
+	return nil
 }
 
 // saveGroupOrder saves the group order and pins now, since quitting is not the

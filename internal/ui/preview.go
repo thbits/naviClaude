@@ -36,12 +36,16 @@ type PreviewModel struct {
 	pending    string
 	hasPending bool
 
+	search previewSearch
+
 	memo *Memo[previewKey] // shared across copies; View runs on a value receiver
 }
 
 type previewKey struct {
 	header, content    string
 	yoff, vw, vh, w, h int
+	query              string // search state: the painted matches follow it
+	match              int
 }
 
 // textCell is a content line index and display column.
@@ -81,7 +85,7 @@ func (m *PreviewModel) SetContent(content string) {
 		return
 	}
 	m.content = content
-	m.viewport.SetContent(m.truncateToWidth(content))
+	m.refreshViewport()
 	// Only auto-scroll to bottom if the user hasn't scrolled away.
 	// This lets users read history without being yanked back every 200ms.
 	if !m.userScrolled {
@@ -142,7 +146,10 @@ func (m *PreviewModel) SetSize(w, h int) {
 	// Re-truncate existing content to the new width so stale long lines don't
 	// overflow the narrower viewport (same width pass as SetContent).
 	if m.content != "" {
-		m.viewport.SetContent(m.truncateToWidth(m.content))
+		m.refreshViewport()
+	}
+	if m.search.typing {
+		m.search.input.Width = m.searchInputWidth()
 	}
 }
 
@@ -309,7 +316,8 @@ func (m PreviewModel) View() string {
 		m.viewport.SetContent(m.highlighted())
 		return m.render(header)
 	}
-	key := previewKey{header, m.content, m.viewport.YOffset, m.viewport.Width, m.viewport.Height, m.width, m.height}
+	key := previewKey{header, m.content, m.viewport.YOffset, m.viewport.Width, m.viewport.Height, m.width, m.height,
+		m.search.query, m.search.current}
 	return m.memo.Get(key, func() string { return m.render(header) })
 }
 
@@ -330,6 +338,10 @@ func (m PreviewModel) renderHeader() string {
 	maxWidth := m.width - 3 // account for left padding
 	if maxWidth < 10 {
 		maxWidth = 10
+	}
+
+	if m.HasSearch() {
+		return m.renderSearchBar(maxWidth)
 	}
 
 	if m.session == nil {
@@ -594,7 +606,7 @@ func (m *PreviewModel) SetGroupSummary(groupName string, sessions []*session.Ses
 	b.WriteString("  " + lipgloss.NewStyle().Foreground(styles.ColorGray).Render("Select a session to preview") + "\n")
 
 	m.content = b.String()
-	m.viewport.SetContent(m.content)
+	m.refreshViewport()
 }
 
 // byCount returns the keys of counts, most frequent first, then by name, so

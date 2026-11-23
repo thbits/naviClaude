@@ -141,6 +141,8 @@ const (
 	restorePollInterval = 2 * time.Second
 	restoreMaxWait      = 60 * time.Second
 	restoreRetryDelay   = 30 * time.Second
+	// restoreStagger spaces out resumes so many agents don't all start at once.
+	restoreStagger = 100 * time.Millisecond
 )
 
 // restoreRetryMsg re-runs a startup restore check that could not complete.
@@ -227,7 +229,10 @@ func (r restorer) run() restoreDoneMsg {
 	actions, skipped := planRestore(snap.Sessions, panes, live, r.reg, r.exists)
 
 	msg := restoreDoneMsg{info: info, skipped: skipped}
-	for _, a := range actions {
+	for i, a := range actions {
+		if i > 0 {
+			r.sleep(restoreStagger)
+		}
 		sess := entrySession(a.Entry)
 		target := a.Pane
 		if a.Kind == restoreSamePane && r.stillShell(a.Pane) {

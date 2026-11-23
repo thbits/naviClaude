@@ -30,12 +30,19 @@ func main() {
 	fs.Usage = func() {
 		fmt.Fprintln(os.Stderr, "Usage: naviclaude [flags]")
 		fmt.Fprintln(os.Stderr, "       naviclaude open [-c client] [-t pane] [-popup]")
+		fmt.Fprintln(os.Stderr, "       naviclaude focus <pane-or-session-id> [-c client] [-S socket]")
 		fmt.Fprintln(os.Stderr, "       naviclaude hooks install|uninstall|status")
 		fmt.Fprintln(os.Stderr, "       naviclaude sound request|done")
+		fmt.Fprintln(os.Stderr, "       naviclaude notify test [request|done] [system|terminal]")
+		fmt.Fprintln(os.Stderr, "       naviclaude list [--json]")
+		fmt.Fprintln(os.Stderr, "       naviclaude wait <target> --until waiting|working|idle|done|any-attention [--timeout 10m]")
+		fmt.Fprintln(os.Stderr, "       naviclaude send <target> <text...>|- [--wait] [--timeout 10m] [--force]")
+		fmt.Fprintln(os.Stderr, "       naviclaude skill")
 		fmt.Fprintln(os.Stderr, "\nA tmux-native dashboard for navigating Claude sessions.")
 		fmt.Fprintln(os.Stderr, "\nFlags:")
 		fs.PrintDefaults()
 	}
+	selectTarget := fs.String("select", "", "start with this session selected and focused (tmux pane id like %12, or a session id)")
 	showVersion := fs.Bool("version", false, "print version and exit")
 	fs.BoolVar(showVersion, "v", false, "print version and exit (shorthand)")
 
@@ -77,7 +84,16 @@ func main() {
 		return tree.Parent(pid)
 	})
 
-	m := app.New(version)
+	unmark := func() {}
+	// A running dashboard is findable by `naviclaude focus` through its pane's mark.
+	if pane := os.Getenv("TMUX_PANE"); pane != "" {
+		tc := tmux.New()
+		if tc.MarkInstance(pane, os.Getpid()) == nil {
+			unmark = func() { tc.UnmarkInstance(pane, os.Getpid()) }
+		}
+	}
+
+	m := app.New(version).WithSelect(*selectTarget)
 	// All motion adds buttonless moves for hover highlighting; hover ignores moves
 	// that stay on the same row, so the flood costs a View and no re-render.
 	opts := []tea.ProgramOption{tea.WithAltScreen(), tea.WithMouseAllMotion()}
@@ -86,7 +102,9 @@ func main() {
 		opts = append(opts, tea.WithInput(ttyin.New(os.Stdin)))
 	}
 	p := tea.NewProgram(m, opts...)
-	if _, err := p.Run(); err != nil {
+	_, err := p.Run()
+	unmark()
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}

@@ -6,11 +6,17 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
-// hookMarker tags the hook commands naviClaude owns in settings.json.
+// hookMarker tags the hook commands naviClaude owns in settings.json; entries
+// from before HookVersion existed carry it bare.
 const hookMarker = "# naviclaude-hook"
+
+// HookVersion is stamped after hookMarker. Bump it whenever hookEvents, their
+// matchers or the command shape change, so `hooks status` flags old installs.
+const HookVersion = 2
 
 // hookEvents are the Claude Code events naviClaude registers, with matchers.
 var hookEvents = []struct{ Event, Matcher string }{
@@ -31,7 +37,7 @@ func SettingsPath() string {
 
 // HookCommand is the shell command registered for every event.
 func HookCommand(exe string) string {
-	return "'" + strings.ReplaceAll(exe, "'", `'\''`) + "' hook " + hookMarker
+	return "'" + strings.ReplaceAll(exe, "'", `'\''`) + "' hook " + hookMarker + " v" + strconv.Itoa(HookVersion)
 }
 
 // InstallHooks registers (or re-points) naviClaude's hooks, keeping every other

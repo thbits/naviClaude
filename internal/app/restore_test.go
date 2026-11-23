@@ -263,6 +263,32 @@ func TestRunRestoresAfterRestart(t *testing.T) {
 	}
 }
 
+func TestRunStaggersResumes(t *testing.T) {
+	var entries []session.LiveEntry
+	for _, id := range []string{"a", "b", "c"} {
+		e := workEntry(id)
+		e.TmuxSession = "gone-" + id
+		entries = append(entries, e)
+	}
+	stored := &session.LiveSnapshot{ServerStart: 100, Sessions: entries}
+	f := newFakeRestorer(t, stored, testServer, time.Hour)
+	var at []int // sleeps recorded before each resume
+	f.r.resumeInSession = func(s *session.Session, name, cmd string) (string, error) {
+		at = append(at, len(f.slept))
+		return name + ":0.0", nil
+	}
+
+	if msg := f.r.run(); msg.restored != 3 {
+		t.Fatalf("msg = %+v, want 3 restored", msg)
+	}
+	for i := 1; i < len(at); i++ {
+		gap := f.slept[at[i-1]:at[i]]
+		if len(gap) != 1 || gap[0] != restoreStagger {
+			t.Fatalf("sleeps between resume %d and %d = %v, want [%v]", i-1, i, gap, restoreStagger)
+		}
+	}
+}
+
 func TestRunCollectsErrors(t *testing.T) {
 	stored := &session.LiveSnapshot{ServerStart: 100, Sessions: []session.LiveEntry{workEntry("a")}}
 	f := newFakeRestorer(t, stored, testServer, time.Hour)

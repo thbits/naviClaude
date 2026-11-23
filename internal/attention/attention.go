@@ -43,18 +43,27 @@ const busyGrace = 3 * time.Second
 // hooks, which keep Claude "busy" after the Stop event until they finish.
 const stopHookWait = 10 * time.Minute
 
+// headlessHook reports a hook from a `claude -p` or SDK run nested in another session's pane;
+// an interactive claude can inherit the sdk-* entrypoint, so its session must confirm.
+func headlessHook(sessionID string) bool {
+	return strings.HasPrefix(os.Getenv("CLAUDE_CODE_ENTRYPOINT"), "sdk-") && claude.HeadlessSession(sessionID)
+}
+
 // engine holds the injectable dependencies; tests swap them out.
 type engine struct {
 	tmux    tmuxAPI
 	cfg     config.Notifications
 	native  func(sessionID string) (claude.NativeState, bool)
 	play    func(notify.Sound, string, float64) error
+	banner  func(notify.Banner) error // nil: no desktop banners
+	event   eventInfo
 	now     func() time.Time
 	sleep   func(time.Duration)
 	lock    func() func()
 	logf    func(format string, args ...any)
 	poll    time.Duration // watcher poll interval
 	maxLife time.Duration // watcher gives up after this long
+	nested  bool          // hooks of a headless run nested in another session's pane
 }
 
 func newEngine(cfg config.Notifications) *engine {
@@ -63,6 +72,7 @@ func newEngine(cfg config.Notifications) *engine {
 		cfg:     cfg,
 		native:  func(id string) (claude.NativeState, bool) { return claude.ReadNativeState(0, id) },
 		play:    notify.Play,
+		banner:  desktopBanner(cfg.Desktop, cfg.Click),
 		now:     time.Now,
 		sleep:   time.Sleep,
 		lock:    fileLock,
@@ -70,6 +80,13 @@ func newEngine(cfg config.Notifications) *engine {
 		poll:    time.Second, // each poll forks tmux; the marker needn't clear faster
 		maxLife: 12 * time.Hour,
 	}
+}
+
+// newHookEngine is newEngine for a hook event of sessionID.
+func newHookEngine(cfg config.Notifications, sessionID string) *engine {
+	e := newEngine(cfg)
+	e.nested = headlessHook(sessionID)
+	return e
 }
 
 // confirm waits for Claude's status to match want, giving the UI time to draw (or
@@ -93,6 +110,9 @@ func (e *engine) confirm(sessionID string, want func(status string) bool, window
 // Raise handles an attention or done event for pane and, when it marks the
 // pane, keeps watching until the attention is resolved.
 func (e *engine) Raise(kind Kind, pane, sessionID string) {
+	if e.nested {
+		return
+	}
 	attn, sound, want, window := Waiting, notify.Request, isWaiting, 1500*time.Millisecond
 	if kind == KindDone {
 		attn, sound, want, window = Done, notify.Done, isIdle, 700*time.Millisecond
@@ -147,6 +167,9 @@ func (e *engine) Raise(kind Kind, pane, sessionID string) {
 	unlock()
 
 	e.logf("%s %s: raised (visible=%v ring=%v waitingFor=%q)", kind, pane, visible, ring, st.WaitingFor)
+	if !visible {
+		e.notifyDesktop(kind, pane, st)
+	}
 	if ring {
 		custom := e.cfg.RequestSound
 		if sound == notify.Done {
@@ -261,6 +284,9 @@ func (e *engine) MarkDone(pane string) {
 
 // End drops everything tracked on pane once its session exits.
 func (e *engine) End(pane string) {
+	if e.nested {
+		return
+	}
 	unlock := e.lock()
 	defer unlock()
 	ps, err := e.tmux.Pane(pane)
@@ -274,6 +300,9 @@ func (e *engine) End(pane string) {
 // Busy marks pane as running a turn, replacing any attention, and watches until
 // Claude goes idle: an interrupted turn fires no Stop hook to clear it.
 func (e *engine) Busy(pane, sessionID string) {
+	if e.nested {
+		return
+	}
 	token := newToken()
 	unlock := e.lock()
 	ps, err := e.tmux.Pane(pane)

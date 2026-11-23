@@ -2,6 +2,7 @@ package styles
 
 import (
 	"sort"
+	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 )
@@ -208,6 +209,25 @@ var Themes = map[string]Palette{
 		Dim:          lipgloss.Color("#403d52"),
 		DimText:      lipgloss.Color("#908caa"),
 	},
+	"rose-pine-dawn": {
+		Name:         "Rose Pine Dawn",
+		Bg:           lipgloss.Color("#faf4ed"),
+		BgPanel:      lipgloss.Color("#fffaf3"),
+		BgHover:      lipgloss.Color("#f2e9e1"),
+		Fg:           lipgloss.Color("#575279"),
+		Selection:    lipgloss.Color("#dfdad9"),
+		SelectionDim: lipgloss.Color("#f4ede8"),
+		Blue:         lipgloss.Color("#286983"),
+		Green:        lipgloss.Color("#56949f"),
+		Amber:        lipgloss.Color("#ea9d34"),
+		Red:          lipgloss.Color("#b4637a"),
+		Gray:         lipgloss.Color("#9893a5"),
+		Purple:       lipgloss.Color("#907aa9"),
+		Cyan:         lipgloss.Color("#56949f"),
+		Border:       lipgloss.Color("#dfdad9"),
+		Dim:          lipgloss.Color("#dfdad9"),
+		DimText:      lipgloss.Color("#797593"),
+	},
 	"kanagawa": {
 		Name:         "Kanagawa",
 		Bg:           lipgloss.Color("#1f1f28"),
@@ -229,12 +249,24 @@ var Themes = map[string]Palette{
 	},
 }
 
+// Key returns the registry key for a theme given by key or by display name
+// ("Catppuccin Latte"), in any case; unknown names give the fallback's key.
+func Key(name string) string {
+	if _, ok := Themes[name]; ok {
+		return name
+	}
+	want := strings.ToLower(strings.TrimSpace(name))
+	for _, k := range ThemeNames() {
+		if k == want || strings.ToLower(Themes[k].Name) == want {
+			return k
+		}
+	}
+	return fallbackThemeKey
+}
+
 // Named returns a palette by name, falling back to tokyo-night if not found.
 func Named(name string) Palette {
-	if p, ok := Themes[name]; ok {
-		return p
-	}
-	return Themes[fallbackThemeKey]
+	return Themes[Key(name)]
 }
 
 // ThemeNames returns the list of available theme names, sorted.

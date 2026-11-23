@@ -33,10 +33,11 @@ func sessionFileModTime(sessionID, cwd string) time.Time {
 // ~/.claude/sessions/<pid>.json of its own.
 func extractSessionIDFallback(pid int, cwd, paneID string) string {
 	live := liveSessionMetadata()
-	// Claude records its tmux pane, which finds the file when the matched PID is a launcher.
+	// Claude records its tmux pane, which finds the file when the matched PID is a
+	// launcher; a headless child inherits the same pane, so it doesn't count.
 	if paneID != "" {
 		for _, m := range live {
-			if m.SessionID != "" && tmuxPaneID(m.Tmux) == paneID {
+			if m.SessionID != "" && !m.headless() && tmuxPaneID(m.Tmux) == paneID {
 				return m.SessionID
 			}
 		}
@@ -146,6 +147,7 @@ func lookupProc(pid int) procInfo {
 // sessionMetadata holds fields from ~/.claude/sessions/{pid}.json. Claude Code
 // writes this file per running process and keeps Status live (Claude >= 2.1).
 type sessionMetadata struct {
+	PID             int    `json:"pid"`
 	SessionID       string `json:"sessionId"`
 	Tmux            string `json:"tmux"` // "session:@window.%pane" Claude runs in
 	Name            string `json:"name"`
@@ -153,6 +155,49 @@ type sessionMetadata struct {
 	Status          string `json:"status"`          // busy|waiting|idle|shell
 	WaitingFor      string `json:"waitingFor"`      // why it is waiting, e.g. "permission prompt"
 	StatusUpdatedAt int64  `json:"statusUpdatedAt"` // epoch ms
+	Entrypoint      string `json:"entrypoint"`      // "cli" interactive; "sdk-*" for -p and SDK runs
+}
+
+// headless reports a print-mode or SDK run. Claude keeps an inherited sdk-*
+// entrypoint even when interactive, so it also needs the process's own print flags.
+func (m sessionMetadata) headless() bool {
+	if !strings.HasPrefix(m.Entrypoint, "sdk-") {
+		return false
+	}
+	cmd := lookupProc(m.PID).cmdLine
+	return cmd == "" || printModeArgs(cmd)
+}
+
+// printModeArgs reports the flags that make Claude non-interactive: -p/--print
+// or the stream-json I/O the SDKs drive it with.
+func printModeArgs(cmdLine string) bool {
+	for _, a := range strings.Fields(cmdLine) {
+		if a == "--" {
+			return false
+		}
+		switch {
+		case a == "-p", a == "--print",
+			strings.HasPrefix(a, "--output-format"), strings.HasPrefix(a, "--input-format"), strings.HasPrefix(a, "--sdk-url"):
+			return true
+		}
+	}
+	return false
+}
+
+// Headless implements harness.HeadlessFilter from the process's own status file.
+func (h *Harness) Headless(pid int) bool {
+	m := readSessionMetadata(pid)
+	if m.PID == 0 {
+		m.PID = pid
+	}
+	return m.headless()
+}
+
+// HeadlessSession reports whether sessionID belongs to a print-mode or SDK run:
+// a live status file that says so, or none at all (print runs may register none).
+func HeadlessSession(sessionID string) bool {
+	m, ok := readSessionMetadataByID(sessionID)
+	return !ok || m.headless()
 }
 
 // readSessionMetadata reads the full metadata from ~/.claude/sessions/{pid}.json.

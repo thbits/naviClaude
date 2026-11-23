@@ -68,6 +68,12 @@ func resumeShellCommand(cwd, command string) string {
 	return fmt.Sprintf("cd %s && %s", shellSingleQuote(cwd), command)
 }
 
+// resumeWindowCommand runs cmd, then replaces itself with a login shell so a
+// failed or finished resume leaves the pane open at a prompt.
+func resumeWindowCommand(cmd string) string {
+	return "sh -c " + shellSingleQuote(cmd+`; exec "${SHELL:-/bin/sh}" -l`)
+}
+
 // ResumeInSession resumes sess in tmux session targetName, creating it if missing,
 // and returns the pane target; a new session gets the command via send-keys.
 func (m *Manager) ResumeInSession(sess *Session, targetName, command string) (string, error) {
@@ -80,11 +86,11 @@ func (m *Manager) ResumeInSession(sess *Session, targetName, command string) (st
 	cmd := resumeShellCommand(sess.CWD, command)
 
 	if m.tmuxClient.HasSession(targetName) {
-		// Existing session: open the resume in a new window and return its target.
+		// Run as the window's command, not typed keys a shell startup prompt could eat.
 		target, err := m.tmuxClient.NewWindowPrint(tmux.NewWindowOptions{
 			Target:  targetName + ":",
 			Name:    m.nameWindow(sess.ProjectName, sess.Harness),
-			Command: cmd,
+			Command: resumeWindowCommand(cmd),
 		})
 		if err != nil {
 			return "", fmt.Errorf("create window: %w", err)

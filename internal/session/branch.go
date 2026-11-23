@@ -16,10 +16,13 @@ const (
 	branchTimeout = 2 * time.Second
 )
 
-// GitRef is the repository a cwd belongs to and the branch checked out there.
+// GitRef is the repository a cwd belongs to, the branch checked out there and
+// how far it is ahead of / behind its upstream (both 0 without one).
 type GitRef struct {
 	Repo   string
 	Branch string
+	Ahead  int
+	Behind int
 }
 
 type branchEntry struct {
@@ -93,8 +96,16 @@ func gitCurrentBranch(cwd string) (GitRef, bool) {
 		b = "detached"
 	}
 	ref := GitRef{Branch: b}
-	if common, err := git("rev-parse", "--path-format=absolute", "--git-common-dir"); err == nil && common != "" {
+	dirs, err := git("rev-parse", "--path-format=absolute", "--git-common-dir", "--git-dir")
+	if err != nil {
+		return ref, true
+	}
+	common, gitDir, _ := strings.Cut(dirs, "\n")
+	if common != "" {
 		ref.Repo = repoName(common)
+	}
+	if b != "detached" && gitDir != "" {
+		ref.Ahead, ref.Behind = AheadBehind(ctx, cwd, gitDir, common, b)
 	}
 	return ref, true
 }

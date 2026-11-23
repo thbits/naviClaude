@@ -445,6 +445,9 @@ func hintKeyMsg(label string) (tea.KeyMsg, bool) {
 	if label == "any key" {
 		return tea.KeyMsg{Type: tea.KeyEsc}, true
 	}
+	if strings.EqualFold(label, "space") {
+		return tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{' '}}, true
+	}
 	if r := []rune(label); len(r) == 1 {
 		return tea.KeyMsg{Type: tea.KeyRunes, Runes: r}, true
 	}
@@ -472,7 +475,7 @@ func (m Model) clickStatusHint(x int) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	switch m.mode {
-	case ModeList, ModeChangedFiles, ModePassthrough, ModeSearch:
+	case ModeList, ModeChangedFiles, ModePassthrough, ModeSearch, ModePreviewSearch:
 		// Each shows its own hints, so the key acts as in that mode.
 		return m.handleKey(k)
 	}
