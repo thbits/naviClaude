@@ -36,7 +36,7 @@ it layers on top of your existing tmux setup instead of replacing it.
 
 ### Managing sessions
 
-- **Session management** -- create new sessions (from a directory picker that suggests subdirectories, [zoxide](https://github.com/ajeetdsouza/zoxide) dirs and your other sessions' dirs), kill existing ones after a `y` confirm, rename them, move them between tmux sessions, and resume closed sessions into any tmux session (or a brand-new one) via a target picker
+- **Session management** -- create new sessions (from an fzf-style directory picker that searches the dirs under the current dir (6 levels) and your home dir (4 levels, hidden dirs skipped), plus your other sessions' dirs and, if installed, [zoxide](https://github.com/ajeetdsouza/zoxide) dirs; it uses fzf's matching algorithm and extended syntax: `'exact`, `^prefix`, `suffix$`, `!exclude`), kill existing ones after a `y` confirm, rename them, move them between tmux sessions, and resume closed sessions into any tmux session (or a brand-new one) via a target picker
 - **Mouse support** -- click and double-click rows, drag sessions and groups to reorder or move windows between tmux sessions, right-click context menus, drag to copy preview text, right-click to paste into a session (see [Mouse](#mouse))
 - **Restore after restart** -- after a reboot or tmux restart, the first launch resumes the sessions that were running, back in the same pane when tmux-resurrect restored it (see [Restore after restart](#restore-after-restart))
 - **Attention alerts** -- a sound and a colored bell / check after the tmux window name when Claude needs you or finishes, even while naviClaude is closed (see [Notifications](#notifications))
