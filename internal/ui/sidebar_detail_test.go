@@ -191,7 +191,7 @@ func TestSelectedDetailLinesNeverWrap(t *testing.T) {
 			}
 		}
 		body := ansi.Strip(sb.View())
-		for _, want := range []string{styles.IconAgent + " 4 agents · Bash", "ctx ", "⎇ feature"} {
+		for _, want := range []string{styles.IconAgent + " 4 agents · Bash", "ctx ", "⎇ featur"} {
 			if !strings.Contains(body, want) {
 				t.Errorf("width %d: missing %q in\n%s", width, want, body)
 			}
@@ -481,7 +481,7 @@ func TestWorkflowRunsOnRows(t *testing.T) {
 	if want := styles.IconWorkflow + " 2 workflows"; strings.Count(body, want) != 2 {
 		t.Errorf("want %q on both rows:\n%s", want, body)
 	}
-	for _, want := range []string{styles.IconWorkflow + " native-arch-build-design · Review · re", styles.IconWorkflow + " between · Understand"} {
+	for _, want := range []string{styles.IconWorkflow + " native-arch-build-design · Review · ", styles.IconWorkflow + " between · Understand"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("selected row lacks %q:\n%s", want, body)
 		}

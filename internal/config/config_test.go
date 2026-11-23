@@ -414,3 +414,17 @@ func TestLoadLineNumbers(t *testing.T) {
 		}
 	}
 }
+
+func TestLoadNumbersAutoHide(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	for in, want := range map[string]string{"move": "move", "jump": "jump", "off": "off", "bogus": "off", "": "off"} {
+		os.WriteFile(path, []byte("line_numbers_auto_hide: "+in+"\n"), 0o644)
+		cfg, err := Load(path)
+		if err != nil {
+			t.Fatalf("Load error: %v", err)
+		}
+		if cfg.NumbersAutoHide != want {
+			t.Errorf("line_numbers_auto_hide %q loaded as %q, want %q", in, cfg.NumbersAutoHide, want)
+		}
+	}
+}

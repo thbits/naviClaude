@@ -20,6 +20,9 @@ var validSortOrders = map[string]bool{
 // validLineNumbers is the set of allowed line_numbers modes.
 var validLineNumbers = map[string]bool{"off": true, "absolute": true, "relative": true}
 
+// validNumbersAutoHide is the set of allowed line_numbers_auto_hide modes.
+var validNumbersAutoHide = map[string]bool{"off": true, "move": true, "jump": true}
+
 // Config holds all user-configurable settings for naviClaude.
 type Config struct {
 	Keys               KeyBindings   `yaml:"keys"`
@@ -30,21 +33,22 @@ type Config struct {
 	PopupHeight        int           `yaml:"popup_height"`
 	ResumeInCurrent    bool          `yaml:"resume_in_current_session"`
 	ProcessNames       []string      `yaml:"process_names"`
-	CollapseAfterHours float64       `yaml:"collapse_after_hours"` // auto-collapse groups idle longer than this (0 = disabled)
-	ActiveWindowSecs   int           `yaml:"active_window_secs"`   // seconds after last .jsonl write to keep session "active" (default 5)
-	CPUActiveThreshold float64       `yaml:"cpu_active_threshold"` // process-subtree CPU% above which a session counts as working (default 5)
-	Theme              string        `yaml:"theme"`                // color theme name (default "tokyo-night")
-	ClaudeCommand      string        `yaml:"claude_command"`       // command to start Claude in new sessions (default "claude")
-	WindowName         string        `yaml:"window_name"`          // tmux window name for new/resumed sessions; {project} and {harness} expand (default "{project}")
-	NewSessionDir      string        `yaml:"new_session_dir"`      // working directory for new tmux sessions (default "~")
-	GroupSortOrder     string        `yaml:"group_sort_order"`     // "name" (alphabetical, default), "activity" or "manual" (dragged order)
-	SessionSortOrder   string        `yaml:"session_sort_order"`   // "name" (alphabetical, default), "activity" or "manual" (tmux window order); waiting/done/idle rows are newest-first regardless
-	LineNumbers        string        `yaml:"line_numbers"`         // session numbers: "off" (default), "absolute" or "relative" (sessions from the cursor)
-	CheckForUpdates    bool          `yaml:"check_for_updates"`    // check GitHub for a newer release on startup (default true)
-	Editor             string        `yaml:"editor"`               // editor for opening changed files; empty falls back to $EDITOR, then vi
-	FocusLastSession   bool          `yaml:"focus_last_session"`   // re-select the last focused session on startup (default true)
-	RememberGroupState bool          `yaml:"remember_group_state"` // restore manually-toggled group open/closed state on startup (default true)
-	RestoreSessions    bool          `yaml:"restore_sessions"`     // resume sessions killed by a tmux restart on the next launch (default true)
+	CollapseAfterHours float64       `yaml:"collapse_after_hours"`   // auto-collapse groups idle longer than this (0 = disabled)
+	ActiveWindowSecs   int           `yaml:"active_window_secs"`     // seconds after last .jsonl write to keep session "active" (default 5)
+	CPUActiveThreshold float64       `yaml:"cpu_active_threshold"`   // process-subtree CPU% above which a session counts as working (default 5)
+	Theme              string        `yaml:"theme"`                  // color theme name (default "tokyo-night")
+	ClaudeCommand      string        `yaml:"claude_command"`         // command to start Claude in new sessions (default "claude")
+	WindowName         string        `yaml:"window_name"`            // tmux window name for new/resumed sessions; {project} and {harness} expand (default "{project}")
+	NewSessionDir      string        `yaml:"new_session_dir"`        // working directory for new tmux sessions (default "~")
+	GroupSortOrder     string        `yaml:"group_sort_order"`       // "name" (alphabetical, default), "activity" or "manual" (dragged order)
+	SessionSortOrder   string        `yaml:"session_sort_order"`     // "name" (alphabetical, default), "activity" or "manual" (tmux window order); waiting/done/idle rows are newest-first regardless
+	LineNumbers        string        `yaml:"line_numbers"`           // session numbers: "off" (default), "absolute" or "relative" (sessions from the cursor)
+	NumbersAutoHide    string        `yaml:"line_numbers_auto_hide"` // "off" (default): # toggles and saves; "move" / "jump": # shows numbers until the next move / counted jump, unsaved
+	CheckForUpdates    bool          `yaml:"check_for_updates"`      // check GitHub for a newer release on startup (default true)
+	Editor             string        `yaml:"editor"`                 // editor for opening changed files; empty falls back to $EDITOR, then vi
+	FocusLastSession   bool          `yaml:"focus_last_session"`     // re-select the last focused session on startup (default true)
+	RememberGroupState bool          `yaml:"remember_group_state"`   // restore manually-toggled group open/closed state on startup (default true)
+	RestoreSessions    bool          `yaml:"restore_sessions"`       // resume sessions killed by a tmux restart on the next launch (default true)
 	Notifications      Notifications `yaml:"notifications"`
 }
 
@@ -118,6 +122,7 @@ func DefaultConfig() Config {
 		GroupSortOrder:     "name",
 		SessionSortOrder:   "name",
 		LineNumbers:        "off",
+		NumbersAutoHide:    "off",
 		CheckForUpdates:    true,
 		FocusLastSession:   true,
 		RememberGroupState: true,
@@ -266,5 +271,8 @@ func sanitizeConfig(cfg *Config) {
 	}
 	if !validLineNumbers[cfg.LineNumbers] {
 		cfg.LineNumbers = d.LineNumbers
+	}
+	if !validNumbersAutoHide[cfg.NumbersAutoHide] {
+		cfg.NumbersAutoHide = d.NumbersAutoHide
 	}
 }

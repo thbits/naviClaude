@@ -81,7 +81,7 @@ func TestBuildStylesDefaultMatchesTokyoNight(t *testing.T) {
 		"SidebarProjectName":         lipgloss.NewStyle().Foreground(cFg),
 		"SidebarProjectNameSelected": lipgloss.NewStyle().Foreground(cBlue).Bold(true),
 		"SidebarTime":                lipgloss.NewStyle().Foreground(cGray),
-		"SidebarSummary":             lipgloss.NewStyle().Foreground(cGray).PaddingLeft(4),
+		"SidebarSummary":             lipgloss.NewStyle().Foreground(cGray).PaddingLeft(5),
 		"SidebarSummarySelected": lipgloss.NewStyle().Foreground(cGray).Background(cSelectionDim).
 			PaddingLeft(3).BorderLeft(true).BorderStyle(SelectionIndicator).BorderForeground(cPurple),
 		"SidebarWaitingFlash": lipgloss.NewStyle().Foreground(cBg).Background(cAmber).

@@ -121,10 +121,10 @@ The title bar shows live counts (`↻ 1 restoring · ● 2 working · ◎ 1 need
 
 | Key | Action |
 |---|---|
-| `j` / `k`, `↑` / `↓` | Navigate sessions. Prefix a count to move that many sessions, e.g. `5j` (group headers are skipped; the pending count shows in the footer) |
+| `j` / `k`, `↑` / `↓` | Navigate sessions. Prefix a count to move that many sessions, e.g. `5j` (group headers are skipped; the pending count shows in the footer, `Backspace` drops its last digit and `Esc` cancels it) |
 | `g` / `G` | Jump to the first / last row; `5g` or `5G` jumps to session 5 |
 | `{` / `}` | Jump to the previous / next group header |
-| `#` | Toggle row numbers (see `line_numbers`); the choice is saved to the config |
+| `#` | Toggle row numbers (see `line_numbers`); the choice is saved to the config, unless `line_numbers_auto_hide` makes it a temporary show |
 | `Tab` / `Shift+Tab` | Cycle focus across the visible panes (session list -> preview passthrough -> changed files). Inside passthrough `Tab` goes to the agent, so only `Shift+Tab` leaves |
 | `Ctrl+]` | Exit passthrough straight to the session list |
 | `Ctrl+U` / `Ctrl+D` | Scroll the preview half a page. A live Claude pane, which keeps its transcript out of tmux history, gets `PgUp` / `PgDn` instead and scrolls itself |
@@ -251,6 +251,7 @@ closed_session_hours: 8
 group_sort_order: "name"
 session_sort_order: "name"
 line_numbers: "off"
+line_numbers_auto_hide: "off"
 popup_width: 85
 popup_height: 85
 resume_in_current_session: true
@@ -276,7 +277,8 @@ restore_sessions: true
 | `closed_session_hours` | `8` | Show closed sessions from the last N hours |
 | `group_sort_order` | `name` | Sort tmux session groups: `name` (alphabetical), `activity`, or `manual` (the order you dragged them into; groups never dragged come last). Pinned tmux sessions come first, then groups holding a pinned session, then groups with a session waiting on you or done unseen |
 | `session_sort_order` | `name` | Sort sessions within groups: `name` (alphabetical), `activity` (working sessions keep their slot, newest to start working on top, so they don't swap places as each writes), or `manual` (tmux window order, which dragging changes). The order applies within the pinned and working sections of a group; waiting, done and idle always list the most recent first (see [Sections](#sections)) |
-| `line_numbers` | `off` | Number the sessions in the list, in the indent of each summary line so nothing shifts: `absolute` (session 1, 2, 3...) or `relative` (the sessions between it and the selected row, which is the count to type before `j` / `k`; the selected session shows its own number, as vim's `number relativenumber`). Group headers are not numbered, and counts skip them. `#` toggles them, turning on the last mode used (`relative` if none) |
+| `line_numbers` | `off` | Number the sessions in the list, left of each status icon in the row's indent, so nothing shifts (the selected row keeps its bar instead): `absolute` (session 1, 2, 3...) or `relative` (the sessions between it and the selected row, which is the count to type before `j` / `k`). Group headers are not numbered, and counts skip them. The numbers are faint; while you type a count, the ones it starts (`1` lights `1`, `10`, `11`...) turn amber, `Backspace` drops the last digit and `Esc` cancels it. With `off`, typing a count still shows relative numbers until the motion runs. `#` toggles them, turning on the last mode used (`relative` if none) |
+| `line_numbers_auto_hide` | `off` | Make `#` a temporary show instead of a saved toggle: `move` hides the numbers again after any cursor move, `jump` only after a counted move (`5j`, `7G`). `off` keeps `#` as a toggle saved to the config |
 | `popup_width` | `85` | Width of the `naviclaude open` floating pane or popup (percentage of the window, up to 100) |
 | `popup_height` | `85` | Height of the `naviclaude open` floating pane or popup (percentage of the window, up to 100) |
 | `resume_in_current_session` | `true` | Resume sessions in the current tmux pane |

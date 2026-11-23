@@ -1095,6 +1095,16 @@ func (m Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Every key consumes the pending count; only motions use it.
 	count := m.count
 	m.clearPending()
+	if count > 0 {
+		switch key {
+		case "backspace":
+			m.count = count
+			m.dropCountDigit()
+			return m, nil
+		case "esc":
+			return m, nil // cancels the count, nothing else
+		}
+	}
 
 	switch key {
 	case m.keys.Quit:
@@ -1224,6 +1234,9 @@ func (m Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		prev := m.selectionIdentity()
 		if m.listMotion(key, count) {
+			if count > 0 {
+				m.hideNumbersAfter(true)
+			}
 			return m, m.selectionMoved(prev)
 		}
 		var cmd tea.Cmd
@@ -1236,6 +1249,7 @@ func (m Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // row is deferred so key repeats and wheel flicks pay for one sync, not one each.
 func (m *Model) selectionMoved(prev string) tea.Cmd {
 	if m.selectionIdentity() != prev {
+		m.hideNumbersAfter(false)
 		return m.deferSelectionChange()
 	}
 	if m.selectionPending {

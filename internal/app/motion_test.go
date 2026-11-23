@@ -43,9 +43,10 @@ func typeKeys(t *testing.T, m *Model, keys ...string) {
 	for _, k := range keys {
 		var msg tea.KeyMsg
 		switch k {
-		case "down", "up", "esc":
+		case "down", "up", "esc", "backspace":
 			msg = map[string]tea.KeyMsg{
 				"down": {Type: tea.KeyDown}, "up": {Type: tea.KeyUp}, "esc": {Type: tea.KeyEsc},
+				"backspace": {Type: tea.KeyBackspace},
 			}[k]
 		default:
 			msg = runeKey(k)
@@ -188,5 +189,66 @@ func TestDigitsTypeIntoSearch(t *testing.T) {
 	}
 	if got := len(m.search.Results()); got != 1 {
 		t.Errorf("search for 5 found %d results, want 1 (name5)", got)
+	}
+}
+
+func TestBackspaceDropsLastCountDigit(t *testing.T) {
+	m := motionModel(t)
+	typeKeys(t, m, "1", "2", "backspace")
+	if m.count != 1 {
+		t.Fatalf("count = %d after 12 and backspace, want 1", m.count)
+	}
+	typeKeys(t, m, "backspace")
+	if m.count != 0 {
+		t.Fatalf("count = %d after backspacing its last digit, want 0", m.count)
+	}
+	typeKeys(t, m, "2", "backspace", "3", "j") // 3j: s3
+	wantCursor(t, m, 3)
+}
+
+func TestEscCancelsCountOnly(t *testing.T) {
+	m := motionModel(t)
+	typeKeys(t, m, "4", "esc")
+	if m.count != 0 || m.mode != ModeList {
+		t.Fatalf("count = %d, mode = %v after esc; want 0 and still in the list", m.count, m.mode)
+	}
+}
+
+func TestAutoHideMoveHidesNumbersOnAnyMove(t *testing.T) {
+	m := motionModel(t)
+	m.cfg.NumbersAutoHide = "move"
+	m.cfg.LineNumbers = "off"
+	saved := 0
+	m.saveConfig = func(config.Config) error { saved++; return nil }
+	typeKeys(t, m, "#")
+	if got := m.sidebar.LineNumbers(); got != "relative" {
+		t.Fatalf("# shows %q, want relative", got)
+	}
+	typeKeys(t, m, "j")
+	if got := m.sidebar.LineNumbers(); got != "off" {
+		t.Errorf("after a plain j numbers are %q, want off", got)
+	}
+	if saved != 0 || m.cfg.LineNumbers != "off" {
+		t.Errorf("auto-hide # should not save (saved %d times, config %q)", saved, m.cfg.LineNumbers)
+	}
+}
+
+func TestAutoHideJumpWaitsForCountedMove(t *testing.T) {
+	m := motionModel(t)
+	m.cfg.NumbersAutoHide = "jump"
+	m.cfg.LineNumbers = "off"
+	m.saveConfig = func(config.Config) error { return nil }
+	typeKeys(t, m, "#", "j")
+	if got := m.sidebar.LineNumbers(); got != "relative" {
+		t.Fatalf("a plain j should keep the numbers, got %q", got)
+	}
+	typeKeys(t, m, "2", "j")
+	wantCursor(t, m, 3)
+	if got := m.sidebar.LineNumbers(); got != "off" {
+		t.Errorf("after 2j numbers are %q, want off", got)
+	}
+	typeKeys(t, m, "#", "#")
+	if got := m.sidebar.LineNumbers(); got != "off" {
+		t.Errorf("# twice should hide them again, got %q", got)
 	}
 }

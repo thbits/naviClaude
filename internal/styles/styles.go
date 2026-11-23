@@ -366,7 +366,7 @@ func buildStyles(p Palette) {
 
 	SidebarSummary = lipgloss.NewStyle().
 		Foreground(ColorGray).
-		PaddingLeft(4)
+		PaddingLeft(5)
 
 	SidebarSummarySelected = lipgloss.NewStyle().
 		Foreground(ColorGray).

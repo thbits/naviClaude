@@ -70,7 +70,8 @@ type SidebarModel struct {
 	collapseAfterHrs  float64   // auto-collapse groups idle longer than this (hours)
 	groupSortOrder    string    // "name", "activity" or "manual"
 	sessionSortOrder  string    // "name", "activity" or "manual"; orders pinned and working rows
-	lineNumbers       string    // row-number gutter: "off", "absolute" or "relative"
+	lineNumbers       string    // session numbers: "off", "absolute" or "relative"
+	pendingCount      string    // the vim count being typed; lights up the numbers it prefixes
 	groupOrder        []string  // dragged group order, read by the manual group sort
 	baseOrder         []string  // live groups in sort order before waiting groups float
 	drop              *dropMark // drag-and-drop marker; nil when nothing is dragged
@@ -1186,8 +1187,9 @@ func (m SidebarModel) renderGroupHeader(name string, count, idx int, isCursor, h
 	return line
 }
 
-// renderSessionItem renders a session's lines; num, when set, goes in the summary
-// line's indent so turning numbers on never moves or narrows the row.
+// renderSessionItem renders a session's lines; num, when set, goes in the indent
+// left of the status icon so turning numbers on never moves or narrows the row.
+// The selected row shows its bar instead.
 func (m SidebarModel) renderSessionItem(s *session.Session, isCursor, hovered bool, num string) []string {
 	relTime := relativeTime(time.Since(s.LastActivity))
 	if m.IsPinned(s) {
@@ -1203,7 +1205,7 @@ func (m SidebarModel) renderSessionItem(s *session.Session, isCursor, hovered bo
 
 	// Truncate display name if needed. Rune/display-width aware so multibyte
 	// names are never split mid-rune; an ellipsis marks the cut.
-	maxNameWidth := m.width - 10
+	maxNameWidth := m.width - 11
 	if m.ultracode(s) {
 		maxNameWidth -= lipgloss.Width(styles.IconUltra + " ")
 	}
@@ -1214,7 +1216,7 @@ func (m SidebarModel) renderSessionItem(s *session.Session, isCursor, hovered bo
 
 	// Truncate summary the same way for consistency.
 	summary := s.Summary
-	maxSummary := m.width - 6
+	maxSummary := m.width - 7
 	if maxSummary < 8 {
 		maxSummary = 8
 	}
@@ -1241,7 +1243,7 @@ func (m SidebarModel) renderSessionItem(s *session.Session, isCursor, hovered bo
 			timeStyled = ultraBadge(selBg) + timeStyled
 		}
 
-		innerWidth := m.width - 2 // PaddingLeft(1) inside Width; border is outside
+		innerWidth := m.width - 3 // PaddingLeft(2) inside Width; border is outside
 		if innerWidth < 10 {
 			innerWidth = 10
 		}
@@ -1264,7 +1266,7 @@ func (m SidebarModel) renderSessionItem(s *session.Session, isCursor, hovered bo
 			Foreground(styles.ColorBlue).
 			Background(selBg).
 			Bold(true).
-			PaddingLeft(1).
+			PaddingLeft(2).
 			BorderLeft(true).
 			BorderStyle(styles.SelectionIndicator).
 			BorderForeground(borderFg)
@@ -1287,26 +1289,17 @@ func (m SidebarModel) renderSessionItem(s *session.Session, isCursor, hovered bo
 		line2Style := lipgloss.NewStyle().
 			Foreground(styles.ColorGray).
 			Background(styles.ColorSelectionDim).
-			PaddingLeft(3).
+			PaddingLeft(4).
 			BorderLeft(true).
 			BorderStyle(styles.SelectionIndicator).
 			BorderForeground(borderFg)
-		if num != "" {
-			// Plain summary text gets its own colours, since the number's reset would drop the line's.
-			if !isConfirmingKill && !noPrompt {
-				line2Content = lipgloss.NewStyle().Foreground(styles.ColorGray).Background(styles.ColorSelectionDim).Render(summary)
-			}
-			numStyled := lipgloss.NewStyle().Foreground(styles.ColorAmber).Background(styles.ColorSelectionDim).Bold(true).Render(fmt.Sprintf("%2s ", num))
-			line2Content = numStyled + line2Content
-			line2Style = line2Style.PaddingLeft(0)
-		}
 		line2 := line2Style.Width(m.width - 1).Render(line2Content)
 
 		var extraLines []string
 		dimBg := styles.ColorSelectionDim
 		extraStyle := lipgloss.NewStyle().
 			Background(dimBg).
-			PaddingLeft(3).
+			PaddingLeft(4).
 			BorderLeft(true).
 			BorderStyle(styles.SelectionIndicator).
 			BorderForeground(borderFg).
@@ -1330,7 +1323,7 @@ func (m SidebarModel) renderSessionItem(s *session.Session, isCursor, hovered bo
 	if !m.focused {
 		nameStyle = lipgloss.NewStyle().Foreground(styles.ColorDimText)
 		timeStyle = lipgloss.NewStyle().Foreground(styles.ColorDimText)
-		summaryStyle = lipgloss.NewStyle().Foreground(styles.ColorDimText).PaddingLeft(4)
+		summaryStyle = lipgloss.NewStyle().Foreground(styles.ColorDimText).PaddingLeft(5)
 	}
 	// Hover paints every segment, since an inner ANSI reset drops a parent background.
 	var hoverBg lipgloss.Color
@@ -1351,28 +1344,25 @@ func (m SidebarModel) renderSessionItem(s *session.Session, isCursor, hovered bo
 	iconWidth := lipgloss.Width(icon)
 	nameWidth := lipgloss.Width(nameStyled)
 	timeWidth := lipgloss.Width(timeStyled)
-	// 2 spaces indent + icon + 1 space + name + gap + time + 1 right pad
-	gap := m.width - 2 - iconWidth - 1 - nameWidth - timeWidth - 1
+	// The indent holds the row number, right-aligned with a space before the icon.
+	lead := pad(3)
+	if num != "" {
+		lead = m.renderNumber(num, hoverBg)
+	}
+	// indent + icon + 1 space + name + gap + time + 1 right pad
+	gap := m.width - lipgloss.Width(lead) - iconWidth - 1 - nameWidth - timeWidth - 1
 	if gap < 1 {
 		gap = 1
 	}
-	line1 := pad(2) + icon + pad(1) + nameStyled + pad(gap) + timeStyled + pad(1)
+	line1 := lead + icon + pad(1) + nameStyled + pad(gap) + timeStyled + pad(1)
 	if noPrompt {
 		summaryStyle = summaryStyle.Foreground(styles.ColorDimText).Italic(true)
 	}
 	line2 := summaryStyle.Render(summary)
-	if num != "" {
-		prefix := lipgloss.NewStyle().Foreground(styles.ColorGray).Background(hoverBg).Render(fmt.Sprintf("%3s ", num))
-		ss := summaryStyle.PaddingLeft(0)
-		if hovered {
-			ss = ss.Width(m.width - lipgloss.Width(prefix))
-		}
-		line2 = prefix + ss.Render(summary)
-	}
 
 	if bg := m.background[s.ID]; s.ID != "" && s.Status != session.StatusClosed && bg.Busy() {
 		// Same indent as the summary; the selected row shows this in its activity line.
-		line3 := pad(4) + renderSegments(backgroundSegments(bg), hoverBg, m.width-5)
+		line3 := pad(5) + renderSegments(backgroundSegments(bg), hoverBg, m.width-6)
 		if w := lipgloss.Width(line3); hovered && w < m.width {
 			line3 += pad(m.width - w)
 		}
@@ -1482,8 +1472,8 @@ func relativeTime(d time.Duration) string {
 // renderDetailLines renders the selected session's live detail: activity
 // always, then context fill and repo state when known.
 func (m SidebarModel) renderDetailLines(s *session.Session, bg lipgloss.Color, box lipgloss.Style) []string {
-	// Width(m.width-1) includes PaddingLeft(3); the border sits outside it.
-	maxWidth := m.width - 4
+	// Width(m.width-1) includes PaddingLeft(4); the border sits outside it.
+	maxWidth := m.width - 5
 	var act *session.SessionActivity
 	if s.ID != "" && m.activityID == s.ID {
 		act = m.activity
