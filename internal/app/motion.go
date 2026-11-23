@@ -35,21 +35,34 @@ func (m *Model) clearPending() {
 }
 
 // listMotion runs a counted or vim-style list motion; count is 0 when none was
-// typed. It reports false for keys the sidebar handles itself.
+// typed. Counts number sessions only, matching the shown numbers, while a bare
+// j/k still steps onto group headers. It reports false for keys the sidebar handles itself.
 func (m *Model) listMotion(key string, count int) bool {
 	n := max(count, 1)
 	switch key {
 	case "j", "down":
-		m.sidebar.MoveCursor(n)
+		if count == 0 {
+			m.sidebar.MoveCursor(1)
+		} else {
+			m.sidebar.MoveSessions(count)
+		}
 	case "k", "up":
-		m.sidebar.MoveCursor(-n)
+		if count == 0 {
+			m.sidebar.MoveCursor(-1)
+		} else {
+			m.sidebar.MoveSessions(-count)
+		}
 	case "g":
-		m.sidebar.GoToRow(n)
+		if count == 0 {
+			m.sidebar.GoToRow(1)
+		} else {
+			m.sidebar.GoToSession(count)
+		}
 	case "G":
 		if count == 0 {
 			return false
 		}
-		m.sidebar.GoToRow(count)
+		m.sidebar.GoToSession(count)
 	case "}":
 		m.sidebar.JumpGroup(n)
 	case "{":

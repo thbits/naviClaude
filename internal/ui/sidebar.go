@@ -623,9 +623,7 @@ func (m *SidebarModel) syncViewport() {
 	var lines []string
 	// Fresh slice: View() runs on a copy that shares this backing array.
 	m.lineItems = make([]int, 0, len(m.lineItems))
-	// Rows render narrower by the number gutter; every renderer sizes from m.width.
-	gutter := m.gutterWidth()
-	m.width -= gutter
+	ord := m.sessionOrdinals()
 	dropLine := lipgloss.NewStyle().Foreground(styles.ColorBlue).Render(" " + strings.Repeat("━", max(m.width-2, 1)))
 	for i, item := range m.flatItems {
 		isCursor := i == m.cursor
@@ -660,7 +658,7 @@ func (m *SidebarModel) syncViewport() {
 				m.lineItems = append(m.lineItems, owner)
 			}
 		} else {
-			for _, rl := range m.renderSessionItem(item.session, isCursor, hovered) {
+			for _, rl := range m.renderSessionItem(item.session, isCursor, hovered, m.sessionNumber(ord, i)) {
 				// Each rendered line may itself contain embedded newlines
 				// from Width().Render() wrapping.
 				for _, l := range strings.Split(rl, "\n") {
@@ -676,10 +674,6 @@ func (m *SidebarModel) syncViewport() {
 			lines = append(lines, dropLine)
 			m.lineItems = append(m.lineItems, dropLineOwner)
 		}
-	}
-	m.width += gutter
-	if gutter > 0 {
-		m.addGutter(lines, gutter)
 	}
 	m.content = strings.Join(lines, "\n")
 	m.vp.SetContent(m.content)
@@ -1192,7 +1186,9 @@ func (m SidebarModel) renderGroupHeader(name string, count, idx int, isCursor, h
 	return line
 }
 
-func (m SidebarModel) renderSessionItem(s *session.Session, isCursor, hovered bool) []string {
+// renderSessionItem renders a session's lines; num, when set, goes in the summary
+// line's indent so turning numbers on never moves or narrows the row.
+func (m SidebarModel) renderSessionItem(s *session.Session, isCursor, hovered bool, num string) []string {
 	relTime := relativeTime(time.Since(s.LastActivity))
 	if m.IsPinned(s) {
 		relTime = styles.IconPin + " " + relTime
@@ -1295,6 +1291,15 @@ func (m SidebarModel) renderSessionItem(s *session.Session, isCursor, hovered bo
 			BorderLeft(true).
 			BorderStyle(styles.SelectionIndicator).
 			BorderForeground(borderFg)
+		if num != "" {
+			// Plain summary text gets its own colours, since the number's reset would drop the line's.
+			if !isConfirmingKill && !noPrompt {
+				line2Content = lipgloss.NewStyle().Foreground(styles.ColorGray).Background(styles.ColorSelectionDim).Render(summary)
+			}
+			numStyled := lipgloss.NewStyle().Foreground(styles.ColorAmber).Background(styles.ColorSelectionDim).Bold(true).Render(fmt.Sprintf("%2s ", num))
+			line2Content = numStyled + line2Content
+			line2Style = line2Style.PaddingLeft(0)
+		}
 		line2 := line2Style.Width(m.width - 1).Render(line2Content)
 
 		var extraLines []string
@@ -1356,6 +1361,14 @@ func (m SidebarModel) renderSessionItem(s *session.Session, isCursor, hovered bo
 		summaryStyle = summaryStyle.Foreground(styles.ColorDimText).Italic(true)
 	}
 	line2 := summaryStyle.Render(summary)
+	if num != "" {
+		prefix := lipgloss.NewStyle().Foreground(styles.ColorGray).Background(hoverBg).Render(fmt.Sprintf("%3s ", num))
+		ss := summaryStyle.PaddingLeft(0)
+		if hovered {
+			ss = ss.Width(m.width - lipgloss.Width(prefix))
+		}
+		line2 = prefix + ss.Render(summary)
+	}
 
 	if bg := m.background[s.ID]; s.ID != "" && s.Status != session.StatusClosed && bg.Busy() {
 		// Same indent as the summary; the selected row shows this in its activity line.

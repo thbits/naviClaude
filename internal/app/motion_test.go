@@ -62,16 +62,20 @@ func wantCursor(t *testing.T, m *Model, want int) {
 	}
 }
 
-func TestCountedJKMoveThatManyRows(t *testing.T) {
+func TestCountedJKMoveThatManySessions(t *testing.T) {
 	m := motionModel(t)
-	typeKeys(t, m, "5", "j")
-	wantCursor(t, m, 5)
+	typeKeys(t, m, "5", "j") // s5, past header bb
+	wantCursor(t, m, 6)
 	typeKeys(t, m, "2", "k")
 	wantCursor(t, m, 3)
 	typeKeys(t, m, "3", "down")
-	wantCursor(t, m, 6)
-	typeKeys(t, m, "2", "0", "j") // past the end clamps to the last row
+	wantCursor(t, m, 7)
+	typeKeys(t, m, "2", "0", "j") // past the end clamps to the last session
 	wantCursor(t, m, 8)
+	typeKeys(t, m, "k", "k") // a bare k still stops on header bb
+	wantCursor(t, m, 6)
+	typeKeys(t, m, "k")
+	wantCursor(t, m, 5)
 	if m.count != 0 {
 		t.Errorf("count = %d after its motion, want 0", m.count)
 	}
@@ -98,7 +102,7 @@ func TestBareZeroIsNotACount(t *testing.T) {
 	m := motionModel(t)
 	typeKeys(t, m, "0", "j")
 	wantCursor(t, m, 1)
-	typeKeys(t, m, "1", "0", "G") // 0 extends an open count; row 10 clamps to 9
+	typeKeys(t, m, "1", "0", "G") // 0 extends an open count; session 10 clamps to the last
 	wantCursor(t, m, 8)
 }
 
@@ -117,16 +121,16 @@ func TestMouseClickDropsCount(t *testing.T) {
 	wantCursor(t, m, 1)
 }
 
-func TestCountedGGoesToRow(t *testing.T) {
+func TestCountedGGoesToSession(t *testing.T) {
 	m := motionModel(t)
 	typeKeys(t, m, "3", "G")
-	wantCursor(t, m, 2)
+	wantCursor(t, m, 3)
 	typeKeys(t, m, "G")
 	wantCursor(t, m, 8)
 	typeKeys(t, m, "g")
 	wantCursor(t, m, 0)
-	typeKeys(t, m, "4", "g")
-	wantCursor(t, m, 3)
+	typeKeys(t, m, "5", "g") // s5 sits under header bb
+	wantCursor(t, m, 6)
 }
 
 func TestToggleLineNumbersSavesConfig(t *testing.T) {

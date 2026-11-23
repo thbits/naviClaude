@@ -39,7 +39,7 @@ type Config struct {
 	NewSessionDir      string        `yaml:"new_session_dir"`      // working directory for new tmux sessions (default "~")
 	GroupSortOrder     string        `yaml:"group_sort_order"`     // "name" (alphabetical, default), "activity" or "manual" (dragged order)
 	SessionSortOrder   string        `yaml:"session_sort_order"`   // "name" (alphabetical, default), "activity" or "manual" (tmux window order); waiting/done/idle rows are newest-first regardless
-	LineNumbers        string        `yaml:"line_numbers"`         // session-list row numbers: "off" (default), "absolute" or "relative" (distance from the cursor)
+	LineNumbers        string        `yaml:"line_numbers"`         // session numbers: "off" (default), "absolute" or "relative" (sessions from the cursor)
 	CheckForUpdates    bool          `yaml:"check_for_updates"`    // check GitHub for a newer release on startup (default true)
 	Editor             string        `yaml:"editor"`               // editor for opening changed files; empty falls back to $EDITOR, then vi
 	FocusLastSession   bool          `yaml:"focus_last_session"`   // re-select the last focused session on startup (default true)

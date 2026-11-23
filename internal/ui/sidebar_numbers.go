@@ -1,17 +1,8 @@
 package ui
 
-import (
-	"strconv"
-	"strings"
+import "strconv"
 
-	"github.com/charmbracelet/lipgloss"
-	"github.com/thbits/naviClaude/internal/styles"
-)
-
-// minRowWidth is the narrowest row worth giving up columns to a number gutter for.
-const minRowWidth = 24
-
-// SetLineNumbers sets the row-number gutter: "off", "absolute" or "relative".
+// SetLineNumbers sets the session numbers: "off", "absolute" or "relative".
 func (m *SidebarModel) SetLineNumbers(mode string) {
 	if mode == m.lineNumbers {
 		return
@@ -20,49 +11,39 @@ func (m *SidebarModel) SetLineNumbers(mode string) {
 	m.syncViewport()
 }
 
-// gutterWidth is the columns the row numbers take, digits plus a space; 0 when
-// they are off or the pane is too narrow to spare them.
-func (m *SidebarModel) gutterWidth() int {
-	if m.lineNumbers != "absolute" && m.lineNumbers != "relative" || len(m.flatItems) == 0 {
-		return 0
+// sessionOrdinals maps each flat item to the count of session rows up to and
+// including it, so a session's ordinal is its 1-based number; nil when numbers are off.
+func (m *SidebarModel) sessionOrdinals() []int {
+	if m.lineNumbers != "absolute" && m.lineNumbers != "relative" {
+		return nil
 	}
-	w := len(strconv.Itoa(len(m.flatItems))) + 1
-	if m.width-w < minRowWidth {
-		return 0
+	ord := make([]int, len(m.flatItems))
+	n := 0
+	for i, it := range m.flatItems {
+		if !it.isGroup {
+			n++
+		}
+		ord[i] = n
 	}
-	return w
+	return ord
 }
 
-// rowNumber is the label for flat item idx: its 1-based row, or in relative mode
-// its distance from the cursor, the count j/k need to reach it.
-func (m *SidebarModel) rowNumber(idx int) int {
-	if m.lineNumbers == "relative" && idx != m.cursor {
-		d := idx - m.cursor
-		if d < 0 {
-			d = -d
-		}
-		return d
+// sessionNumber is the label for session row idx: its 1-based session number, or
+// in relative mode the sessions between it and the cursor, the count j/k need.
+// Headers and the off mode get "".
+func (m *SidebarModel) sessionNumber(ord []int, idx int) string {
+	if ord == nil || m.flatItems[idx].isGroup {
+		return ""
 	}
-	return idx + 1
-}
-
-// addGutter prefixes each content line with its row's number on the row's first
-// line and blanks elsewhere, using lineItems to know which row owns each line.
-func (m *SidebarModel) addGutter(lines []string, gutter int) {
-	numStyle := lipgloss.NewStyle().Foreground(styles.ColorGray)
-	curStyle := lipgloss.NewStyle().Foreground(styles.ColorAmber).Bold(true)
-	blank := strings.Repeat(" ", gutter)
-	for i, owner := range m.lineItems {
-		if owner < 0 || (i > 0 && m.lineItems[i-1] == owner) {
-			lines[i] = blank + lines[i]
-			continue
-		}
-		label := strconv.Itoa(m.rowNumber(owner))
-		label = strings.Repeat(" ", gutter-1-len(label)) + label + " "
-		style := numStyle
-		if owner == m.cursor {
-			style = curStyle
-		}
-		lines[i] = style.Render(label) + lines[i]
+	if m.lineNumbers != "relative" || idx == m.cursor || m.cursor < 0 || m.cursor >= len(ord) {
+		return strconv.Itoa(ord[idx])
 	}
+	if idx > m.cursor {
+		return strconv.Itoa(ord[idx] - ord[m.cursor])
+	}
+	before := ord[m.cursor] // sessions in [idx, cursor), leaving out a session cursor
+	if !m.flatItems[m.cursor].isGroup {
+		before--
+	}
+	return strconv.Itoa(before - ord[idx] + 1)
 }
