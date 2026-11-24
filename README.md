@@ -255,6 +255,7 @@ Closed sessions sit in a separate Closed group: always last, collapsed until you
 | Click a picker row | Select it (click the selected row again to confirm) |
 | Click a filter tab in the statistics popup | Switch to that filter |
 | Click outside a popup or menu | Close it (right-clicking another session row reopens the menu there) |
+| Back / Forward mouse buttons | Step back through the sessions you recently clicked or focused (most recent first, each listed once, up to 50), and forward again. Back first returns to the last one if you moved the selection away from it with the keyboard; sessions that have gone are skipped |
 
 Mouse events only reach naviClaude when tmux has `set -g mouse on`.
 

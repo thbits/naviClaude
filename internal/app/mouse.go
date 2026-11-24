@@ -91,6 +91,13 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		return m.handleOverlayMouse(msg)
 	}
 
+	switch msg.Button {
+	case tea.MouseButtonBackward:
+		return m.stepFocusHistory(-1)
+	case tea.MouseButtonForward:
+		return m.stepFocusHistory(1)
+	}
+
 	if msg.Y >= m.statusBarTop() {
 		if msg.Button == tea.MouseButtonLeft && msg.Y == m.height-1 {
 			return m.clickStatusHint(msg.X)
@@ -344,6 +351,7 @@ func (m Model) clickSession(hit ui.SidebarHit, msg tea.MouseMsg) (tea.Model, tea
 	}
 	m.sidebar.SetCursor(hit.Index)
 	cmds = append(cmds, m.afterSelectionChange())
+	m.recordFocus(hit.Session) // a clicked row is a deliberate pick, so Back can return to it
 
 	if double {
 		m.lastClickID = ""

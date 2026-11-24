@@ -83,15 +83,7 @@ func (m *Model) applyPendingSelect() tea.Cmd {
 	s := m.findSelectTarget()
 	var leave tea.Cmd
 	if s != nil {
-		// A click asks for this session, so it wins over another session's passthrough or a search.
-		if m.mode == ModePassthrough {
-			leave = m.setFocus(ModeList)
-		}
-		if m.search.IsActive() {
-			m.endSearch()
-			m.mode = ModeList
-			m.statusbar.SetMode(ModeList.String())
-		}
+		leave = m.leaveForJump()
 	}
 	if s == nil || m.typing() || !m.selectInSidebar(s) {
 		if m.selectTries--; m.selectTries <= 0 {
@@ -100,7 +92,26 @@ func (m *Model) applyPendingSelect() tea.Cmd {
 		return leave
 	}
 	m.pendingSelect = ""
-	cmd := joinCmds(leave, m.afterSelectionChange())
+	return joinCmds(leave, m.enterJumped(s))
+}
+
+// leaveForJump drops passthrough and a search, which a jump to another session wins over.
+func (m *Model) leaveForJump() tea.Cmd {
+	var leave tea.Cmd
+	if m.mode == ModePassthrough {
+		leave = m.setFocus(ModeList)
+	}
+	if m.search.IsActive() {
+		m.endSearch()
+		m.mode = ModeList
+		m.statusbar.SetMode(ModeList.String())
+	}
+	return leave
+}
+
+// enterJumped syncs the panes to the just-selected s and focuses it when live.
+func (m *Model) enterJumped(s *session.Session) tea.Cmd {
+	cmd := m.afterSelectionChange()
 	if s.Status != session.StatusClosed && s.TmuxPaneID != "" {
 		cmd = joinCmds(cmd, m.setFocus(ModePassthrough))
 	}

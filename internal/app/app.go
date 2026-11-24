@@ -244,6 +244,8 @@ type Model struct {
 	serverIdentity      tmux.ServerIdentity     // tmux server the snapshot is written for
 	restoring           []resumedSession        // resumed sessions not yet reporting a status
 	pendingSelect       string                  // session to select once listed (--select or a handoff request)
+	focusHistory        []focusEntry            // sessions focused or clicked, oldest first, for mouse Back / Forward
+	focusPos            int                     // focusHistory entry Back / Forward last reached
 	selectTries         int                     // session loads left to find pendingSelect
 	selfPane            string                  // this dashboard's tmux pane, polled for handoff requests
 	handoff             handoffAPI              // reads handoff requests; nil disables them
@@ -2938,6 +2940,9 @@ func (m *Model) setFocus(target Mode) tea.Cmd {
 	if target == ModePassthrough && m.mode != ModePassthrough {
 		m.unreadHoldPane = "" // typing into the pane counts as reading it
 		m.preview.SetPassthrough(true)
+	}
+	if target == ModePassthrough {
+		m.recordFocus(m.sidebar.SelectedSession())
 	}
 	m.mode = target
 	m.statusbar.SetMode(target.String())
